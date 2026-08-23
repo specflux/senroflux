@@ -26,10 +26,17 @@ if ( ! defined( 'ABSPATH' ) ) {
 	define( 'ABSPATH', '/tmp/senroflux-tests/' );
 }
 
-// Test-only stand-in for WordPress's $wpdb (a real WP load order always wins).
+// Test-only stand-ins for WordPress globals (a real WP load order wins).
 if ( ! class_exists( 'wpdb', false ) ) {
 	require_once __DIR__ . '/stubs/wpdb.php';
 }
+if ( ! class_exists( 'WP_Error', false ) ) {
+	require_once __DIR__ . '/stubs/wp-error.php';
+}
+require_once __DIR__ . '/stubs/abilities.php';
+
+$GLOBALS['senroflux_test_abilities'] = array();
+
 
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );

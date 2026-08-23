@@ -72,6 +72,7 @@
         <exclude-pattern>senroflux.php</exclude-pattern>
         <exclude-pattern>src/*</exclude-pattern>
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
     </rule>
 
     <!--
@@ -93,6 +94,7 @@
     </rule>
     <rule ref="PSR1.Files.SideEffects">
         <exclude-pattern>tests/stubs/*</exclude-pattern>
+        <exclude-pattern>src/*</exclude-pattern>
     </rule>
     <rule ref="Generic.CodeAnalysis.UnusedFunctionParameter">
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
@@ -100,6 +102,11 @@
     </rule>
     <!-- The bare-PHPUnit STDERR hint cannot go through WP_Filesystem. -->
     <rule ref="WordPress.WP.AlternativeFunctions">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+    <!-- Stub files legitimately mix the fake class with its global shims. -->
+    <rule ref="Universal.Files.SeparateFunctionsFromOO">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
     </rule>
 

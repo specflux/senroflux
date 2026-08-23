@@ -36,6 +36,15 @@ parameters:
             path: src/Run/Step.php
             count: 1
         -
+            # Defensive runtime checks against wp_get_ability()'s real-world
+            # null/object outcomes. wordpress-stubs types the return as
+            # non-nullable WP_Ability, so these two checks look constant to
+            # PHPStan — they are not, across real WordPress versions and the
+            # test shim.
+            message: '#^Call to function is_object\(\) with WP_Ability will always evaluate to true\.$#'
+            path: src/Tools/ToolExecutor.php
+            count: 1
+        -
             # Schema::ensureUpgrade()'s require_once is a real-WordPress-only
             # fallback (dbDelta() always exists mid-request in core) for a
             # genuine WP-core file that never exists in this checkout.
