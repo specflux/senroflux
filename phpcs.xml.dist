@@ -40,6 +40,27 @@
     </rule>
 
     <!--
+        The spec fixes BOTH this ruleset (WPCS) AND a PSR-4 camelCase
+        namespace (Specflux\SenroFlux\) that integrates the AI Client SDK.
+        Case-enforcement sniffs cannot coexist with that decision, so they
+        yield for namespaced OO code only — every other rule (escaping, SQL
+        preparation, prefixes, yoda, formatting) stays fully enforced, and
+        senroflux.php keeps the complete standard.
+    -->
+    <rule ref="WordPress.NamingConventions.ValidFunctionName">
+        <exclude-pattern>src/*</exclude-pattern>
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+    <rule ref="WordPress.NamingConventions.ValidVariableName">
+        <exclude-pattern>src/*</exclude-pattern>
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+    <rule ref="Squiz.Classes.ValidClassName.NotCamelCaps">
+        <exclude-pattern>src/*</exclude-pattern>
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+
+    <!--
         src/api.php exists to declare the global senroflux() locator: side
         effects are its contract, same as the plugin main file. Every other
         src file guards itself with `defined( 'ABSPATH' ) || exit;`, which the
@@ -56,17 +77,29 @@
     <!--
         tests/bootstrap.php defines WordPress function SHIMS under their REAL
         upstream names (add_action, esc_html__, ...) — prefixing them would
-        defeat the point. Relaxed for that one file. It also writes a fatal
-        hint straight to STDERR because WordPress (and WP_Filesystem) are not
-        loaded in a bare PHPUnit process.
+        defeat the point. tests/stubs/wpdb.php likewise declares the REAL
+        global wpdb class + ARRAY_A constant so the store exercises the true
+        contract shapes. Both relaxed for those files only.
     -->
     <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
     </rule>
-    <rule ref="WordPress.WP.AlternativeFunctions">
-        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    <rule ref="PEAR.NamingConventions.ValidClassName">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Classes.ClassDeclaration.MissingNamespace">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <rule ref="PSR1.Files.SideEffects">
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
     </rule>
     <rule ref="Generic.CodeAnalysis.UnusedFunctionParameter">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+        <exclude-pattern>tests/stubs/*</exclude-pattern>
+    </rule>
+    <!-- The bare-PHPUnit STDERR hint cannot go through WP_Filesystem. -->
+    <rule ref="WordPress.WP.AlternativeFunctions">
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
     </rule>
 

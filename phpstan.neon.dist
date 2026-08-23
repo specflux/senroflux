@@ -4,6 +4,41 @@ parameters:
         - src
         - senroflux.php
     treatPhpDocTypesAsCertain: false
+    bootstrapFiles:
+        - phpstan-bootstrap.php
     scanFiles:
         # WordPress core symbols referenced from src (declarations only).
         - vendor/php-stubs/wordpress-stubs/wordpress-stubs.php
+
+    # Justified, scoped suppressions for known wordpress-stubs false positives
+    # (stub-signature limitations, not defects). Each entry is pinned to an
+    # exact message so a NEW violation fails loudly instead of being absorbed.
+    ignoreErrors:
+        -
+            # wpdb::prepare()'s stub requires `@phpstan-param literal-string
+            # $query`, but every prepared statement interpolates this plugin's
+            # OWN computed table names into an otherwise-literal SQL template
+            # — never request/user input.
+            message: '#^Parameter \#1 \$query of method wpdb::prepare\(\) expects literal\-string, non\-falsy\-string given\.$#'
+            path: src/*
+            count: 4
+        -
+            # Same family: prepare() returns string|void per the stub, which
+            # collides with query()'s non-nullable string parameter.
+            message: '#^Parameter \#1 \$query of method wpdb::query\(\) expects string, string\|null given\.$#'
+            path: src/*
+            count: 1
+        -
+            # Message::fromArray() documents a narrow PHPStan array-shape
+            # generic; Step stores exactly toArray() output (S4), so the shape
+            # holds BY CONSTRUCTION and the SDK's generic cannot see it.
+            message: '#^Parameter \#1 \$array of static method WordPress\\AiClient\\Messages\\DTO\\Message::fromArray\(\) expects array\{role: string, parts: array.*given\.$#'
+            path: src/Run/Step.php
+            count: 1
+        -
+            # Schema::ensureUpgrade()'s require_once is a real-WordPress-only
+            # fallback (dbDelta() always exists mid-request in core) for a
+            # genuine WP-core file that never exists in this checkout.
+            message: '#^Path in require_once\(\) ".*wp\-admin/includes/upgrade\.php" is not a file or it does not exist\.$#'
+            path: src/Schema.php
+            count: 1

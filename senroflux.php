@@ -27,8 +27,27 @@ namespace Specflux\SenroFlux;
 
 use Specflux\SenroFlux\Plugin;
 
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
+// Registered UNCONDITIONALLY (not inside any class guard): WordPress calls
+// activation hooks by re-including this file and checking what got registered
+// THAT load, so the callbacks below must exist even when the autoloader is
+// broken — they guard internally instead (fail safe, not silent).
+register_activation_hook( __FILE__, __NAMESPACE__ . '\senroflux_activate' );
+
+/**
+ * Create the runs/steps tables.
+ *
+ * @return void
+ */
+function senroflux_activate(): void {
+	if ( ! class_exists( Schema::class ) || ! function_exists( 'dbDelta' ) ) {
+		return;
+	}
+
+	global $wpdb;
+	if ( isset( $wpdb ) ) {
+		Schema::install( $wpdb );
+	}
+}
 
 // Composer autoloader for this plugin's own classes (dev install). A broken
 // or missing autoloader must fail SAFE below, not fatal here.
