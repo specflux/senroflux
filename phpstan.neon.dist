@@ -1,0 +1,9 @@
+parameters:
+    level: 8
+    paths:
+        - src
+        - senroflux.php
+    treatPhpDocTypesAsCertain: false
+    scanFiles:
+        # WordPress core symbols referenced from src (declarations only).
+        - vendor/php-stubs/wordpress-stubs/wordpress-stubs.php

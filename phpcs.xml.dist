@@ -1,0 +1,74 @@
+<?xml version="1.0"?>
+<ruleset name="SenroFlux">
+    <description>WordPress-Core + WordPress-Extra for the SenroFlux plugin.</description>
+
+    <file>senroflux.php</file>
+    <file>src</file>
+    <file>tests</file>
+
+    <exclude-pattern>vendor/*</exclude-pattern>
+
+    <arg name="colors"/>
+    <arg name="extensions" value="php"/>
+    <arg value="ps"/>
+
+    <rule ref="WordPress-Core"/>
+    <rule ref="WordPress-Extra"/>
+
+    <!--
+        Prefix every global the plugin introduces (hooks, options, tables,
+        ajax actions, functions) with senroflux_. Namespaces keep the
+        Specflux\ vendor prefix per the project layout decision.
+    -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <properties>
+            <property name="prefixes" type="array">
+                <element value="senroflux"/>
+                <element value="Specflux"/>
+            </property>
+        </properties>
+    </rule>
+
+    <!--
+        src/ uses PSR-4 class-file names (Plugin.php), by spec: the runtime
+        autoloader is Composer, not WP's class-plugin.php convention.
+        WordPress.Files.FileName would force snake_case files and break it.
+    -->
+    <rule ref="WordPress.Files.FileName">
+        <exclude-pattern>src/*</exclude-pattern>
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
+
+    <!--
+        src/api.php exists to declare the global senroflux() locator: side
+        effects are its contract, same as the plugin main file. Every other
+        src file guards itself with `defined( 'ABSPATH' ) || exit;`, which the
+        SideEffects sniff counts as a side effect — that guard is required
+        WordPress hardening, so the sniff yields to it.
+    -->
+    <rule ref="PSR1.Files.SideEffects">
+        <exclude-pattern>src/api.php</exclude-pattern>
+        <exclude-pattern>senroflux.php</exclude-pattern>
+        <exclude-pattern>src/*</exclude-pattern>
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+
+    <!--
+        tests/bootstrap.php defines WordPress function SHIMS under their REAL
+        upstream names (add_action, esc_html__, ...) — prefixing them would
+        defeat the point. Relaxed for that one file. It also writes a fatal
+        hint straight to STDERR because WordPress (and WP_Filesystem) are not
+        loaded in a bare PHPUnit process.
+    -->
+    <rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+    <rule ref="WordPress.WP.AlternativeFunctions">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+    <rule ref="Generic.CodeAnalysis.UnusedFunctionParameter">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+
+    <config name="testVersion" value="8.1-"/>
+</ruleset>
