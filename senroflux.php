@@ -27,9 +27,14 @@ namespace Specflux\SenroFlux;
 
 use Specflux\SenroFlux\Plugin;
 
+// Bail on direct access (must precede any other runtime code so static
+// analysers and the plugin-check detector both recognize it).
+defined( 'ABSPATH' ) || exit;
+
 if ( ! defined( 'SENROFLUX_URL' ) ) {
 	define( 'SENROFLUX_URL', plugin_dir_url( __FILE__ ) );
 }
+
 
 // Registered UNCONDITIONALLY (not inside any class guard): WordPress calls
 // activation hooks by re-including this file and checking what got registered
