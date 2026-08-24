@@ -14,6 +14,22 @@ First consumer: [Specflux Marketing Analytics Chat](https://wordpress.org/plugin
 - **Agent Safety** active — a hard dependency. Without it, SenroFlux wires nothing but an
   admin notice and refuses to start any run (`senroflux_ungoverned`). Fail closed.
 
+## Consumers
+
+Vendoring (the Agent Safety model — one codebase, two channels):
+
+```sh
+composer require specflux/senroflux
+```
+
+The consumer contract is non-negotiable on one point: **vendoring provides
+classes, never ungoverned execution**. A vendored copy still requires the
+Agent Safety plugin active on the site; without its gate every entry point
+returns `senroflux_ungoverned`. Every vendoring consumer must also ship
+[Jetpack Autoloader](https://github.com/Automattic/jetpack-autoloader) so the
+highest-version copy wins across plugins (same arbitration rule Agent Safety
+and mcp-adapter use).
+
 ## What a run is
 
 One goal, pursued on behalf of one logged-in user, across many model turns and tool calls:
