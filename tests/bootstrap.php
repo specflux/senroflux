@@ -35,6 +35,9 @@ if ( ! class_exists( 'WP_Error', false ) ) {
 }
 require_once __DIR__ . '/stubs/abilities.php';
 
+// The global senroflux() locator (function_exists-guarded, same as main).
+require_once dirname( __DIR__ ) . '/src/api.php';
+
 $GLOBALS['senroflux_test_abilities'] = array();
 
 
@@ -133,6 +136,67 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	}
 }
 
+if ( ! function_exists( 'current_user_can' ) ) {
+	$GLOBALS['senroflux_test_user_caps'] = array();
+
+	/** Test knob: $GLOBALS['senroflux_test_user_caps'][$cap] = bool. */
+	function current_user_can( string $capability ): bool {
+		return (bool) ( $GLOBALS['senroflux_test_user_caps'][ $capability ] ?? false );
+	}
+}
+
+if ( ! function_exists( 'wp_trim_words' ) ) {
+	/** Truncate shim. */
+	function wp_trim_words( string $text, int $num_words = 55, string $more = '…' ): string {
+		$trimmed = trim( $text );
+		$words   = preg_split( '/\s+/', '' === $trimmed ? '0' : $trimmed );
+		if ( count( $words ) <= $num_words ) {
+			return trim( $text );
+		}
+
+		return implode( ' ', array_slice( $words, 0, $num_words ) ) . $more;
+	}
+}
+
+if ( ! function_exists( 'absint' ) ) {
+	/** Absint shim. */
+	function absint( mixed $value ): int {
+		return abs( (int) $value );
+	}
+}
+
+if ( ! function_exists( 'wp_nonce_url' ) ) {
+	/** Nonce-URL shim (test: deterministic suffix). */
+	function wp_nonce_url( string $url, string $action ): string {
+		return $url . '&_wpnonce=test-' . md5( $action );
+	}
+}
+
+if ( ! function_exists( 'check_admin_referer' ) ) {
+	/** No-op shim. */
+	function check_admin_referer( string $action ): bool {
+		unset( $action );
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'wp_safe_redirect' ) ) {
+	$GLOBALS['senroflux_test_redirect'] = '';
+
+	/** Recording shim. */
+	function wp_safe_redirect( string $location ): void {
+		$GLOBALS['senroflux_test_redirect'] = $location;
+	}
+}
+
+if ( ! function_exists( 'wp_die' ) ) {
+	/** Throwing shim so tests can observe a death. */
+	function wp_die( string $message ): void {
+		throw new RuntimeException( $message );
+	}
+}
+
 if ( ! function_exists( '__' ) ) {
 	/**
 	 * Identity shim.
@@ -143,6 +207,20 @@ if ( ! function_exists( '__' ) ) {
 	 */
 	function __( string $text, string $domain = 'default' ): string {
 		return $text;
+	}
+}
+
+if ( ! function_exists( 'esc_attr' ) ) {
+	/** Identity shim. */
+	function esc_attr( $text ) {
+		return (string) $text;
+	}
+}
+
+if ( ! function_exists( 'esc_url' ) ) {
+	/** Identity shim. */
+	function esc_url( string $url ): string {
+		return $url;
 	}
 }
 

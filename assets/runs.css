@@ -1,0 +1,62 @@
+/* SenroFlux Runs screen (S10): badges + step timeline. Minimal by design. */
+
+.senroflux-badge {
+	display: inline-block;
+	padding: 1px 8px;
+	border-radius: 10px;
+	background: #f0f0f1;
+	font-size: 12px;
+}
+
+.senroflux-badge-running,
+.senroflux-badge-pending {
+	background: #f0f6fc;
+	color: #2271b1;
+}
+
+.senroflux-badge-awaiting_approval {
+	background: #fcf9e8;
+	color: #996800;
+}
+
+.senroflux-badge-completed {
+	background: #edfaef;
+	color: #00a32a;
+}
+
+.senroflux-badge-failed {
+	background: #fcf0f1;
+	color: #d63638;
+}
+
+.senroflux-badge-cancelled {
+	background: #f0f0f1;
+	color: #50575e;
+}
+
+.senroflux-steps {
+	max-width: 900px;
+}
+
+.senroflux-step {
+	margin-bottom: 8px;
+	padding: 8px 12px;
+	border-left: 3px solid #dcdcde;
+	background: #fff;
+}
+
+.senroflux-step-approval,
+.senroflux-step-tool_result {
+	border-left-color: #996800;
+}
+
+.senroflux-step-model {
+	border-left-color: #2271b1;
+}
+
+.senroflux-json-toggle pre {
+	overflow: auto;
+	max-height: 320px;
+	background: #f6f7f7;
+	padding: 8px;
+}

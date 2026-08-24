@@ -153,6 +153,26 @@ if ( ! class_exists( 'wpdb', false ) ) {
 			if (
 				$this->emulateRows
 				&& null !== $query
+				&& preg_match( '/SELECT \* FROM (\S+) ORDER BY updated_at DESC, id DESC LIMIT (\d+)/', $query, $m )
+			) {
+				$rows = $this->tables[ $m[1] ] ?? array();
+				usort(
+					$rows,
+					static fn ( array $a, array $b ): int => array(
+						(string) ( $b['updated_at'] ?? '' ),
+						(int) $b['id'],
+					) <=> array(
+						(string) ( $a['updated_at'] ?? '' ),
+						(int) $a['id'],
+					)
+				);
+
+				return array_slice( $rows, 0, max( 1, (int) $m[2] ) );
+			}
+
+			if (
+				$this->emulateRows
+				&& null !== $query
 				&& preg_match( '/SELECT \* FROM (\S+) WHERE run_id = (\d+) ORDER BY seq ASC/', $query, $m )
 			) {
 				$rows = array_values(

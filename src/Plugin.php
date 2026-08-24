@@ -95,6 +95,11 @@ final class Plugin {
 		// HTTP surface (S9). Both transports delegate to the PHP API below.
 		( new Ajax() )->register();
 		add_action( 'rest_api_init', array( new Rest(), 'register' ) );
+
+		// Observation screen (S10).
+		if ( function_exists( 'is_admin' ) && is_admin() ) {
+			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
+		}
 	}
 
 	/**
@@ -262,6 +267,33 @@ final class Plugin {
 			),
 			'steps' => $steps,
 			'ui'    => array(),
+		);
+	}
+
+	/**
+	 * Most recent runs for the Runs screen list.
+	 *
+	 * @param int $limit Max rows.
+	 * @return list<array<string,mixed>> Lightweight run summaries.
+	 */
+	public function listRecent( int $limit = 50 ): array {
+		if ( ! $this->ready() ) {
+			return array();
+		}
+
+		return array_map(
+			static fn ( \Specflux\SenroFlux\Run\Run $run ): array => array(
+				'id'         => $run->id,
+				'user_id'    => $run->userId,
+				'consumer'   => $run->consumer,
+				'goal'       => $run->goal,
+				'status'     => $run->status->value,
+				'step_count' => $run->stepCount,
+				'tokens_in'  => $run->tokensIn,
+				'tokens_out' => $run->tokensOut,
+				'updated_at' => $run->updatedAtUtc,
+			),
+			$this->runner()->store()->listRecent( $limit )
 		);
 	}
 

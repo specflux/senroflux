@@ -65,4 +65,12 @@ interface RunStore {
 	 * @param array<string,mixed> $fields Column => value; unknown keys are ignored.
 	 */
 	public function updateRun( int $run_id, array $fields ): void;
+
+	/**
+	 * Most recently updated runs first (the Runs screen's list).
+	 *
+	 * @param int $limit Max rows.
+	 * @return list<Run>
+	 */
+	public function listRecent( int $limit = 50 ): array;
 }

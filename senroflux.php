@@ -27,6 +27,10 @@ namespace Specflux\SenroFlux;
 
 use Specflux\SenroFlux\Plugin;
 
+if ( ! defined( 'SENROFLUX_URL' ) ) {
+	define( 'SENROFLUX_URL', plugin_dir_url( __FILE__ ) );
+}
+
 // Registered UNCONDITIONALLY (not inside any class guard): WordPress calls
 // activation hooks by re-including this file and checking what got registered
 // THAT load, so the callbacks below must exist even when the autoloader is
@@ -49,10 +53,27 @@ function senroflux_activate(): void {
 	}
 }
 
-// Composer autoloader for this plugin's own classes (dev install). A broken
-// or missing autoloader must fail SAFE below, not fatal here.
-if ( is_readable( __DIR__ . '/vendor/autoload.php' ) ) {
-	require_once __DIR__ . '/vendor/autoload.php';
+// Runtime autoloader for THIS PLUGIN'S OWN CLASSES ONLY (S2): deliberately a
+// minimal spl_autoloader rather than Composer's vendor/autoload.php, because
+// a dev install would otherwise shadow WordPress core's bundled AI Client SDK
+// with the composer copy — a cross-version mix that fatals inside core's own
+// glue (observed live: PromptBuilder vs core event-dispatcher mismatch).
+// Dev tooling (phpcs/phpstan/phpunit) keeps using vendor/autoload.php.
+if ( ! class_exists( Plugin::class ) ) {
+	spl_autoload_register(
+		static function ( string $class ): void {
+			if ( ! str_starts_with( $class, 'Specflux\\SenroFlux\\' ) ) {
+				return;
+			}
+
+			$relative = substr( $class, strlen( 'Specflux\\SenroFlux\\' ) );
+			$path     = __DIR__ . '/src/' . str_replace( '\\', '/', $relative ) . '.php';
+
+			if ( is_readable( $path ) ) {
+				require_once $path;
+			}
+		}
+	);
 }
 
 require_once __DIR__ . '/src/api.php';

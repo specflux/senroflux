@@ -21,7 +21,7 @@ parameters:
             # — never request/user input.
             message: '#^Parameter \#1 \$query of method wpdb::prepare\(\) expects literal\-string, non\-falsy\-string given\.$#'
             path: src/*
-            count: 4
+            count: 5
         -
             # Same family: prepare() returns string|void per the stub, which
             # collides with query()'s non-nullable string parameter.

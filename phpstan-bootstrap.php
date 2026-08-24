@@ -16,6 +16,10 @@ if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
 }
 
+if ( ! defined( 'SENROFLUX_URL' ) ) {
+	define( 'SENROFLUX_URL', 'https://example.test/wp-content/plugins/senroflux/' );
+}
+
 if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
 	define( 'HOUR_IN_SECONDS', 3600 );
 }

@@ -100,9 +100,20 @@
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
         <exclude-pattern>tests/stubs/*</exclude-pattern>
     </rule>
+    <!--
+        The wp_die() SHIM throws (tests observe deaths); the escaping sniff
+        pattern-matches the wp_die name and demands escaped output.
+    -->
+    <rule ref="WordPress.Security.EscapeOutput">
+        <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
     <!-- The bare-PHPUnit STDERR hint cannot go through WP_Filesystem. -->
     <rule ref="WordPress.WP.AlternativeFunctions">
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
+    </rule>
+    <!-- The test harness installs the emulated wpdb as the global. -->
+    <rule ref="WordPress.WP.GlobalVariablesOverride">
+        <exclude-pattern>tests/*</exclude-pattern>
     </rule>
     <!-- Stub files legitimately mix the fake class with its global shims. -->
     <rule ref="Generic.Files.OneObjectStructurePerFile">
