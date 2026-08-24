@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Run;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 /**
  * The store owns runs + steps rows. Implementations must keep the
  * (run_id, seq) pair unique and the step_count column authoritative for a

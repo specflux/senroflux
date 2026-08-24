@@ -42,8 +42,19 @@ final class Ajax {
 			);
 		}
 
-		$allow  = json_decode( (string) ( $_POST['allow'] ?? '[]' ), true );
-		$budget = json_decode( (string) ( $_POST['budget'] ?? '{}' ), true );
+		$allow_raw  = isset( $_POST['allow'] ) ? wp_unslash( $_POST['allow'] ) : '[]'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- JSON decoded then value-sanitized below.
+		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- same.
+
+		$allow  = array_values(
+			array_filter(
+				(array) json_decode( is_string( $allow_raw ) ? $allow_raw : '[]', true ),
+				static fn ( $entry ): bool => is_string( $entry ) && '' !== $entry
+			)
+		);
+		$allow  = array_map( 'sanitize_text_field', $allow );
+		$budget = is_array( json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ) )
+			? (array) json_decode( $budget_raw, true )
+			: array();
 
 		$result = senroflux()->start(
 			sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) ),

@@ -20,6 +20,9 @@
 
 declare ( strict_types = 1 );
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 use Specflux\SenroFlux\Plugin;
 
 if ( ! function_exists( 'senroflux' ) ) {

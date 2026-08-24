@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Run;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 /**
  * Per S4, a run carries hard ceilings so a runaway loop dies before it eats
  * the provider's context window or the site's patience. Exceeding ANY of them

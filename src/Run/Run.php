@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Run;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 /**
  * One run: a goal pursued on behalf of one user, via one consumer plugin.
  * Immutable snapshot — mutations go through the store, which returns fresh

@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Model;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 use WordPress\AiClient\Messages\DTO\Message;
 
 /**

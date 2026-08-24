@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Run;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 /**
  * One run's lifecycle, per S4:
  *
