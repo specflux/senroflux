@@ -18,23 +18,15 @@ use WordPress\AiClient\Tools\DTO\FunctionDeclaration;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * The ONE place a run's model calls go through, so the Runner (stage 6) can be
- * unit-tested with this gateway mocked and never touches the AI Client API
- * surface directly. One call = exactly one model turn (S9: a tick never makes
- * more than one).
+ * The ONE place a run's model calls go through, so the Runner is unit-tested
+ * with this gateway mocked and never touches the AI Client API surface
+ * directly. One call = exactly one model turn (S9: a tick never makes more
+ * than one).
  */
-final class AiClientGateway {
+final class AiClientGateway implements ModelGatewayInterface {
 
-	/**
-	 * Generate one model turn.
-	 *
-	 * @param list<Message>    $history        Rehydrated history messages.
-	 * @param string           $system_instruction System instruction text.
-	 * @param ToolRegistry     $tools          The run's admitted tools.
-	 * @return Message|WP_Error The model message, or an error (provider
-	 *                          missing/unconfigured, provider failure).
-	 */
-	public function generateTurn( array $history, string $system_instruction, ToolRegistry $tools ): Message|WP_Error {
+	/** {@inheritDoc} */
+	public function generateTurn( array $history, string $system_instruction, ToolRegistry $tools ): ModelTurn|WP_Error {
 		if ( ! function_exists( 'wp_ai_client_prompt' ) ) {
 			return new WP_Error(
 				'gateway_unavailable',
@@ -65,6 +57,16 @@ final class AiClientGateway {
 			return $result;
 		}
 
-		return $result->toMessage();
+		$tokens_in  = 0;
+		$tokens_out = 0;
+		try {
+			$usage      = $result->getTokenUsage();
+			$tokens_in  = $usage->getPromptTokens();
+			$tokens_out = $usage->getCompletionTokens();
+		} catch ( \Throwable $e ) { // Usage is best-effort; never fail a turn over it.
+			unset( $e );
+		}
+
+		return new ModelTurn( $result->toMessage(), $tokens_in, $tokens_out );
 	}
 }

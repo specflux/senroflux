@@ -133,6 +133,19 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	}
 }
 
+if ( ! function_exists( '__' ) ) {
+	/**
+	 * Identity shim.
+	 *
+	 * @param string $text   Text.
+	 * @param string $domain Text domain.
+	 * @return string
+	 */
+	function __( string $text, string $domain = 'default' ): string {
+		return $text;
+	}
+}
+
 if ( ! function_exists( 'esc_html' ) ) {
 	/**
 	 * Identity shim.
@@ -142,6 +155,49 @@ if ( ! function_exists( 'esc_html' ) ) {
 	 */
 	function esc_html( $text ) {
 		return (string) $text;
+	}
+}
+
+if ( ! function_exists( 'get_current_user_id' ) ) {
+	$GLOBALS['senroflux_test_current_user_id'] = 0;
+
+	/** Test control knob: set $GLOBALS['senroflux_test_current_user_id'] per-test. */
+	function get_current_user_id(): int {
+		return (int) ( $GLOBALS['senroflux_test_current_user_id'] ?? 0 );
+	}
+}
+
+if ( ! function_exists( 'admin_url' ) ) {
+	/** Minimal shim. */
+	function admin_url( string $path = '' ): string {
+		return 'https://example.test/wp-admin/' . ltrim( $path, '/' );
+	}
+}
+
+if ( ! function_exists( 'get_transient' ) ) {
+	$GLOBALS['senroflux_test_transients'] = array();
+
+	/** Recording shim mirroring the options-table backing. */
+	function get_transient( string $key ): mixed {
+		return $GLOBALS['senroflux_test_transients'][ $key ] ?? false;
+	}
+}
+
+if ( ! function_exists( 'set_transient' ) ) {
+	/** Recording shim. */
+	function set_transient( string $key, mixed $value, int $expiration = 0 ): bool {
+		$GLOBALS['senroflux_test_transients'][ $key ] = $value;
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_transient' ) ) {
+	/** Recording shim. */
+	function delete_transient( string $key ): bool {
+		unset( $GLOBALS['senroflux_test_transients'][ $key ] );
+
+		return true;
 	}
 }
 

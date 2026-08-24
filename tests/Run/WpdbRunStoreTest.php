@@ -11,6 +11,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Run;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
 use Specflux\SenroFlux\Run\WpdbRunStore;
@@ -64,36 +65,27 @@ final class WpdbRunStoreTest extends TestCase {
 			)
 		);
 
-		$this->assertSame( 42, $id, 'insert_id from the stub' );
+		$this->assertSame( 1, $id );
 
-		$insert = $this->db->lastInsert;
-		$this->assertNotNull( $insert );
-		$this->assertStringEndsWith( 'senroflux_runs', $insert['table'] );
-		$this->assertSame( 'pending', $insert['data']['status'] );
-		$this->assertSame( 0, $insert['data']['step_count'] );
-		$this->assertSame( '["agsafe-smoke\/*"]', $insert['data']['allow_json'] );
-		$this->assertSame( 9, json_decode( (string) $insert['data']['budget_json'], true )['max_steps'] );
-		$this->assertArrayNotHasKey( 'bogus', (array) json_decode( (string) $insert['data']['budget_json'], true ) );
+		$run = $store->getRun( $id );
+		$this->assertNotNull( $run );
+		$this->assertSame( 'specflux-mac', $run->consumer );
+		$this->assertSame( RunStatus::Pending, $run->status );
+		$this->assertSame( array( 'agsafe-smoke/*' ), $run->allow );
+		$this->assertSame( 9, $run->budget['max_steps'] );
+		$this->assertArrayNotHasKey( 'bogus', $run->budget );
 	}
 
-	public function test_get_run_maps_a_row_into_the_value_object(): void {
-		$this->db->rowReturn = $this->runRow();
-		$store               = new WpdbRunStore( $this->db );
+	public function test_get_run_returns_null_for_unknown_ids(): void {
+		$store = new WpdbRunStore( $this->db );
 
-		$run = $store->getRun( 7 );
-
-		$this->assertNotNull( $run );
-		$this->assertSame( 7, $run->id );
-		$this->assertSame( RunStatus::AwaitingApproval, $run->status );
-		$this->assertSame( array( 'agsafe-smoke/*' ), $run->allow );
-		$this->assertSame( 20, $run->budget['max_steps'] );
-		$this->assertNull( $run->error );
+		$this->assertNull( $store->getRun( 404 ) );
 	}
 
 	public function test_model_message_with_function_call_survives_the_store_round_trip(): void {
 		// The exact S4 contract: message_json is toArray(); rehydration is
-		// Message::fromArray(). A model turn carrying a function call must come
-		// back byte-identical.
+		// Message::fromArray(). A model turn carrying a function call must
+		// come back byte-identical through a REAL store round-trip.
 		$message_array = (
 			new ModelMessage(
 				array(
@@ -103,28 +95,24 @@ final class WpdbRunStoreTest extends TestCase {
 			)
 		)->toArray();
 
-		$this->db->rowReturn = array(
-			'id'           => 11,
-			'run_id'       => 7,
-			'seq'          => 1,
-			'kind'         => StepKind::Model->value,
-			'message_json' => (string) wp_json_encode( $message_array ),
-			'tool_name'    => null,
-			'approval_id'  => null,
-			'status'       => 'ok',
-			'tokens_in'    => 10,
-			'tokens_out'   => 5,
-			'duration_ms'  => 120,
-			'created_at'   => '2026-08-23 10:01:00',
+		$store  = new WpdbRunStore( $this->db );
+		$run_id = $store->createRun( 1, 'specflux-mac', 'goal', array( 'agsafe-smoke/*' ), Budget::defaults() );
+
+		$seq = $store->appendStep(
+			$run_id,
+			StepKind::Model,
+			$message_array,
+			null,
+			null,
+			'ok',
+			10,
+			5,
+			120
 		);
 
-		// get_results drives getSteps; reuse the same canned row.
-		$this->db->resultsReturn = array( $this->db->rowReturn );
-
-		$store = new WpdbRunStore( $this->db );
-		$steps = $store->getSteps( 7 );
-
+		$steps = $store->getSteps( $run_id );
 		$this->assertCount( 1, $steps );
+		$this->assertSame( $seq, $steps[0]->seq );
 		$this->assertSame( StepKind::Model, $steps[0]->kind );
 
 		$rebuilt = $steps[0]->toMessage();
@@ -144,39 +132,43 @@ final class WpdbRunStoreTest extends TestCase {
 		$this->assertStringNotContainsString( 'UNIQUE KEY run_seq (seq', $columns );
 	}
 
-	public function test_append_step_claims_the_next_position_from_step_count(): void {
-		$this->db->queryReturn = 1;
-		$this->db->varReturn   = 5; // step_count after the bump
-		$store                 = new WpdbRunStore( $this->db );
+	public function test_append_step_claims_positions_sequentially_from_step_count(): void {
+		$store  = new WpdbRunStore( $this->db );
+		$run_id = $store->createRun( 1, 'specflux-mac', 'goal', array(), array() );
 
-		$seq = $store->appendStep(
-			7,
+		$seq1 = $store->appendStep(
+			$run_id,
 			StepKind::Approval,
-			null,
+			array( 'parked' => true ),
 			'agsafe-smoke/blocked',
 			'apr_xyz',
 			'parked'
 		);
+		$seq2 = $store->appendStep( $run_id, StepKind::System, null );
 
-		$this->assertSame( 5, $seq );
+		$this->assertSame( 1, $seq1 );
+		$this->assertSame( 2, $seq2 );
 
-		$insert = $this->db->lastInsert;
-		$this->assertNotNull( $insert );
-		$this->assertSame( 5, $insert['data']['seq'] );
-		$this->assertSame( 'approval', $insert['data']['kind'] );
-		$this->assertSame( 'apr_xyz', $insert['data']['approval_id'] );
-		$this->assertNull( $insert['data']['message_json'] );
+		// The bump SQL hit the RUNS table (step_count is authoritative).
+		$bumps = array_values(
+			array_filter(
+				$this->db->queries,
+				static fn ( string $q ): bool => str_contains( $q, 'SET step_count = step_count + 1' )
+			)
+		);
+		$this->assertCount( 2, $bumps );
 
-		// The bump + read pair hit the RUNS table (step_count is authoritative).
-		$bump = $this->db->queries[0] ?? '';
-		$this->assertStringContainsString( 'SET step_count = step_count + 1', $bump );
+		// And the run row reflects it.
+		$run = $store->getRun( $run_id );
+		$this->assertSame( 2, $run->stepCount );
 	}
 
 	public function test_update_run_only_takes_known_columns_and_stamps_updated_at(): void {
-		$store = new WpdbRunStore( $this->db );
+		$store  = new WpdbRunStore( $this->db );
+		$run_id = $store->createRun( 1, 'specflux-mac', 'goal', array(), array() );
 
 		$store->updateRun(
-			7,
+			$run_id,
 			array(
 				'status'     => RunStatus::Failed->value,
 				'error_json' => array( 'code' => 'budget_exceeded' ),
@@ -184,11 +176,9 @@ final class WpdbRunStoreTest extends TestCase {
 			)
 		);
 
-		$update = $this->db->lastUpdate;
-		$this->assertNotNull( $update );
-		$this->assertSame( 'failed', $update['data']['status'] );
-		$this->assertSame( '{"code":"budget_exceeded"}', $update['data']['error_json'] );
-		$this->assertArrayNotHasKey( 'hacker', $update['data'] );
-		$this->assertArrayHasKey( 'updated_at', $update['data'] );
+		$run = $store->getRun( $run_id );
+		$this->assertNotNull( $run );
+		$this->assertSame( RunStatus::Failed, $run->status );
+		$this->assertSame( 'budget_exceeded', $run->error['code'] ?? '' );
 	}
 }

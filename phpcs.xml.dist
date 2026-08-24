@@ -105,6 +105,9 @@
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
     </rule>
     <!-- Stub files legitimately mix the fake class with its global shims. -->
+    <rule ref="Generic.Files.OneObjectStructurePerFile">
+        <exclude-pattern>tests/*</exclude-pattern>
+    </rule>
     <rule ref="Universal.Files.SeparateFunctionsFromOO">
         <exclude-pattern>tests/stubs/*</exclude-pattern>
         <exclude-pattern>tests/bootstrap.php</exclude-pattern>
