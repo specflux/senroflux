@@ -61,12 +61,12 @@ function senroflux_activate(): void {
 // Dev tooling (phpcs/phpstan/phpunit) keeps using vendor/autoload.php.
 if ( ! class_exists( Plugin::class ) ) {
 	spl_autoload_register(
-		static function ( string $class ): void {
-			if ( ! str_starts_with( $class, 'Specflux\\SenroFlux\\' ) ) {
+		static function ( string $class_name ): void {
+			if ( ! str_starts_with( $class_name, 'Specflux\\SenroFlux\\' ) ) {
 				return;
 			}
 
-			$relative = substr( $class, strlen( 'Specflux\\SenroFlux\\' ) );
+			$relative = substr( $class_name, strlen( 'Specflux\\SenroFlux\\' ) );
 			$path     = __DIR__ . '/src/' . str_replace( '\\', '/', $relative ) . '.php';
 
 			if ( is_readable( $path ) ) {

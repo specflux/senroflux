@@ -28,3 +28,14 @@ jobs:
 
       - name: PHPUnit
         run: composer test
+
+  plugin-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # WordPress.org's official static checks (S12): readme, headers,
+      # escaping, i18n usage.
+      - uses: wordpress/plugin-check-action@v1
+        with:
+          checks: runtime_checks,static_checks
