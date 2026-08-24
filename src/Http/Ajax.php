@@ -42,25 +42,34 @@ final class Ajax {
 			);
 		}
 
-		$allow_raw  = isset( $_POST['allow'] ) ? wp_unslash( $_POST['allow'] ) : '[]'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- JSON decoded then value-sanitized below.
-		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- same.
+		// JSON bodies: decode defensively — a malformed payload degrades to the
+		// empty defaults — then sanitize per-entry.
+		$allow_raw  = isset( $_POST['allow'] ) ? wp_unslash( $_POST['allow'] ) : '[]';
+		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}';
 
-		$allow  = array_values(
-			array_filter(
-				(array) json_decode( is_string( $allow_raw ) ? $allow_raw : '[]', true ),
-				static fn ( $entry ): bool => is_string( $entry ) && '' !== $entry
-			)
-		);
-		$allow  = array_map( 'sanitize_text_field', $allow );
-		$budget = is_array( json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ) )
-			? (array) json_decode( $budget_raw, true )
-			: array();
+		// A scalar decode result (e.g. `"x"`) casts to a single-element array
+		// whose entry fails the string-empty filter below — same net effect
+		// as rejecting it.
+		$decoded_allow  = (array) json_decode( is_string( $allow_raw ) ? $allow_raw : '[]', true );
+		$decoded_budget = (array) json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true );
+
+		$allow = array();
+		foreach ( $decoded_allow as $entry ) {
+			if ( is_string( $entry ) && '' !== $entry ) {
+				$allow[] = sanitize_text_field( $entry );
+			}
+		}
+
+		$budget = array();
+		foreach ( $decoded_budget as $key => $value ) {
+			$budget[ (string) $key ] = $value;
+		}
 
 		$result = senroflux()->start(
 			sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) ),
 			sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) ),
-			array_values( array_filter( is_array( $allow ) ? $allow : array(), 'is_string' ) ),
-			is_array( $budget ) ? $budget : array()
+			$allow,
+			$budget
 		);
 
 		$this->respond( $result );
