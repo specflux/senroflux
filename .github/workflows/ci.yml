@@ -40,4 +40,15 @@ jobs:
 
       # WordPress.org's official static checks (S12): readme, headers,
       # escaping, i18n usage.
+      # Stage a clean, distribution-shaped copy (no tests/, configs, CI) so
+      # the checker sees exactly what ships in the zip.
+      - name: Assemble distribution copy
+        run: |
+          mkdir -p build/senroflux/assets
+          cp -R src readme.txt senroflux.php LICENSE build/senroflux/
+          cp -R assets/. build/senroflux/assets/
+          rm -f build/senroflux/.DS_Store
+
       - uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: build/senroflux
