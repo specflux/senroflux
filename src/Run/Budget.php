@@ -82,4 +82,27 @@ final class Budget {
 
 		return $defaults;
 	}
+
+	/**
+	 * Sanitize a caller's request against a ceiling: each cap may only come
+	 * down. Untrusted callers (the HTTP surface) go through here so a request
+	 * cannot raise its own limits.
+	 *
+	 * @param mixed                                                    $requested Raw budget-ish input.
+	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int} $ceiling   Upper bound per key.
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int}
+	 */
+	public static function clamp( mixed $requested, array $ceiling ): array {
+		$ceiling = self::sanitize( $ceiling );
+		if ( ! is_array( $requested ) ) {
+			return $ceiling;
+		}
+
+		$wanted = self::sanitize( array_merge( $ceiling, $requested ) );
+		foreach ( array_keys( $ceiling ) as $key ) {
+			$ceiling[ $key ] = min( $ceiling[ $key ], $wanted[ $key ] );
+		}
+
+		return $ceiling;
+	}
 }

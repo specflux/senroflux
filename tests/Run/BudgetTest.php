@@ -62,4 +62,30 @@ final class BudgetTest extends TestCase {
 			$sanitized
 		);
 	}
+
+	public function test_clamp_never_raises_a_cap_above_the_ceiling(): void {
+		$ceiling = array(
+			'max_steps'      => 10,
+			'max_tool_calls' => 4,
+			'max_tokens'     => 1000,
+		);
+
+		$this->assertSame( $ceiling, Budget::clamp( 'junk', $ceiling ) );
+		$this->assertSame(
+			array(
+				'max_steps'      => 2,
+				'max_tool_calls' => 4,
+				'max_tokens'     => 1000,
+			),
+			Budget::clamp(
+				array(
+					'max_steps'      => 2,
+					'max_tool_calls' => 40,
+					'max_tokens'     => '999999',
+					'other'          => 1,
+				),
+				$ceiling
+			)
+		);
+	}
 }

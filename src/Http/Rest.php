@@ -17,7 +17,7 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Routes under senroflux/v1:
- *   POST /runs                {consumer, goal, allow[], budget?}
+ *   POST /runs                {consumer, goal, budget?}  (allow-list via senroflux_http_consumers)
  *   POST /runs/{id}/tick      {step_count, approval_action?}
  *   POST /runs/{id}/cancel
  *   GET  /runs/{id}
@@ -43,10 +43,6 @@ final class Rest {
 					'goal'     => array(
 						'type'     => 'string',
 						'required' => true,
-					),
-					'allow'    => array(
-						'type'     => 'array',
-						'required' => false,
 					),
 					'budget'   => array(
 						'type'     => 'object',
@@ -103,12 +99,18 @@ final class Rest {
 
 	/** POST /runs. */
 	public function routeStart( \WP_REST_Request $request ): \WP_REST_Response {
+		$consumer = (string) $request->get_param( 'consumer' );
+		$policy   = ConsumerPolicy::resolve( $consumer, $request->get_param( 'budget' ) );
+		if ( is_wp_error( $policy ) ) {
+			return $this->respond( $policy );
+		}
+
 		return $this->respond(
 			senroflux()->start(
-				(string) $request->get_param( 'consumer' ),
+				$consumer,
 				(string) $request->get_param( 'goal' ),
-				array_values( array_filter( (array) ( $request->get_param( 'allow' ) ?? array() ), 'is_string' ) ),
-				is_array( $request->get_param( 'budget' ) ) ? (array) $request->get_param( 'budget' ) : array()
+				$policy['allow'],
+				$policy['budget']
 			)
 		);
 	}

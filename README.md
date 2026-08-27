@@ -66,13 +66,16 @@ if ( function_exists( 'senroflux' )
 ```
 
 HTTP mirrors: admin-ajax `senroflux_start|tick|cancel|get` and REST
-`senroflux/v1/runs[/{id}/(tick|cancel)]` — same payloads.
+`senroflux/v1/runs[/{id}/(tick|cancel)]` — same payloads, except that `start`
+takes no `allow`: the tool surface for HTTP-started runs comes from the
+`senroflux_http_consumers` filter (see below), so the browser cannot widen it.
 
 ## Filters
 
 | Filter | Purpose |
 |---|---|
 | `senroflux_default_budget` | Default per-run ceilings (`max_steps`, `max_tool_calls`, `max_tokens`). |
+| `senroflux_http_consumers` | Registers consumers that may start runs over admin-ajax/REST: `[ 'my-plugin' => [ 'allow' => [...], 'budget' => [...] ] ]`. The request never supplies `allow`; its `budget` can only lower the registered ceiling. Unregistered consumers get 403. |
 | `senroflux_system_instruction` | Replace the prompt-injection posture instruction. |
 | `senroflux_tool_result_max_bytes` | Payload cap handed back to the model (default 32 KB). |
 | `senroflux_can_tick` | Who may advance a run (defaults to owner-only). |

@@ -17,7 +17,8 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Four actions mirroring the PHP API: start, tick, cancel, get. Nonce
  * `senroflux_run`, capability `read`, plus per-run ownership enforced in the
- * Runner itself (the tick protocol re-checks it).
+ * Runner itself (the tick protocol re-checks it). Start is additionally
+ * gated by {@see ConsumerPolicy}: the server owns the allow-list.
  */
 final class Ajax {
 
@@ -31,7 +32,7 @@ final class Ajax {
 		add_action( 'wp_ajax_senroflux_get', array( $this, 'handleGet' ) );
 	}
 
-	/** POST consumer, goal, allow[], budget?. */
+	/** POST consumer, goal, budget?. Allow-list comes from ConsumerPolicy. */
 	public function handleStart(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -42,34 +43,26 @@ final class Ajax {
 			);
 		}
 
-		// JSON bodies: decode defensively — a malformed payload degrades to the
-		// empty defaults — then sanitize per-entry.
-		$allow_raw  = isset( $_POST['allow'] ) ? wp_unslash( $_POST['allow'] ) : '[]';
+		$consumer = sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) );
+
+		// The budget arrives as a JSON body; a malformed payload degrades to
+		// the consumer's ceiling. `allow` is never read from the request.
 		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}';
+		$policy     = ConsumerPolicy::resolve(
+			$consumer,
+			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true )
+		);
+		if ( is_wp_error( $policy ) ) {
+			$this->respond( $policy );
 
-		// A scalar decode result (e.g. `"x"`) casts to a single-element array
-		// whose entry fails the string-empty filter below — same net effect
-		// as rejecting it.
-		$decoded_allow  = (array) json_decode( is_string( $allow_raw ) ? $allow_raw : '[]', true );
-		$decoded_budget = (array) json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true );
-
-		$allow = array();
-		foreach ( $decoded_allow as $entry ) {
-			if ( is_string( $entry ) && '' !== $entry ) {
-				$allow[] = sanitize_text_field( $entry );
-			}
-		}
-
-		$budget = array();
-		foreach ( $decoded_budget as $key => $value ) {
-			$budget[ (string) $key ] = $value;
+			return;
 		}
 
 		$result = senroflux()->start(
-			sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) ),
+			$consumer,
 			sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) ),
-			$allow,
-			$budget
+			$policy['allow'],
+			$policy['budget']
 		);
 
 		$this->respond( $result );
