@@ -197,8 +197,7 @@ final class Runner {
 			// Approve: re-run the parked call. The permission re-check passes
 			// via the by-reference grant; if it STILL demands approval (bridge
 			// unavailable / grant expired), remain parked.
-			$input   = ( is_array( $call['args'] ) && array() !== $call['args'] ) ? $call['args'] : null;
-			$outcome = $this->executor->call( $call['name'], $input );
+			$outcome = $this->executeCall( ToolRegistry::forRun( $run ), $call );
 
 			if ( 'approval_required' === $outcome->kind ) {
 				return array(
@@ -305,7 +304,7 @@ final class Runner {
 				}
 				$remaining = array_slice( $pending_calls, $index + 1 );
 
-				$outcome = $this->executeCall( $call );
+				$outcome = $this->executeCall( $registry, $call );
 				++$tool_calls_used;
 
 				if ( 'approval_required' === $outcome->kind ) {
@@ -723,10 +722,17 @@ final class Runner {
 	/**
 	 * One tool call to its outcome (ability name mapped back from wpab__ form).
 	 *
+	 * The allow-list is enforced here, not only when declaring tools to the
+	 * model: a hallucinated or injected call outside the run's registry is
+	 * `unknown_tool` and never reaches the executor (S5).
+	 *
 	 * @param array{id:string,name:string,args:mixed} $call Call shape.
 	 */
-	private function executeCall( array $call ): ToolOutcome {
+	private function executeCall( ToolRegistry $registry, array $call ): ToolOutcome {
 		$name = ToolRegistry::abilityName( $call['name'] );
+		if ( ! $registry->admits( $name ) ) {
+			return ToolOutcome::unknownTool( $name );
+		}
 		$args = $call['args'] ?? null;
 
 		return $this->executor->call(

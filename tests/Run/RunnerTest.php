@@ -211,6 +211,32 @@ final class RunnerTest extends TestCase {
 		$this->assertSame( 'completed', $result['run']['status'] );
 		$this->assertSame( 'Cache cleared.', $result['new_steps'][1]['message']['parts'][0]['text'] ?? '' );
 		$this->assertTrue( $this->bridge->approvals['apr_park1'] ?? false, 'the bridge must grant via Agent Safety' );
+
+		// The parked call itself must have run (not degraded to unknown_tool).
+		$this->assertSame( 'tool_result', $result['new_steps'][0]['kind'] );
+		$this->assertSame( 'ok', $result['new_steps'][0]['status'], 'resumed call executes against the mapped ability name' );
+		$this->assertSame( 'wpab__agsafe-smoke__blocked', $result['new_steps'][0]['tool_name'] );
+	}
+
+	public function test_call_outside_allow_list_is_unknown_tool_and_never_executed(): void {
+		$run_id              = $this->createRun(); // allow: agsafe-smoke/*
+		$outside             = new SenroFlux_Test_Fake_Ability( 'other-plugin/refund', permission_result: true );
+		$outside->on_execute = static function (): void {
+			throw new \RuntimeException( 'must never execute' );
+		};
+		$GLOBALS['senroflux_test_abilities']['other-plugin/refund'] = $outside;
+
+		$this->gateway->script[] = self::callTurn( 'wpab__other-plugin__refund', array( 'order' => 7 ) );
+		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'] );
+		$kinds = array_column( $result['new_steps'], 'kind' );
+		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), $kinds );
+		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
+		$this->assertSame( array( 'error' => 'other-plugin/refund' ), $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response'] ?? null, 'unknown_tool outcome, executor never reached' );
 	}
 
 	public function test_reject_resume_writes_rejected_by_user_result(): void {
