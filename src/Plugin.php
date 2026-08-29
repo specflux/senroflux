@@ -100,6 +100,30 @@ final class Plugin {
 			Schema::maybe_upgrade( $wpdb );
 		}
 
+		// Pages pack (S10/S11): the pack, its polyfill abilities, its pattern
+		// vocabulary and its approval-summary builder. All wiring lives in
+		// this composition root — nothing under src/Run knows packs exist.
+		$content_locale = function_exists( 'get_locale' ) ? get_locale() : '';
+		$pages_pack     = new \Specflux\SenroFlux\Packs\Pages\PagesPack( $content_locale );
+		add_filter(
+			'senroflux_packs',
+			static fn ( array $packs ): array => $packs + array( 'pages' => $pages_pack ),
+			10,
+			1
+		);
+		\Specflux\SenroFlux\Packs\Pages\Abilities::boot();
+		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
+		add_action(
+			'init',
+			static function () use ( $pages_pack ): void {
+				// Pattern registration rides the pack's vocabulary; failures
+				// must never break the site — the Validator refuses unknown
+				// markup at write time regardless (fail closed there).
+				$pages_pack->registerPatterns();
+			},
+			20
+		);
+
 		// HTTP surface (S9). Both transports delegate to the PHP API below.
 		( new Ajax() )->register();
 		add_action( 'rest_api_init', array( new Rest(), 'register' ) );

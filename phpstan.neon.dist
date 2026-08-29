@@ -59,3 +59,24 @@ parameters:
             message: '#^Parameter \#1 \$array of static method WordPress\\AiClient\\Messages\\DTO\\Message::fromArray\(\) expects array\{role: string, parts: array.*given\.$#'
             path: src/Run/*
             count: 3
+        -
+            # The Agent Safety go-forward pack lives in the external
+            # wp-agentsafety plugin, which is NOT installed in this checkout;
+            # phpstan therefore cannot resolve these classes. Every code path
+            # that touches them is already behind a `class_exists()` guard
+            # (agentSafetyBindingError() / agentSafetyPack()).
+            message: '#^Method Specflux\\SenroFlux\\Packs\\Pages\\PagesPack::resolveAsPackForUser\(\) has invalid return type Specflux\\AgentSafety\\Packs\\Pack\.$#'
+            path: src/Packs/Pages/PagesPack.php
+            count: 2
+        -
+            # Same external-class situation: PackResolver is only reached after
+            # the class_exists() guard in agentSafetyBindingError().
+            message: '#^Instantiated class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver not found\.$#'
+            path: src/Packs/Pages/PagesPack.php
+            count: 1
+        -
+            # registry() is a method on the external PackResolver, reached only
+            # behind the same class_exists() guard.
+            message: '#^Call to method registry\(\) on an unknown class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver\.$#'
+            path: src/Packs/Pages/PagesPack.php
+            count: 1
