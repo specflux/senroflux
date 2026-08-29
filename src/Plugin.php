@@ -253,6 +253,10 @@ final class Plugin {
 			)
 		);
 
+		// S12: cancel is a terminal transition — build + persist a partial
+		// report. The Runner never sees the cancel, so call into it directly.
+		$this->runner()->report( $run_id );
+
 		return $this->get( $run_id );
 	}
 
@@ -310,6 +314,9 @@ final class Plugin {
 				'pack'                => $run->pack,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
+				// 0.2 S12: the harness-built report (result_json), surfaced on
+				// every read so a terminal run carries its changes list.
+				'report'              => $run->result,
 			),
 			'steps' => $steps,
 			'ui'    => array(),

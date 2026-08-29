@@ -56,6 +56,7 @@ final class Runner {
 		private readonly ToolExecutor $executor,
 		private readonly ModelGatewayInterface $gateway,
 		private readonly ApprovalBridge $bridge,
+		private readonly mixed $post_lookup = null,
 	) {
 	}
 
@@ -230,12 +231,12 @@ final class Runner {
 		$parked = $this->latestParkedContext( $run->id );
 		if ( null === $parked ) {
 			// Corrupted state: fail explicitly rather than looping ungoverned.
-			$this->failError( $run, 'missing_approval_context', 'No parked context for an awaiting_approval run.' );
+			$report = $this->failError( $run, 'missing_approval_context', 'No parked context for an awaiting_approval run.' );
 
 			return array(
 				'run'   => $this->refresh( $run ),
 				'steps' => $new_steps,
-				'ui'    => null,
+				'ui'    => array( 'report' => $report ),
 			);
 		}
 
@@ -330,11 +331,11 @@ final class Runner {
 		// seq 0, and a skills ceiling breach fails the run (never truncation).
 		$instruction = $this->instructionFor( $run, $new_steps );
 		if ( is_wp_error( $instruction ) ) {
-			$this->failError( $run, (string) $instruction->get_error_code(), $instruction->get_error_message() );
+			$report = $this->failError( $run, (string) $instruction->get_error_code(), $instruction->get_error_message() );
 
 			return array(
 				'run' => $this->refresh( $run ),
-				'ui'  => null,
+				'ui'  => array( 'report' => $report ),
 			);
 		}
 
@@ -351,19 +352,19 @@ final class Runner {
 
 		while ( true ) {
 			if ( $run->stepCount >= $run->budget['max_steps'] ) {
-				$this->failBudget( $run, 'max_steps' );
+				$report = $this->failBudget( $run, 'max_steps' );
 
 				return array(
 					'run' => $this->refresh( $run ),
-					'ui'  => null,
+					'ui'  => array( 'report' => $report ),
 				);
 			}
 			if ( $run->tokensIn + $run->tokensOut >= $run->budget['max_tokens'] ) {
-				$this->failBudget( $run, 'max_tokens' );
+				$report = $this->failBudget( $run, 'max_tokens' );
 
 				return array(
 					'run' => $this->refresh( $run ),
-					'ui'  => null,
+					'ui'  => array( 'report' => $report ),
 				);
 			}
 
@@ -374,11 +375,11 @@ final class Runner {
 				$turn    = $this->gateway->generateTurn( $history, $instruction, $registry );
 
 				if ( $turn instanceof WP_Error ) {
-					$this->failError( $run, 'model_error', $turn->get_error_message() );
+					$report = $this->failError( $run, 'model_error', $turn->get_error_message() );
 
 					return array(
 						'run' => $this->refresh( $run ),
-						'ui'  => null,
+						'ui'  => array( 'report' => $report ),
 					);
 				}
 
@@ -396,22 +397,31 @@ final class Runner {
 				$pending_calls = $this->extractCalls( $turn->message );
 
 				if ( array() === $pending_calls ) {
-					$this->complete( $run );
+					// S12: a finish attempt may be parked by a verify nudge.
+					if ( $this->finishAttempt( $run, $new_steps ) ) {
+						// Nudged: still running, no report yet.
+						return array(
+							'run' => $this->refresh( $run ),
+							'ui'  => null,
+						);
+					}
+
+					$report = $this->complete( $run );
 
 					return array(
 						'run' => $this->refresh( $run ),
-						'ui'  => null,
+						'ui'  => array( 'report' => $report ),
 					);
 				}
 			}
 
 			foreach ( $pending_calls as $index => $call ) {
 				if ( $tool_calls_used >= $run->budget['max_tool_calls'] ) {
-					$this->failBudget( $run, 'max_tool_calls' );
+					$report = $this->failBudget( $run, 'max_tool_calls' );
 
 					return array(
 						'run' => $this->refresh( $run ),
-						'ui'  => null,
+						'ui'  => array( 'report' => $report ),
 					);
 				}
 				$remaining = array_slice( $pending_calls, $index + 1 );
@@ -465,11 +475,11 @@ final class Runner {
 			}
 
 			if ( $run->stepCount >= $run->budget['max_steps'] ) {
-				$this->failBudget( $run, 'max_steps' );
+				$report = $this->failBudget( $run, 'max_steps' );
 
 				return array(
 					'run' => $this->refresh( $run ),
-					'ui'  => null,
+					'ui'  => array( 'report' => $report ),
 				);
 			}
 		}
@@ -552,6 +562,9 @@ final class Runner {
 			null,
 			$status
 		);
+
+		// S12: fold this successful result into the written-object set.
+		$this->trackObjects( $run_id, $call, $outcome, $seq );
 
 		return array(
 			'seq'       => $seq,
@@ -683,7 +696,12 @@ final class Runner {
 	// Terminal transitions
 	// ------------------------------------------------------------------
 
-	private function failBudget( Run $run, string $which ): void {
+	/**
+	 * Budget ceilings exhausted: mark the run failed.
+	 *
+	 * @return array<string,mixed> The harness-built partial report.
+	 */
+	private function failBudget( Run $run, string $which ): array {
 		$this->store->updateRun(
 			$run->id,
 			array(
@@ -695,9 +713,16 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+
+		return $this->report( $run->id );
 	}
 
-	private function failError( Run $run, string $code, string $message ): void {
+	/**
+	 * Fatal/protocol error: mark the run failed.
+	 *
+	 * @return array<string,mixed> The harness-built partial report.
+	 */
+	private function failError( Run $run, string $code, string $message ): array {
 		$this->store->updateRun(
 			$run->id,
 			array(
@@ -709,9 +734,16 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+
+		return $this->report( $run->id );
 	}
 
-	private function complete( Run $run ): void {
+	/**
+	 * The model produced no function calls: the run completed.
+	 *
+	 * @return array<string,mixed> The harness-built report.
+	 */
+	private function complete( Run $run ): array {
 		$this->store->updateRun(
 			$run->id,
 			array(
@@ -719,6 +751,8 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+
+		return $this->report( $run->id );
 	}
 
 	// ------------------------------------------------------------------
@@ -1156,11 +1190,11 @@ final class Runner {
 		$context = $this->latestQuestionContext( $run->id );
 		if ( null === $context ) {
 			// Corrupted state: fail explicitly rather than looping ungoverned.
-			$this->failError( $run, 'missing_question_context', 'No parked question for an awaiting_user run.' );
+			$report = $this->failError( $run, 'missing_question_context', 'No parked question for an awaiting_user run.' );
 
 			return array(
 				'run' => $this->refresh( $run ),
-				'ui'  => array(),
+				'ui'  => array( 'report' => $report ),
 			);
 		}
 
@@ -1529,11 +1563,11 @@ final class Runner {
 		$context = $this->latestPlanContext( $run->id );
 		if ( null === $context ) {
 			// Corrupted state: fail explicitly rather than looping ungoverned.
-			$this->failError( $run, 'missing_plan_context', 'No parked plan for an awaiting_plan run.' );
+			$report = $this->failError( $run, 'missing_plan_context', 'No parked plan for an awaiting_plan run.' );
 
 			return array(
 				'run' => $this->refresh( $run ),
-				'ui'  => array(),
+				'ui'  => array( 'report' => $report ),
 			);
 		}
 
@@ -2021,5 +2055,179 @@ final class Runner {
 		}
 
 		return function_exists( 'agent_safety' ) && method_exists( agent_safety(), 'grants' );
+	}
+
+	// ------------------------------------------------------------------
+	// S12: verification read-back + harness-built report
+	// ------------------------------------------------------------------
+
+	// ------------------------------------------------------------------
+	// S12: verification nudge + terminal report
+	// ------------------------------------------------------------------
+
+	/**
+	 * Build + persist the terminal report (S12).
+	 *
+	 * Public so Plugin::cancel() can build a partial report on a user-initiated
+	 * terminal transition that never passes through the loop (see
+	 * Plugin.diff.md §2).
+	 *
+	 * @return array{summary:string,changes:list<array<string,mixed>>}
+	 */
+	public function report( int $run_id ): array {
+		$fresh   = $this->store->getRun( $run_id );
+		$objects = ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
+		$report  = Report::build( $this->latestModelText( $run_id ), $objects, $this->post_lookup );
+
+		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );
+
+		return $report;
+	}
+
+	/**
+	 * S12: fold one tool_result into the written-object set.
+	 *
+	 * A result output whose 'id' is a non-empty string|int records a WRITE
+	 * (re-opening verification); a call whose args carry an already-tracked
+	 * 'id' records a VERIFICATION (a read-back of that object). Both use the
+	 * appended step's seq. A missing/corrupt objects_json is fail-closed to an
+	 * empty set and never blocks the tool_result.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call    Originating call.
+	 * @param ToolOutcome                             $outcome Tool outcome.
+	 */
+	private function trackObjects( int $run_id, array $call, ToolOutcome $outcome, int $seq ): void {
+		$current = $this->store->getRun( $run_id );
+		$before  = ( null !== $current && is_array( $current->objects ) ) ? $current->objects : array();
+		$objects = $before;
+
+		if ( 'result' === $outcome->kind ) {
+			$output   = $outcome->output ?? array();
+			$write_id = $output['id'] ?? null;
+			if ( is_string( $write_id ) && '' !== $write_id ) {
+				$objects = Tracker::recordWrite( $objects, $write_id, $seq );
+			} elseif ( is_int( $write_id ) ) {
+				$objects = Tracker::recordWrite( $objects, (string) $write_id, $seq );
+			}
+
+			$args   = $call['args'] ?? null;
+			$arg_id = ( is_array( $args ) && isset( $args['id'] ) ) ? $args['id'] : null;
+			$arg_id = is_int( $arg_id ) ? (string) $arg_id : $arg_id;
+			if ( is_string( $arg_id ) && '' !== $arg_id && array_key_exists( $arg_id, $objects ) ) {
+				$objects = Tracker::recordVerification( $objects, $arg_id, $seq );
+			}
+		}
+
+		if ( $objects !== $before ) {
+			$this->store->updateRun( $run_id, array( 'objects_json' => $objects ) );
+		}
+	}
+
+	/**
+	 * S12: decide whether a zero-call model turn completes or is parked by a
+	 * verify nudge.
+	 *
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 * @return bool True when a nudge was appended (the tick ends, keep running);
+	 *              false when the run may complete.
+	 */
+	private function finishAttempt( Run $run, array &$new_steps ): bool {
+		$fresh   = $this->refresh( $run );
+		$objects = is_array( $fresh->objects ) ? $fresh->objects : array();
+
+		$unverified = Tracker::unverified( $objects );
+		if ( array() === $unverified ) {
+			return false; // Every write was read back: complete.
+		}
+
+		$nudge_seq = $this->latestVerifyNudgeSeq( $run->id );
+		if ( null !== $nudge_seq && ! $this->newWriteAfterNudge( $objects, $nudge_seq ) ) {
+			// A nudge already covers this state: this is the SECOND finish
+			// attempt — complete anyway; the objects stay unverified.
+			return false;
+		}
+
+		// First finish (or a post-new-write finish) attempt: append the nudge
+		// and keep the run running so the model re-reads before finishing.
+		$payload = array(
+			'note'    => 'verify_nudge',
+			'objects' => $unverified,
+		);
+
+		$new_steps[] = array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+
+		return true;
+	}
+
+	/**
+	 * Seq of the newest verify_nudge system step, or null.
+	 */
+	private function latestVerifyNudgeSeq( int $run_id ): ?int {
+		$seq = null;
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::System !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			if ( 'verify_nudge' === ( $step->messageArray['note'] ?? null ) ) {
+				$seq = (int) $step->seq;
+			}
+		}
+
+		return $seq;
+	}
+
+	/**
+	 * Did any tracked object get written at a step AFTER the nudge?
+	 *
+	 * @param array<string,mixed> $objects The objects_json map.
+	 */
+	private function newWriteAfterNudge( array $objects, int $nudge_seq ): bool {
+		foreach ( $objects as $entry ) {
+			if ( is_array( $entry ) && isset( $entry['last_write_seq'] ) && (int) $entry['last_write_seq'] > $nudge_seq ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The newest model step's text parts joined ('' when none).
+	 *
+	 * @return string
+	 */
+	private function latestModelText( int $run_id ): string {
+		$text = '';
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			$text = $this->joinedText( $step->messageArray );
+		}
+
+		return $text;
+	}
+
+	/**
+	 * Join the text parts of a stored message shape.
+	 *
+	 * @param array<string,mixed> $message_array Canonical Message::toArray() shape.
+	 */
+	private function joinedText( array $message_array ): string {
+		$parts_text = array();
+		foreach ( (array) ( $message_array['parts'] ?? array() ) as $part ) {
+			if ( is_array( $part ) && isset( $part['type'] ) && 'text' === $part['type'] && is_string( $part['text'] ?? null ) ) {
+				$parts_text[] = $part['text'];
+			}
+		}
+
+		return implode( '', $parts_text );
 	}
 }
