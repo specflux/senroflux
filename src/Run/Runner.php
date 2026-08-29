@@ -733,11 +733,18 @@ final class Runner {
 		if ( ! $registry->admits( $name ) ) {
 			return ToolOutcome::unknownTool( $name );
 		}
+		// Pass the model's args through verbatim: an EMPTY args object must
+		// stay an empty array, because core validates it against the ability's
+		// input schema — null fails a type:object schema (breaking both the
+		// first execution and the approved resume re-run of no-arg abilities),
+		// while an empty array validates as the empty object the model sent.
+		// Null is sent only when the call carried no args at all, which is the
+		// shape abilities WITHOUT an input schema accept.
 		$args = $call['args'] ?? null;
 
 		return $this->executor->call(
 			$name,
-			( is_array( $args ) && array() !== $args ) ? $args : null
+			is_array( $args ) ? $args : null
 		);
 	}
 
