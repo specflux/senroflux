@@ -60,17 +60,19 @@ final class Rest {
 				'callback'            => array( $this, 'routeTick' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
 				'args'                => array(
-					'run_id'          => array(
+					'run_id'     => array(
 						'type'     => 'integer',
 						'required' => true,
 					),
-					'step_count'      => array(
+					'step_count' => array(
 						'type'     => 'integer',
 						'required' => true,
 					),
-					'approval_action' => array(
-						'type' => 'string',
-						'enum' => array( 'approve', 'reject' ),
+					// S5 (breaking): the 0.1 approval_action param is gone;
+					// the park resolution is a resume object.
+					'resume'     => array(
+						'type'     => 'object',
+						'required' => false,
 					),
 				),
 			)
@@ -117,11 +119,26 @@ final class Rest {
 
 	/** POST /runs/{id}/tick. */
 	public function routeTick( \WP_REST_Request $request ): \WP_REST_Response {
+		// S5 (breaking): refuse the removed 0.1 field loudly so a stale
+		// consumer fails instead of silently losing its approval.
+		if ( null !== $request->get_param( 'approval_action' ) ) {
+			return $this->respond(
+				new \WP_Error(
+					'senroflux_bad_request',
+					__( 'The approval_action field was removed; send a resume object instead (S5).', 'senroflux' ),
+					array( 'status' => 400 )
+				)
+			);
+		}
+
+		/** @var array<string,mixed>|null $resume */
+		$resume = $request->get_param( 'resume' );
+
 		return $this->respond(
 			senroflux()->tick(
 				(int) $request->get_param( 'run_id' ),
 				(int) $request->get_param( 'step_count' ),
-				$request->get_param( 'approval_action' )
+				$resume
 			)
 		);
 	}

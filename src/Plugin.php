@@ -92,6 +92,12 @@ final class Plugin {
 
 		$this->available = true;
 
+		// Schema v2 (0.2 S4): idempotent dbDelta, stamped by version option.
+		global $wpdb;
+		if ( isset( $wpdb ) ) {
+			Schema::maybe_upgrade( $wpdb );
+		}
+
 		// HTTP surface (S9). Both transports delegate to the PHP API below.
 		( new Ajax() )->register();
 		add_action( 'rest_api_init', array( new Rest(), 'register' ) );
@@ -169,17 +175,23 @@ final class Plugin {
 	/**
 	 * Advance one run by at most one model turn.
 	 *
-	 * @param int         $run_id              Run id.
-	 * @param int         $expected_step_count Caller's last-known step_count.
-	 * @param string|null $approval_action     'approve'|'reject' when parked.
+	 * @param int                $run_id              Run id.
+	 * @param int                $expected_step_count Caller's last-known step_count.
+	 * @param array<string,mixed>|null $resume Park resolution (S5): shape must
+	 *                                          match the run's park kind, else
+	 *                                          `resume_mismatch`. The 0.1
+	 *                                          `?string $approval_action`
+	 *                                          parameter is REMOVED (breaking,
+	 *                                          S5) — a string here is a type
+	 *                                          error by contract.
 	 * @return array<string,mixed>|WP_Error RunState or a protocol error.
 	 */
-	public function tick( int $run_id, int $expected_step_count, ?string $approval_action = null ): array|WP_Error {
+	public function tick( int $run_id, int $expected_step_count, ?array $resume = null ): array|WP_Error {
 		if ( ! $this->ready() ) {
 			return $this->ungoverned_error();
 		}
 
-		return $this->runner()->tick( $run_id, $expected_step_count, $approval_action );
+		return $this->runner()->tick( $run_id, $expected_step_count, $resume );
 	}
 
 	/**
@@ -253,17 +265,23 @@ final class Plugin {
 
 		return array(
 			'run'   => array(
-				'id'         => $run->id,
-				'user_id'    => $run->userId,
-				'consumer'   => $run->consumer,
-				'goal'       => $run->goal,
-				'status'     => $run->status->value,
-				'allow'      => $run->allow,
-				'budget'     => $run->budget,
-				'step_count' => $run->stepCount,
-				'tokens_in'  => $run->tokensIn,
-				'tokens_out' => $run->tokensOut,
-				'error'      => $run->error,
+				'id'                  => $run->id,
+				'user_id'             => $run->userId,
+				'consumer'            => $run->consumer,
+				'goal'                => $run->goal,
+				'status'              => $run->status->value,
+				'allow'               => $run->allow,
+				'budget'              => $run->budget,
+				'step_count'          => $run->stepCount,
+				'tokens_in'           => $run->tokensIn,
+				'tokens_out'          => $run->tokensOut,
+				'error'               => $run->error,
+				// 0.2 S4/S17: the pack name and the two captured locales ride
+				// on every read; remaining/skills/report land with the
+				// features that fill them (S8, S12, S17).
+				'pack'                => $run->pack,
+				'conversation_locale' => $run->conversationLocale,
+				'content_locale'      => $run->contentLocale,
 			),
 			'steps' => $steps,
 			'ui'    => array(),

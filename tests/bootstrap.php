@@ -34,6 +34,8 @@ if ( ! class_exists( 'WP_Error', false ) ) {
 	require_once __DIR__ . '/stubs/wp-error.php';
 }
 require_once __DIR__ . '/stubs/abilities.php';
+// Runner test doubles (FakeGateway, RecordingBridge) — class_exists-guarded.
+require_once __DIR__ . '/stubs/run-doubles.php';
 
 // The global senroflux() locator (function_exists-guarded, same as main).
 require_once dirname( __DIR__ ) . '/src/api.php';
@@ -306,5 +308,32 @@ if ( ! function_exists( 'dbDelta' ) ) {
 		}
 
 		return array();
+	}
+}
+
+if ( ! function_exists( 'get_option' ) ) {
+	$GLOBALS['senroflux_test_options'] = array();
+
+	/** Test knob: options backed by an in-memory array. */
+	function get_option( string $option, mixed $fallback = false ): mixed {
+		return $GLOBALS['senroflux_test_options'][ $option ] ?? $fallback;
+	}
+}
+
+if ( ! function_exists( 'update_option' ) ) {
+	/** Test knob: options backed by an in-memory array. */
+	function update_option( string $option, mixed $value, ?bool $autoload = null ): bool {
+		$GLOBALS['senroflux_test_options'][ $option ] = $value;
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_option' ) ) {
+	/** Test knob: options backed by an in-memory array. */
+	function delete_option( string $option ): bool {
+		unset( $GLOBALS['senroflux_test_options'][ $option ] );
+
+		return true;
 	}
 }

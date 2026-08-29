@@ -54,7 +54,7 @@ function senroflux_activate(): void {
 
 	global $wpdb;
 	if ( isset( $wpdb ) ) {
-		Schema::install( $wpdb );
+		Schema::maybe_upgrade( $wpdb );
 	}
 }
 

@@ -68,7 +68,15 @@ final class Ajax {
 		$this->respond( $result );
 	}
 
-	/** POST run_id, step_count, approval_action?. */
+	/**
+	 * POST run_id, step_count, resume?.
+	 *
+	 * S5 (breaking): the 0.1 `approval_action` field is GONE — a request
+	 * carrying it is refused outright (400) so a stale consumer fails loudly
+	 * instead of silently losing its approval. The park resolution arrives as
+	 * a JSON string in the `resume` field and is decoded here; the Runner
+	 * validates its shape against the park kind.
+	 */
 	public function handleTick(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -79,13 +87,38 @@ final class Ajax {
 			);
 		}
 
-		$result = senroflux()->tick(
-			absint( $_POST['run_id'] ?? 0 ),
-			absint( $_POST['step_count'] ?? 0 ),
-			isset( $_POST['approval_action'] ) ? sanitize_key( wp_unslash( $_POST['approval_action'] ) ) : null
-		);
+		if ( isset( $_POST['approval_action'] ) ) {
+			wp_send_json_error(
+				array(
+					'code'    => 'senroflux_bad_request',
+					'message' => __( 'The approval_action field was removed; send a resume object instead (S5).', 'senroflux' ),
+				),
+				400
+			);
+		}
 
-		$this->respond( $result );
+		$resume = null;
+		if ( isset( $_POST['resume'] ) ) {
+			$raw    = wp_unslash( $_POST['resume'] );
+			$resume = is_string( $raw ) ? json_decode( $raw, true ) : $raw;
+			if ( ! is_array( $resume ) ) {
+				wp_send_json_error(
+					array(
+						'code'    => 'resume_mismatch',
+						'message' => __( 'The resume field must be a JSON object matching the run\'s park kind.', 'senroflux' ),
+					),
+					400
+				);
+			}
+		}
+
+		$this->respond(
+			senroflux()->tick(
+				absint( $_POST['run_id'] ?? 0 ),
+				absint( $_POST['step_count'] ?? 0 ),
+				$resume
+			)
+		);
 	}
 
 	/** POST run_id. */

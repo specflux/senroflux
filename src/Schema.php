@@ -18,8 +18,19 @@ defined( 'ABSPATH' ) || exit;
  * Owns the two custom tables' names, shapes and lifecycle. All timestamps are
  * UTC DATETIME strings (gmdate('Y-m-d H:i:s')), matching Agent Safety's
  * convention of never letting server timezone drift into stored comparisons.
+ *
+ * Versioned (0.2 S4): the option `senroflux_db_version` tracks the installed
+ * shape; {@see self::maybe_upgrade()} re-runs dbDelta (idempotent by design)
+ * until the option matches {@see self::DB_VERSION}.
  */
 final class Schema {
+
+	/**
+	 * Current schema version. 1 = the 0.1 runs/steps tables; 2 = 0.2 S4's
+	 * additive run columns (pack, skills_json, result_json, objects_json,
+	 * accepted_plan_step_id, conversation_locale, content_locale).
+	 */
+	public const DB_VERSION = 2;
 
 	/**
 	 * Runs table name for this site.
@@ -58,6 +69,29 @@ final class Schema {
 	}
 
 	/**
+	 * Bring an existing install up to {@see self::DB_VERSION}: dbDelta is
+	 * idempotent (it alters only what differs), so re-running the CREATE
+	 * TABLE statements is exactly how a v1 table gains 0.2's columns. The
+	 * version option is stamped ONLY after install() returns, so a crash
+	 * mid-upgrade leaves the option low and the next boot retries — fail
+	 * toward re-running, never toward skipping.
+	 *
+	 * @return void
+	 */
+	public static function maybe_upgrade( wpdb $db ): void {
+		$installed = function_exists( 'get_option' ) ? (int) get_option( 'senroflux_db_version', 0 ) : 0;
+		if ( $installed >= self::DB_VERSION ) {
+			return;
+		}
+
+		self::install( $db );
+
+		if ( function_exists( 'update_option' ) ) {
+			update_option( 'senroflux_db_version', self::DB_VERSION, false );
+		}
+	}
+
+	/**
 	 * Drop both tables (uninstall only).
 	 *
 	 * @return void
@@ -91,6 +125,14 @@ final class Schema {
 				'updated_at DATETIME NOT NULL',
 				'finished_at DATETIME NULL',
 				'error_json TEXT NULL',
+				// 0.2 S4 columns. Additive: no 0.1 column changed shape.
+				'pack VARCHAR(64) NULL',
+				'skills_json LONGTEXT NULL',
+				'result_json LONGTEXT NULL',
+				'objects_json LONGTEXT NULL',
+				'accepted_plan_step_id BIGINT(20) UNSIGNED NULL',
+				'conversation_locale VARCHAR(20) NULL',
+				'content_locale VARCHAR(20) NULL',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',

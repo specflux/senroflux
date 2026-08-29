@@ -13,13 +13,18 @@ namespace Specflux\SenroFlux\Run;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Per S4:
+ * Per S4 (as amended by SPEC-SENROFLUX-0.2 S4):
  *   - user        — the goal text or a follow-up message.
  *   - model       — one assistant turn (an AI Client ModelMessage).
  *   - tool_result — one function response (a UserMessage carrying a
  *                   FunctionResponse part).
  *   - approval    — parked marker; carries the Agent Safety approval id.
- *   - system      — budget/cancel/error notes written by the harness itself.
+ *   - question    — the model's ask-user call: the validated payload in
+ *                   message_json, the harness tool name in tool_name. Park.
+ *   - plan        — the model's propose-plan call: the validated payload in
+ *                   message_json, the harness tool name in tool_name. Park.
+ *   - system      — budget/cancel/error notes written by the harness itself
+ *                   (S4's `note` convention lives in message_json).
  */
 enum StepKind: string {
 
@@ -27,6 +32,8 @@ enum StepKind: string {
 	case Model      = 'model';
 	case ToolResult = 'tool_result';
 	case Approval   = 'approval';
+	case Question   = 'question';
+	case Plan       = 'plan';
 	case System     = 'system';
 
 	/**

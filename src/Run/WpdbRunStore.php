@@ -149,12 +149,20 @@ final class WpdbRunStore implements RunStore {
 	/** {@inheritDoc} */
 	public function updateRun( int $run_id, array $fields ): void {
 		$allowed = array(
-			'status'      => '%s',
-			'step_count'  => '%d',
-			'tokens_in'   => '%d',
-			'tokens_out'  => '%d',
-			'error_json'  => '%s',
-			'finished_at' => '%s',
+			'status'                => '%s',
+			'step_count'            => '%d',
+			'tokens_in'             => '%d',
+			'tokens_out'            => '%d',
+			'error_json'            => '%s',
+			'finished_at'           => '%s',
+			// 0.2 S4 columns (written by the run-model features that own them).
+			'pack'                  => '%s',
+			'skills_json'           => '%s',
+			'result_json'           => '%s',
+			'objects_json'          => '%s',
+			'accepted_plan_step_id' => '%d',
+			'conversation_locale'   => '%s',
+			'content_locale'        => '%s',
 		);
 
 		$data   = array();

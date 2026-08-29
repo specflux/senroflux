@@ -27,23 +27,30 @@ final class Budget {
 	public const MAX_STEPS      = 'max_steps';
 	public const MAX_TOOL_CALLS = 'max_tool_calls';
 	public const MAX_TOKENS     = 'max_tokens';
+	public const MAX_QUESTIONS  = 'max_questions';
+	public const MAX_PLANS      = 'max_plans';
 
 	/**
-	 * The shipped defaults (S4).
+	 * The shipped defaults (S4 as amended by 0.2 S4). Exhausting questions or
+	 * plans is NOT a failure — the tool is withdrawn / the run cancels per
+	 * S6/S7 — but the ceilings still bound how many park round-trips a run
+	 * may cause.
 	 *
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int}
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
 	 */
 	public static function defaults(): array {
 		$defaults = array(
 			self::MAX_STEPS      => 20,
 			self::MAX_TOOL_CALLS => 12,
 			self::MAX_TOKENS     => 60000,
+			self::MAX_QUESTIONS  => 5,
+			self::MAX_PLANS      => 3,
 		);
 
 		/**
 		 * Filters the default budget for new runs.
 		 *
-		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int} $defaults
+		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int} $defaults
 		 */
 		$filtered = apply_filters( 'senroflux_default_budget', $defaults );
 
@@ -51,18 +58,20 @@ final class Budget {
 	}
 
 	/**
-	 * Merge caller overrides over the defaults, keeping only the three known
-	 * keys as positive integers. Anything else is dropped: an unknown key must
+	 * Merge caller overrides over the defaults, keeping only the known keys
+	 * as positive integers. Anything else is dropped: an unknown key must
 	 * not silently masquerade as policy.
 	 *
 	 * @param mixed $raw Raw budget-ish input.
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int}
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
 	 */
 	public static function sanitize( mixed $raw ): array {
 		$defaults = array(
 			self::MAX_STEPS      => 20,
 			self::MAX_TOOL_CALLS => 12,
 			self::MAX_TOKENS     => 60000,
+			self::MAX_QUESTIONS  => 5,
+			self::MAX_PLANS      => 3,
 		);
 
 		if ( ! is_array( $raw ) ) {
@@ -89,8 +98,8 @@ final class Budget {
 	 * cannot raise its own limits.
 	 *
 	 * @param mixed                                                    $requested Raw budget-ish input.
-	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int} $ceiling   Upper bound per key.
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int}
+	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int} $ceiling   Upper bound per key.
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
 	 */
 	public static function clamp( mixed $requested, array $ceiling ): array {
 		$ceiling = self::sanitize( $ceiling );

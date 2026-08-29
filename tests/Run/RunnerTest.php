@@ -11,8 +11,6 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Run;
 
 use PHPUnit\Framework\TestCase;
-use Specflux\SenroFlux\Approval\ApprovalBridge;
-use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Model\ModelTurn;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Runner;
@@ -205,7 +203,7 @@ final class RunnerTest extends TestCase {
 		$this->gateway->script[] = self::textTurn( 'Cache cleared.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
-		$result = $this->runner->tick( $run_id, $before, 'approve' );
+		$result = $this->runner->tick( $run_id, $before, array( 'action' => 'approve' ) );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
@@ -247,7 +245,7 @@ final class RunnerTest extends TestCase {
 		$this->gateway->script[] = self::textTurn( 'Understood — not touching it.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
-		$result = $this->runner->tick( $run_id, $before, 'reject' );
+		$result = $this->runner->tick( $run_id, $before, array( 'action' => 'reject' ) );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
@@ -286,47 +284,5 @@ final class RunnerTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'senroflux_forbidden', $result->get_error_code() );
-	}
-}
-
-/**
- * Scripted gateway: pops one prepared turn per generateTurn() call and counts
- * invocations.
- */
-final class FakeGateway implements ModelGatewayInterface {
-
-	/** @var list<ModelTurn> */
-	public array $script = array();
-
-	/** @var list<array{history_count:int}> */
-	public array $calls = array();
-
-	public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): ModelTurn|WP_Error {
-		$this->calls[] = array( 'history_count' => count( $history ) );
-
-		if ( array() === $this->script ) {
-			return new WP_Error( 'script_empty', 'FakeGateway has no scripted turns left.' );
-		}
-
-		return array_shift( $this->script );
-	}
-}
-
-/**
- * Recording bridge: stands in for Agent Safety's approvals API.
- */
-final class RecordingBridge extends ApprovalBridge {
-
-	/** @var array<string,bool> */
-	public array $approvals = array();
-
-	public function approve( string $approval_id, int $user_id ): bool {
-		$this->approvals[ $approval_id ] = true;
-
-		return true;
-	}
-
-	public function isAvailable(): bool {
-		return true;
 	}
 }

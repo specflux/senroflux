@@ -25,12 +25,15 @@ use WordPress\AiClient\Tools\DTO\FunctionResponse;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Implements the S4 tick protocol:
+ * Implements the S4 tick protocol (as amended by 0.2 S5):
  *
  *  1. Ownership + optimistic lock (echoed step_count) + 30s lock transient.
  *  2. Terminal runs return their state unchanged.
- *  3. Awaiting-approval runs require approve/reject; the parked call is
- *     re-run (grant exists by reference) or answered rejected_by_user.
+ *  3. Parked runs (0.2: awaiting_approval | awaiting_user | awaiting_plan)
+ *     resume only with a park resolution whose SHAPE matches the park kind
+ *     (S5) — anything else is `resume_mismatch`. The approval park re-runs
+ *     the parked call (grant exists by reference) or answers
+ *     rejected_by_user; the question and plan parks resolve through S6/S7.
  *  4. History rehydrates from steps; ONE model call via the gateway.
  *  5. Each functionCall runs through ToolExecutor in order; approval_required
  *     parks mid-message; no calls means completed.
@@ -61,12 +64,20 @@ final class Runner {
 	 *
 	 * @param int         $run_id              Run id.
 	 * @param int         $expected_step_count Caller's last-known step_count.
-	 * @param string|null $approval_action     'approve'|'reject' when parked.
+	 * @param array<string,mixed>|null $resume Park resolution (S5): its shape
+	 *                                         must match the run's park kind,
+	 *                                         else `resume_mismatch`. Null on
+	 *                                         a plain driving tick. The 0.1
+	 *                                         `?string $approval_action`
+	 *                                         parameter is REMOVED — strings
+	 *                                         are type-rejected here and the
+	 *                                         HTTP surfaces refuse the old
+	 *                                         field outright.
 	 * @return array<string,mixed>|WP_Error RunState or WP_Error codes:
 	 *   senroflux_not_found | senroflux_forbidden | senroflux_conflict |
-	 *   senroflux_ungoverned | senroflux_action_required.
+	 *   senroflux_ungoverned | resume_mismatch.
 	 */
-	public function tick( int $run_id, int $expected_step_count, ?string $approval_action = null ): array|WP_Error {
+	public function tick( int $run_id, int $expected_step_count, ?array $resume = null ): array|WP_Error {
 		$run = $this->store->getRun( $run_id );
 		if ( null === $run ) {
 			return new WP_Error( 'senroflux_not_found', __( 'Run not found.', 'senroflux' ), array( 'status' => 404 ) );
@@ -99,19 +110,61 @@ final class Runner {
 
 			$new_steps = array();
 
-			if ( RunStatus::AwaitingApproval === $run->status ) {
-				if ( null !== $approval_action && ! in_array( $approval_action, array( 'approve', 'reject' ), true ) ) {
-					return new WP_Error(
-						'senroflux_action_required',
-						__( 'Unknown approval action.', 'senroflux' ),
-						array( 'status' => 400 )
-					);
-				}
+			// S5: a park resolution only makes sense on a parked run — a
+			// pending/running/terminal run carrying one is a protocol error,
+			// never a hint to be ignored.
+			if ( null !== $resume && ! $run->status->isParked() ) {
+				return new WP_Error(
+					'resume_mismatch',
+					__( 'This run is not waiting on a human; it accepts no park resolution.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
 
-				$resume = $this->resumeFromApproval( $run, (string) $approval_action, $new_steps );
+			if ( $run->status->isParked() ) {
 				if ( null !== $resume ) {
-					// Still parked: return without touching the loop.
-					return $this->state( $resume['run'], $new_steps, $resume['ui'] );
+					// S5: the resolution's shape must match the park kind.
+					$check = Resume::check( $run->status, $resume );
+					if ( is_wp_error( $check ) ) {
+						return $check;
+					}
+
+					switch ( $run->status ) {
+						case RunStatus::AwaitingApproval:
+							$resume_park = $this->resumeFromApproval( $run, (string) $resume['action'], $new_steps );
+							if ( null !== $resume_park ) {
+								// Still parked: return without touching the loop.
+								return $this->state( $resume_park['run'], $new_steps, $resume_park['ui'] );
+							}
+							break;
+						case RunStatus::AwaitingUser:
+							// S6 fills this in (stage 3); no run can reach the
+							// question park before then.
+							return new WP_Error(
+								'senroflux_park_unimplemented',
+								__( 'Question parks resolve from stage 3 (S6) onward.', 'senroflux' ),
+								array( 'status' => 400 )
+							);
+						case RunStatus::AwaitingPlan:
+							// S7 fills this in (stage 4); no run can reach the
+							// plan park before then.
+							return new WP_Error(
+								'senroflux_park_unimplemented',
+								__( 'Plan parks resolve from stage 4 (S7) onward.', 'senroflux' ),
+								array( 'status' => 400 )
+							);
+					}
+				} elseif ( RunStatus::AwaitingApproval === $run->status ) {
+					// No decision yet: re-surface the approval card so a
+					// polling consumer can render it again.
+					$resume_park = $this->resumeFromApproval( $run, '', $new_steps );
+					if ( null !== $resume_park ) {
+						return $this->state( $resume_park['run'], $new_steps, $resume_park['ui'] );
+					}
+				} else {
+					// AwaitingUser/AwaitingPlan with no resolution: nothing to
+					// re-surface until the S6/S7 cards exist.
+					return $this->state( $this->refresh( $run ), array(), array() );
 				}
 			} elseif ( array() === $this->store->getSteps( $run_id ) ) {
 				// Fresh run: seed the goal as the first user step.
