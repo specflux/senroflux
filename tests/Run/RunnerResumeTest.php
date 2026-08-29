@@ -164,17 +164,20 @@ final class RunnerResumeTest extends TestCase {
 	}
 
 	/**
-	 * The shape-correct diagonals for the two parks whose HANDLERS land in
-	 * stages 3/4: accepted as matching (NOT a mismatch), held by an explicit
-	 * placeholder until S6/S7 fill the behaviour in.
+	 * Shape-correct diagonals for parks whose handlers may not exist yet:
+	 * a question park now RESOLVES (S6, stage 3) — a skip on a question park
+	 * whose context is missing fails explicitly rather than looping; the plan
+	 * diagonal stays placeholder until S7 (stage 4) fills it in.
 	 */
 	public function test_shape_correct_question_and_plan_resolves_are_recognized(): void {
 		$run_id = $this->createRun();
 		$this->forceStatus( $run_id, RunStatus::AwaitingUser );
 
+		// S6 (stage 3): a skip on a question park with NO parked question is a
+		// corrupted-state failure — never a mismatch, never a silent no-op.
 		$result = $this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'skip' => true ) );
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertNotSame( 'resume_mismatch', $result->get_error_code(), 'a skip on a question park is not a mismatch' );
+		$this->assertIsArray( $result, 'the tick returns the (failed) state' );
+		$this->assertSame( 'failed', $result['run']['status'], 'missing question context fails the run explicitly' );
 
 		$this->forceStatus( $run_id, RunStatus::AwaitingPlan );
 		$result = $this->runner->tick(

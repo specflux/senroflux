@@ -110,6 +110,17 @@ final class ToolRegistry {
 	}
 
 	/**
+	 * A copy of this registry with extra (harness) declarations merged in.
+	 * Harness tools are not abilities, so they only touch the DECLARATION
+	 * surface — never `names()`, so `admits()` stays ability-only.
+	 *
+	 * @param array<string, FunctionDeclaration|array<string,mixed>> $extra Declarations keyed by tool name.
+	 */
+	public function withDeclarations( array $extra ): self {
+		return new self( $this->names, array_merge( $this->declarations, $extra ) );
+	}
+
+	/**
 	 * Hidden via meta.senroflux.hidden === true?
 	 *
 	 * @param object $ability Ability-like object.

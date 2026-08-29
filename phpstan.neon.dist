@@ -55,6 +55,7 @@ parameters:
             # Message::fromArray() documents a narrow PHPStan array-shape
             # generic; Runner stores exactly toArray() output (S4), so the
             # shape holds BY CONSTRUCTION (same as Step::toMessage()).
+            # Two call sites: unconsumedCalls() and latestAskUserCallId().
             message: '#^Parameter \#1 \$array of static method WordPress\\AiClient\\Messages\\DTO\\Message::fromArray\(\) expects array\{role: string, parts: array.*given\.$#'
             path: src/Run/*
-            count: 1
+            count: 2

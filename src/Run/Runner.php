@@ -13,6 +13,7 @@ use Specflux\SenroFlux\Approval\ApprovalBridge;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\HarnessTools;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\ToolOutcome;
 use Specflux\SenroFlux\Tools\ToolRegistry;
@@ -140,13 +141,17 @@ final class Runner {
 							}
 							break;
 						case RunStatus::AwaitingUser:
-							// S6 fills this in (stage 3); no run can reach the
-							// question park before then.
-							return new WP_Error(
-								'senroflux_park_unimplemented',
-								__( 'Question parks resolve from stage 3 (S6) onward.', 'senroflux' ),
-								array( 'status' => 400 )
-							);
+							// S6: an answer/skip re-enters the loop (returns
+							// null); a 400 (choice_not_offered) or a
+							// still-parked re-surface returns up.
+							$from_question = $this->resumeFromQuestion( $run, $resume, $new_steps );
+							if ( is_wp_error( $from_question ) ) {
+								return $from_question;
+							}
+							if ( null !== $from_question ) {
+								return $this->state( $from_question['run'], $new_steps, $from_question['ui'] );
+							}
+							break;
 						case RunStatus::AwaitingPlan:
 							// S7 fills this in (stage 4); no run can reach the
 							// plan park before then.
@@ -163,9 +168,18 @@ final class Runner {
 					if ( null !== $resume_park ) {
 						return $this->state( $resume_park['run'], $new_steps, $resume_park['ui'] );
 					}
+				} elseif ( RunStatus::AwaitingUser === $run->status ) {
+					// No answer yet: re-surface the question card (S6).
+					$from_question = $this->resumeFromQuestion( $run, null, $new_steps );
+					if ( is_wp_error( $from_question ) ) {
+						return $from_question;
+					}
+					if ( null !== $from_question ) {
+						return $this->state( $from_question['run'], $new_steps, $from_question['ui'] );
+					}
 				} else {
-					// AwaitingUser/AwaitingPlan with no resolution: nothing to
-					// re-surface until the S6/S7 cards exist.
+					// AwaitingPlan with no resolution: nothing to re-surface
+					// until the S7 plan card exists.
 					return $this->state( $this->refresh( $run ), array(), array() );
 				}
 			} elseif ( array() === $this->store->getSteps( $run_id ) ) {
@@ -287,6 +301,14 @@ final class Runner {
 	private function driveLoop( Run $run, array &$new_steps ): array {
 		$registry = ToolRegistry::forRun( $run );
 
+		// S6: the harness tool is in EVERY run's declarations while a question
+		// remains, withdrawn at zero. It is not an ability, so it is merged
+		// onto the permission-agnostic declaration surface only.
+		$harness_declarations = HarnessTools::declarations( $this->remainingQuestions( $run ) );
+		if ( array() !== $harness_declarations ) {
+			$registry = $registry->withDeclarations( $harness_declarations );
+		}
+
 		// S8: the whole system instruction is rendered per tick, audited at
 		// seq 0, and a skills ceiling breach fails the run (never truncation).
 		$instruction = $this->instructionFor( $run, $new_steps );
@@ -302,6 +324,13 @@ final class Runner {
 		$tool_calls_used = 0;
 		foreach ( $this->store->getSteps( $run->id ) as $existing_step ) {
 			if ( StepKind::ToolResult === $existing_step->kind ) {
+				// S6: a harness ANSWER (the ok tool_result to a parked ask) is
+				// NOT a tool-call consumer — the ask-user round-trip is
+				// metered by max_questions, not max_tool_calls. An
+				// invalid/exhausted ask-user is status 'error' and DOES count.
+				if ( HarnessTools::toolName() === $existing_step->toolName && 'ok' === $existing_step->status ) {
+					continue;
+				}
 				++$tool_calls_used;
 			}
 		}
@@ -372,6 +401,20 @@ final class Runner {
 					);
 				}
 				$remaining = array_slice( $pending_calls, $index + 1 );
+
+				// Harness tools never reach ToolExecutor, Agent Safety, or the
+				// ability allow-list. A valid ask-user parks (ends the tick);
+				// an invalid/exhausted one becomes a tool_result and counts as
+				// a tool call so the loop keeps running.
+				if ( HarnessTools::functionName() === $call['name'] ) {
+					$harness = $this->runAskUser( $run, $call, $new_steps );
+					if ( isset( $harness['park'] ) ) {
+						return $harness['park']; // Park ends the tick.
+					}
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
 
 				$outcome = $this->executeCall( $registry, $call );
 				++$tool_calls_used;
@@ -997,5 +1040,363 @@ final class Runner {
 		}
 
 		return 'wpab__' . str_replace( '/', '__', $ability_name );
+	}
+
+	// ------------------------------------------------------------------
+	// S6: ask-the-user park
+	// ------------------------------------------------------------------
+
+	/**
+	 * remaining_questions = max_questions − count(question steps), floored.
+	 */
+	private function remainingQuestions( Run $run ): int {
+		$used = 0;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Question === $step->kind ) {
+				++$used;
+			}
+		}
+
+		return HarnessTools::remaining( (int) ( $run->budget['max_questions'] ?? 0 ), $used );
+	}
+
+	/**
+	 * Handle a `senroflux__ask-user` call. Returns array{ 'park': array{run,ui} }
+	 * when it parked (ends the tick); otherwise it has appended an error
+	 * tool_result (invalid payload / questions exhausted) and returns array().
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param list<array<string,mixed>>               $new_steps Accumulator.
+	 * @return array<string,mixed>
+	 */
+	private function runAskUser( Run $run, array $call, array &$new_steps ): array {
+		if ( 0 >= $this->remainingQuestions( $run ) ) {
+			// Withdrawn, yet still called: fail closed, count as a tool call.
+			$new_steps[] = $this->appendAskUserError( $run->id, $call, HarnessTools::ERROR_QUESTIONS_EXHAUSTED );
+
+			return array();
+		}
+
+		$payload = HarnessTools::validateAskUser( $call['args'] ?? null );
+		if ( is_wp_error( $payload ) ) {
+			$new_steps[] = $this->appendAskUserError( $run->id, $call, HarnessTools::ERROR_INVALID_QUESTION );
+
+			return array();
+		}
+
+		// Valid: park. message_json holds the VALIDATED payload (S4); the
+		// harness tool name goes in tool_name (S4). This step is NOT history.
+		$new_steps[] = $this->appendQuestionStep( $run->id, $call, $payload );
+		$this->store->updateRun( $run->id, array( 'status' => RunStatus::AwaitingUser->value ) );
+
+		// S6: ui.question is the only park key on a question park.
+		return array(
+			'park' => array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(
+					'question' => $this->questionUi(
+						$payload,
+						$this->latestQuestionStepId( $run->id ),
+						$this->remainingQuestions( $run ), // includes this parked question
+						$run->id
+					),
+				),
+			),
+		);
+	}
+
+	/**
+	 * Resume an awaiting_user run with an answer/skip (or re-surface it).
+	 *
+	 * @param Run                       $run       Snapshot.
+	 * @param array<string,mixed>|null  $resume    Park resolution (null = re-surface).
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 * @return array{run:Run,ui:array<string,mixed>}|WP_Error|null
+	 *         array = still parked (re-surfaced); WP_Error = 400; null = loop may proceed.
+	 */
+	private function resumeFromQuestion( Run $run, ?array $resume, array &$new_steps ): array|WP_Error|null {
+		$context = $this->latestQuestionContext( $run->id );
+		if ( null === $context ) {
+			// Corrupted state: fail explicitly rather than looping ungoverned.
+			$this->failError( $run, 'missing_question_context', 'No parked question for an awaiting_user run.' );
+
+			return array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(),
+			);
+		}
+
+		if ( null === $resume || array() === $resume ) {
+			// No decision yet: remain parked, re-surfacing the question card.
+			return array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(
+					'question' => $this->questionUi(
+						$context['payload'],
+						$context['step_id'],
+						$this->remainingQuestions( $run ),
+						$run->id
+					),
+				),
+			);
+		}
+
+		$payload = $context['payload'];
+		$call_id = (string) ( $context['call_id'] ?? '' );
+
+		if ( array_key_exists( 'skip', $resume ) ) {
+			$this->appendAnsweredBy( $run, $new_steps );
+			$new_steps[] = $this->appendAskUserResult( $run->id, $call_id, array( 'skipped' => true ) );
+			$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
+			return null;
+		}
+
+		$answer = $resume['answer'];
+		$text   = is_string( $answer['text'] ?? null ) ? $answer['text'] : '';
+		$choice = is_string( $answer['choice'] ?? null ) ? $answer['choice'] : '';
+
+		// S6: a choice not in the stored choices is a 400. Resume::check cannot
+		// see the question's choices, so the check lives here.
+		if ( '' !== $choice && ! in_array( $choice, (array) ( $payload['choices'] ?? array() ), true ) ) {
+			return new WP_Error(
+				'choice_not_offered',
+				__( 'That answer is not one of the offered choices.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$this->appendAnsweredBy( $run, $new_steps );
+		$new_steps[] = $this->appendAskUserResult(
+			$run->id,
+			$call_id,
+			array(
+				'answer' => $text,
+				'choice' => $choice,
+			)
+		);
+		$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
+		return null;
+	}
+
+	/**
+	 * S6 acting-user rule: when the human answering is NOT the run's owner
+	 * (a delegated admin), the run records who answered before the answer
+	 * itself. A no-op when the owner answers their own run.
+	 *
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 */
+	private function appendAnsweredBy( Run $run, array &$new_steps ): void {
+		$actor = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+		if ( $actor === $run->userId ) {
+			return;
+		}
+
+		$payload = array(
+			'note'    => 'answered_by',
+			'user_id' => $actor,
+		);
+
+		$new_steps[] = array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Append a question park step: message_json = the VALIDATED payload.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call    Parked call.
+	 * @param array<string,mixed>                     $payload Validated payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendQuestionStep( int $run_id, array $call, array $payload ): array {
+		unset( $call );
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Question,
+			$payload,
+			HarnessTools::toolName(),
+			null,
+			'parked'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::Question->value,
+			'message'     => $payload,
+			'tool_name'   => HarnessTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'parked',
+		);
+	}
+
+	/**
+	 * Tool_result for the ask-user answer (or skip). The FunctionResponse
+	 * NAME is the harness function name, NOT `functionNameFor()` — that would
+	 * map `senroflux/ask-user` to `wpab__senroflux__ask-user` and desync from
+	 * the call id the model used.
+	 *
+	 * @param string              $call_id  The originating ask-user id (for crash-resume).
+	 * @param array<string,mixed> $response FunctionResponse payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendAskUserResult( int $run_id, string $call_id, array $response ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call_id ? $call_id : null,
+							HarnessTools::functionName(),
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			HarnessTools::toolName(),
+			null,
+			'ok'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => HarnessTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Tool_result error to the model for an invalid/exhausted ask-user call.
+	 * Counts as a tool call (the caller bumps the counter).
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code invalid_question | questions_exhausted.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendAskUserError( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							HarnessTools::functionName(),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			HarnessTools::toolName(),
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => HarnessTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'error',
+		);
+	}
+
+	/**
+	 * The S6 question card payload.
+	 *
+	 * @param array<string,mixed> $payload   Validated payload.
+	 * @param int                 $step_id   The question step's seq.
+	 * @param int                 $remaining Questions left (minus this parked one).
+	 * @param int                 $run_id    For the run-detail review URL.
+	 * @return array<string,mixed>
+	 */
+	private function questionUi( array $payload, int $step_id, int $remaining, int $run_id ): array {
+		return array(
+			'step_id'     => $step_id,
+			'text'        => (string) ( $payload['text'] ?? '' ),
+			'choices'     => (array) ( $payload['choices'] ?? array() ),
+			'allow_other' => (bool) ( $payload['allow_other'] ?? true ),
+			'default'     => (string) ( $payload['default'] ?? '' ),
+			'rationale'   => (string) ( $payload['rationale'] ?? '' ),
+			'remaining'   => $remaining,
+			'review_url'  => function_exists( 'admin_url' )
+				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
+				: '',
+		);
+	}
+
+	/**
+	 * Latest parked question context (validated payload + step seq + the
+	 * originating ask-user call id).
+	 *
+	 * @return array{payload:array<string,mixed>,step_id:int,call_id:?string}|null
+	 */
+	private function latestQuestionContext( int $run_id ): ?array {
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Question === $step->kind && null !== $step->messageArray ) {
+				return array(
+					'payload' => $step->messageArray,
+					'step_id' => (int) $step->seq,
+					'call_id' => $this->latestAskUserCallId( $run_id ),
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The ask-user call id of the newest model step (the parked message).
+	 * The question step's message_json stores only the validated payload (S4),
+	 * so the call id is recovered from the model turn for the FunctionResponse.
+	 */
+	private function latestAskUserCallId( int $run_id ): ?string {
+		// Newest model step first — that is the parked message. (Steps are
+		// ordered by seq ASC; the park's model step carries the ask-user call.)
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			foreach ( $this->extractCalls( Message::fromArray( $step->messageArray ) ) as $call ) {
+				if ( HarnessTools::functionName() === $call['name'] ) {
+					return (string) $call['id'];
+				}
+			}
+			break; // Only the newest model step is the parked message.
+		}
+
+		return null;
+	}
+
+	/** Seq of the newest question step, or 0. */
+	private function latestQuestionStepId( int $run_id ): int {
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Question === $step->kind ) {
+				return (int) $step->seq;
+			}
+		}
+
+		return 0;
 	}
 }
