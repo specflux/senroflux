@@ -143,6 +143,13 @@ abstract class Pack {
 	 * @return array<string,mixed>|null
 	 */
 	private function coreSchema( string $core_id ): ?array {
+		// Probe with wp_has_ability() (a silent registry read): probing with
+		// wp_get_ability() on an unregistered core ability raises a
+		// _doing_it_wrong notice on every check — noisy for a step-aside probe.
+		if ( ! function_exists( 'wp_has_ability' ) || ! wp_has_ability( $core_id ) ) {
+			return null;
+		}
+
 		if ( ! function_exists( 'wp_get_ability' ) ) {
 			return null;
 		}

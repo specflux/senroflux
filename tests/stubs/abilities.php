@@ -79,6 +79,18 @@ if ( ! function_exists( 'wp_get_ability' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_has_ability' ) ) {
+	/**
+	 * Fixture-backed probe — mirrors wp_get_ability()'s store so Pack's
+	 * silent step-aside probe stays in sync with the unit fixtures.
+	 *
+	 * @param string $name Ability name.
+	 */
+	function wp_has_ability( string $name ): bool {
+		return isset( $GLOBALS['senroflux_test_abilities'][ $name ] );
+	}
+}
+
 if ( ! function_exists( 'wp_get_abilities' ) ) {
 	/**
 	 * Fixture-backed list.
