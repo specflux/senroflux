@@ -16,19 +16,20 @@ First consumer: [Specflux Marketing Analytics Chat](https://wordpress.org/plugin
 
 ## Consumers
 
-Vendoring (the Agent Safety model — one codebase, two channels):
+SenroFlux ships as a WordPress plugin only — there is no composer-vendorable
+library channel. Consumers integrate by feature detection:
 
-```sh
-composer require specflux/senroflux
+```php
+if ( function_exists( 'senroflux' ) && senroflux()->available() ) {
+    // multi-step runs are on
+}
 ```
 
-The consumer contract is non-negotiable on one point: **vendoring provides
-classes, never ungoverned execution**. A vendored copy still requires the
-Agent Safety plugin active on the site; without its gate every entry point
-returns `senroflux_ungoverned`. Every vendoring consumer must also ship
-[Jetpack Autoloader](https://github.com/Automattic/jetpack-autoloader) so the
-highest-version copy wins across plugins (same arbitration rule Agent Safety
-and mcp-adapter use).
+The plugin deliberately does not load `vendor/autoload.php` at runtime and ships
+no Jetpack Autoloader manifests, so nothing in its dev dependencies can shadow
+WordPress core's bundled AI Client SDK on a site where another plugin boots the
+Jetpack Autoloader. Runs are governed by the Agent Safety plugin, which must be
+active; without its gate every entry point returns `senroflux_ungoverned`.
 
 ## What a run is
 

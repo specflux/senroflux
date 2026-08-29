@@ -18,10 +18,6 @@ jobs:
           coverage: none
 
       - name: Install dependencies
-        env:
-          # Jetpack Autoloader manifests need a concrete root version even on
-          # a branch checkout (01-version-arbitration.md recommendation).
-          COMPOSER_ROOT_VERSION: 0.1.0
         run: composer install --prefer-dist --no-interaction
 
       - name: PHPCS (WordPress-Core + WordPress-Extra)

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       SenroFlux
  * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, Agent Safety as a hard-required checkpoint.
- * Version:           0.1.0
+ * Version:           0.2.0-dev
  * Requires at least: 7.0
  * Requires PHP:      8.1
  * License:           GPL-2.0-or-later
