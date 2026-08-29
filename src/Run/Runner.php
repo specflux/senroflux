@@ -57,6 +57,8 @@ final class Runner {
 		private readonly ModelGatewayInterface $gateway,
 		private readonly ApprovalBridge $bridge,
 		private readonly mixed $post_lookup = null,
+		/** @var callable(Run):(array<string,int>|null)|null Verb-map resolver (S9): a pack maps verb => tier; null return = site-wide filter seam. */
+		private readonly mixed $verb_map_resolver = null,
 	) {
 	}
 
@@ -925,7 +927,12 @@ final class Runner {
 			remaining_tool_calls: max( 0, $run->budget['max_tool_calls'] - $tool_used ),
 			remaining_tokens: max( 0, $run->budget['max_tokens'] - $run->tokensIn - $run->tokensOut ),
 			// S7: remind the model after a refused write so it fixes course.
-			last_refusal: $this->lastRefusalCode( $run->id )
+			last_refusal: $this->lastRefusalCode( $run->id ),
+			// S15: the conversation language is fixed at start for the run's
+			// life; a different admin answering a park never switches it.
+			conversation_language: ( null !== $run->conversationLocale && '' !== $run->conversationLocale )
+				? Tail::languageName( $run->conversationLocale )
+				: null,
 		);
 	}
 
@@ -1845,7 +1852,10 @@ final class Runner {
 			return null;
 		}
 
-		$tier = VerbTier::tierFor( $verb, null, $run->id );
+		// S9: a pack resolves the verb map for its own runs; direct-allow runs
+		// fall back to the site-wide senroflux_verb_map filter (stage 4 seam).
+		$pack_map = is_callable( $this->verb_map_resolver ) ? ( $this->verb_map_resolver )( $run ) : null;
+		$tier     = VerbTier::tierFor( $verb, is_array( $pack_map ) ? $pack_map : null, $run->id );
 
 		if ( $tier < VerbTier::TIER_1 ) {
 			return null; // Tier-0 reads are free before and inside the plan.

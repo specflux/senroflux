@@ -27,26 +27,38 @@ final class WpdbRunStore implements RunStore {
 	}
 
 	/** {@inheritDoc} */
-	public function createRun( int $user_id, string $consumer, string $goal, array $allow, array $budget ): int {
+	public function createRun(
+		int $user_id,
+		string $consumer,
+		string $goal,
+		array $allow,
+		array $budget,
+		?string $pack = null,
+		?string $conversation_locale = null,
+		?string $content_locale = null
+	): int {
 		$table = Schema::runsTable( $this->db );
 		$now   = gmdate( 'Y-m-d H:i:s' );
 
 		$this->db->insert(
 			$table,
 			array(
-				'user_id'     => $user_id,
-				'consumer'    => $consumer,
-				'goal'        => $goal,
-				'status'      => RunStatus::Pending->value,
-				'allow_json'  => (string) wp_json_encode( array_values( $allow ) ),
-				'budget_json' => (string) wp_json_encode( Budget::sanitize( $budget ) ),
-				'step_count'  => 0,
-				'tokens_in'   => 0,
-				'tokens_out'  => 0,
-				'created_at'  => $now,
-				'updated_at'  => $now,
+				'user_id'             => $user_id,
+				'consumer'            => $consumer,
+				'goal'                => $goal,
+				'status'              => RunStatus::Pending->value,
+				'allow_json'          => (string) wp_json_encode( array_values( $allow ) ),
+				'budget_json'         => (string) wp_json_encode( Budget::sanitize( $budget ) ),
+				'step_count'          => 0,
+				'tokens_in'           => 0,
+				'tokens_out'          => 0,
+				'created_at'          => $now,
+				'updated_at'          => $now,
+				'pack'                => $pack,
+				'conversation_locale' => $conversation_locale,
+				'content_locale'      => $content_locale,
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
 
 		return (int) $this->db->insert_id;

@@ -78,4 +78,29 @@ final class Tail {
 
 		return implode( "\n", $lines );
 	}
+
+	/**
+	 * The human-readable language name for a locale (S15). Best-effort: an
+	 * unknown locale renders as-is. Filterable via `senroflux_language_name`.
+	composer.json  * @param string $locale Locale code, e.g. 'en_US'.
+	 */
+	public static function languageName( string $locale ): ?string {
+		$names = array(
+			'en_US' => 'English (US)',
+			'en_GB' => 'English (UK)',
+			'ms_MY' => 'Malay',
+			'zh_CN' => 'Chinese (Simplified)',
+			'zh_TW' => 'Chinese (Traditional)',
+		);
+
+		/**
+		 * Filters the locale => language-name map for the tail line.
+		composer.json  * @param array<string,string> $names Known locale names.
+		 */
+		$names = apply_filters( 'senroflux_language_name', $names );
+
+		$name = is_array( $names ) ? ( $names[ $locale ] ?? $locale ) : $locale;
+
+		return ( is_string( $name ) && '' !== $name ) ? $name : null;
+	}
 }

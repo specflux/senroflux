@@ -143,19 +143,60 @@ final class Plugin {
 	 * Create a run for the CURRENT user; returns its initial RunState
 	 * (status pending). The consumer drives it with tick().
 	 *
-	 * @param string            $consumer Consumer identifier (e.g. 'specflux-mac').
-	 * @param string            $goal     Goal text (becomes the first user step).
-	 * @param list<string>      $allow    Ability allow-list: exact ids or globs.
-	 * @param array<string,int> $budget   Optional per-run overrides.
+	 * @param string            $consumer       Consumer identifier (e.g. 'specflux-mac').
+	 * @param string            $goal           Goal text (becomes the first user step).
+	 * @param list<string>      $allow          Ability allow-list: exact ids or globs.
+	 *                                          IGNORED when $pack is given (S9).
+	 * @param array<string,int> $budget         Optional per-run overrides.
+	 * @param string|null       $pack           Pack name (S9); derives the allow-list.
+	 * @param list<string>|null $skills_disable Non-required skill ids to drop (S8).
 	 * @return array<string,mixed>|WP_Error RunState or senroflux_ungoverned /
-	 *                                      senroflux_bad_request / senroflux_no_database.
+	 *                                      senroflux_bad_request / pack_unknown /
+	 *                                      pack_unbound / skills_too_large.
 	 */
-	public function start( string $consumer, string $goal, array $allow = array(), array $budget = array() ): array|WP_Error {
+	public function start(
+		string $consumer,
+		string $goal,
+		array $allow = array(),
+		array $budget = array(),
+		?string $pack = null,
+		?array $skills_disable = null
+	): array|WP_Error {
 		if ( ! $this->ready() ) {
 			return $this->ungoverned_error();
 		}
 
-		if ( '' === trim( $consumer ) || '' === trim( $goal ) || array() === $allow ) {
+		$user_id      = (int) get_current_user_id();
+		$caller_allow = $allow; // Captured BEFORE the pack derives it (S9).
+
+		// S9: pack resolution first — an unknown pack is a 400 before any DB
+		// write. A caller-supplied $allow is IGNORED when a pack is given: the
+		// pack is the single source of the allow-list (the direct-allow path
+		// keeps working with $pack = null).
+		$pack_obj = null;
+		if ( null !== $pack ) {
+			$pack_obj = $this->packRegistry()->get( $pack );
+			if ( null === $pack_obj ) {
+				return new WP_Error(
+					'pack_unknown',
+					__( 'Unknown pack.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
+			$allow = $pack_obj->allowList();
+
+			// S13: preflight — skills ceiling plus Capability-Packs binding
+			// (the binding check itself is completed with the pages pack).
+			$preflight = $pack_obj->preflight( $user_id );
+			if ( is_wp_error( $preflight ) ) {
+				// Refused: skills_too_large (400) or pack_unbound (400).
+				return $preflight;
+			}
+		}
+
+		// The "non-empty allow" guard applies only to the DIRECT path: with a
+		// pack the allow is derived, so it is never empty here.
+		if ( '' === trim( $consumer ) || '' === trim( $goal ) || ( array() === $allow && null === $pack_obj ) ) {
 			return new WP_Error(
 				'senroflux_bad_request',
 				__( 'A run needs a consumer, a goal, and a non-empty allow-list.', 'senroflux' ),
@@ -163,22 +204,47 @@ final class Plugin {
 			);
 		}
 
-		// S8: the skills ceiling is a start-time gate — a run whose
-		// instruction could never render is refused, never truncated.
-		$skills  = SkillSet::collect( $consumer, $goal );
+		// S8: collect skills WITH the pack's skills and the disable list; the
+		// ceiling is a start-time gate — refused, never truncated.
+		$skills  = SkillSet::collect( $consumer, $goal, null !== $pack_obj ? $pack_obj->skills() : null, $skills_disable );
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
 			return $ceiling;
 		}
 
+		// S15: capture the two best-effort locales at start so a DIFFERENT
+		// admin answering a park never switches them.
+		$conversation_locale = function_exists( 'get_user_locale' ) ? get_user_locale( $user_id ) : '';
+		if ( '' === $conversation_locale && function_exists( 'get_locale' ) ) {
+			$conversation_locale = get_locale();
+		}
+		$content_locale = function_exists( 'get_locale' ) ? get_locale() : '';
+
 		$store  = $this->runner()->store();
 		$run_id = $store->createRun(
-			(int) get_current_user_id(),
+			$user_id,
 			$consumer,
 			$goal,
 			$allow,
-			Budget::sanitize( $budget )
+			Budget::sanitize( $budget ),
+			$pack,
+			$conversation_locale,
+			$content_locale
 		);
+
+		// S9: when a pack drove the allow-list, record that a caller-supplied
+		// $allow was ignored (a seq-1 system note; the first real step lands
+		// after it).
+		if ( null !== $pack_obj && array() !== $caller_allow ) {
+			$store->appendSystemNote(
+				$run_id,
+				array(
+					'note'          => 'allow_from_pack',
+					'pack'          => $pack,
+					'ignored_allow' => array_values( $caller_allow ),
+				)
+			);
+		}
 
 		// S8: snapshot the skill set at start (skills_json) — the audit trail
 		// of what the instruction was assembled from.
@@ -198,6 +264,14 @@ final class Plugin {
 		);
 
 		return $this->get( $run_id );
+	}
+
+	/**
+	 * The request-scoped pack registry (S9). Boots from the `senroflux_packs`
+	 * filter; the pages pack registers through it (stage 8).
+	 */
+	private function packRegistry(): \Specflux\SenroFlux\Packs\PackRegistry {
+		return \Specflux\SenroFlux\Packs\PackRegistry::fromFilters();
 	}
 
 	/**
@@ -398,7 +472,20 @@ final class Plugin {
 			new WpdbRunStore( $wpdb ),
 			new ToolExecutor(),
 			$gateway,
-			new ApprovalBridge()
+			new ApprovalBridge(),
+			null,
+			// S9: a run started with a pack is fenced/annotated by the PACK's
+			// verb map; direct-allow runs keep the site-wide filter seam. The
+			// composition root is the one place that may reference Packs.
+			static function ( \Specflux\SenroFlux\Run\Run $run ): ?array {
+				if ( null === $run->pack || '' === $run->pack ) {
+					return null;
+				}
+
+				$pack = \Specflux\SenroFlux\Packs\PackRegistry::fromFilters()->get( $run->pack );
+
+				return null !== $pack ? $pack->verbMap() : null;
+			}
 		);
 
 		return $this->runner;

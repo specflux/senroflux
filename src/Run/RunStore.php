@@ -28,7 +28,16 @@ interface RunStore {
 	 * @param list<string>       $allow    Ability allow-list.
 	 * @param array<string,int>  $budget   Sanitized budget.
 	 */
-	public function createRun( int $user_id, string $consumer, string $goal, array $allow, array $budget ): int;
+	public function createRun(
+		int $user_id,
+		string $consumer,
+		string $goal,
+		array $allow,
+		array $budget,
+		?string $pack = null,
+		?string $conversation_locale = null,
+		?string $content_locale = null
+	): int;
 
 	/**
 	 * One run, or null.
