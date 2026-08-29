@@ -45,12 +45,26 @@ final class SkillsAuditTest extends TestCase {
 		$GLOBALS['senroflux_test_current_user_id'] = 1;
 		$GLOBALS['senroflux_test_transients']      = array();
 		$GLOBALS['senroflux_test_abilities']       = array();
+		// The S7 plan fence is separately tested in PlanParkTest. These tests
+		// exercise the approval/park mechanics with fence-free (tier-0) verbs.
+		add_filter(
+			'senroflux_verb_map',
+			static fn (): array => array(
+				'agsafe-smoke/spend'   => 0,
+				'agsafe-smoke/blocked' => 0,
+				'agsafe-smoke/read'    => 0,
+				'other-plugin/refund'  => 0,
+			),
+			10,
+			0
+		);
 	}
 
 	protected function tearDown(): void {
 		remove_all_filters( 'senroflux_run_skills' );
 		remove_all_filters( 'senroflux_system_instruction' );
 		remove_all_filters( 'senroflux_skills_max_tokens' );
+		remove_all_filters( 'senroflux_verb_map' );
 	}
 
 	private function createRun(): int {

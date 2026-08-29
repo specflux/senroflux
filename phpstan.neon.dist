@@ -58,4 +58,4 @@ parameters:
             # Two call sites: unconsumedCalls() and latestAskUserCallId().
             message: '#^Parameter \#1 \$array of static method WordPress\\AiClient\\Messages\\DTO\\Message::fromArray\(\) expects array\{role: string, parts: array.*given\.$#'
             path: src/Run/*
-            count: 2
+            count: 3

@@ -51,7 +51,25 @@ final class RunnerResumeTest extends TestCase {
 		$GLOBALS['senroflux_test_abilities']       = array(
 			'agsafe-smoke/blocked' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true ),
 		);
+		// The S7 plan fence is separately tested in PlanParkTest. These tests
+		// exercise the approval/park mechanics with fence-free (tier-0) verbs.
+		add_filter(
+			'senroflux_verb_map',
+			static fn (): array => array(
+				'agsafe-smoke/spend'   => 0,
+				'agsafe-smoke/blocked' => 0,
+				'agsafe-smoke/read'    => 0,
+				'other-plugin/refund'  => 0,
+			),
+			10,
+			0
+		);
 	}
+
+	protected function tearDown(): void {
+		remove_all_filters( 'senroflux_verb_map' );
+	}
+
 
 	private function createRun(): int {
 		return $this->store->createRun( 1, 'test-consumer', 'Clear the cache', array( 'agsafe-smoke/*' ), Budget::defaults() );
@@ -165,9 +183,9 @@ final class RunnerResumeTest extends TestCase {
 
 	/**
 	 * Shape-correct diagonals for parks whose handlers may not exist yet:
-	 * a question park now RESOLVES (S6, stage 3) — a skip on a question park
-	 * whose context is missing fails explicitly rather than looping; the plan
-	 * diagonal stays placeholder until S7 (stage 4) fills it in.
+	 * a question park now RESOLVES (S6, stage 3) and a plan park (S7, stage
+	 * 4) — a resolution on a park whose context is missing fails explicitly
+	 * rather than looping; neither is ever a silent no-op.
 	 */
 	public function test_shape_correct_question_and_plan_resolves_are_recognized(): void {
 		$run_id = $this->createRun();
@@ -190,8 +208,8 @@ final class RunnerResumeTest extends TestCase {
 				),
 			)
 		);
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertNotSame( 'resume_mismatch', $result->get_error_code(), 'a veto on a plan park is not a mismatch' );
+		$this->assertIsArray( $result, 'the tick returns the (failed) state' );
+		$this->assertSame( 'failed', $result['run']['status'], 'missing plan context fails the run explicitly' );
 	}
 
 	public function test_the_removed_approval_action_parameter_is_refused_at_the_http_seam(): void {

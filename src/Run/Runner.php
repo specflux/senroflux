@@ -14,9 +14,11 @@ use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\HarnessTools;
+use Specflux\SenroFlux\Tools\PlanTools;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\ToolOutcome;
 use Specflux\SenroFlux\Tools\ToolRegistry;
+use Specflux\SenroFlux\Tools\VerbTier;
 use WP_Error;
 use WordPress\AiClient\Messages\DTO\Message;
 use WordPress\AiClient\Messages\DTO\MessagePart;
@@ -153,13 +155,18 @@ final class Runner {
 							}
 							break;
 						case RunStatus::AwaitingPlan:
-							// S7 fills this in (stage 4); no run can reach the
-							// plan park before then.
-							return new WP_Error(
-								'senroflux_park_unimplemented',
-								__( 'Plan parks resolve from stage 4 (S7) onward.', 'senroflux' ),
-								array( 'status' => 400 )
-							);
+							// S7: accept / accept_preapprove / veto re-enter the
+							// loop (returns null); a 400 (preapproval_disabled) or
+							// a still-parked re-surface returns up. A veto at the
+							// plan ceiling returns the CANCELLED run directly.
+							$from_plan = $this->resumeFromPlan( $run, $resume, $new_steps );
+							if ( is_wp_error( $from_plan ) ) {
+								return $from_plan;
+							}
+							if ( null !== $from_plan ) {
+								return $this->state( $from_plan['run'], $new_steps, $from_plan['ui'] );
+							}
+							break;
 					}
 				} elseif ( RunStatus::AwaitingApproval === $run->status ) {
 					// No decision yet: re-surface the approval card so a
@@ -178,8 +185,14 @@ final class Runner {
 						return $this->state( $from_question['run'], $new_steps, $from_question['ui'] );
 					}
 				} else {
-					// AwaitingPlan with no resolution: nothing to re-surface
-					// until the S7 plan card exists.
+					// No decision yet (AwaitingPlan): re-surface the plan card (S7).
+					$from_plan = $this->resumeFromPlan( $run, null, $new_steps );
+					if ( is_wp_error( $from_plan ) ) {
+						return $from_plan;
+					}
+					if ( null !== $from_plan ) {
+						return $this->state( $from_plan['run'], $new_steps, $from_plan['ui'] );
+					}
 					return $this->state( $this->refresh( $run ), array(), array() );
 				}
 			} elseif ( array() === $this->store->getSteps( $run_id ) ) {
@@ -304,7 +317,11 @@ final class Runner {
 		// S6: the harness tool is in EVERY run's declarations while a question
 		// remains, withdrawn at zero. It is not an ability, so it is merged
 		// onto the permission-agnostic declaration surface only.
-		$harness_declarations = HarnessTools::declarations( $this->remainingQuestions( $run ) );
+		$harness_declarations = array_merge(
+			HarnessTools::declarations( $this->remainingQuestions( $run ) ),
+			// S7: propose-plan is declared while a plan remains, withdrawn at 0.
+			PlanTools::declarations( $this->remainingPlans( $run ) )
+		);
 		if ( array() !== $harness_declarations ) {
 			$registry = $registry->withDeclarations( $harness_declarations );
 		}
@@ -323,14 +340,11 @@ final class Runner {
 
 		$tool_calls_used = 0;
 		foreach ( $this->store->getSteps( $run->id ) as $existing_step ) {
-			if ( StepKind::ToolResult === $existing_step->kind ) {
-				// S6: a harness ANSWER (the ok tool_result to a parked ask) is
-				// NOT a tool-call consumer — the ask-user round-trip is
-				// metered by max_questions, not max_tool_calls. An
-				// invalid/exhausted ask-user is status 'error' and DOES count.
-				if ( HarnessTools::toolName() === $existing_step->toolName && 'ok' === $existing_step->status ) {
-					continue;
-				}
+			if ( StepKind::ToolResult === $existing_step->kind && $this->countsAsToolCall( $existing_step ) ) {
+				// S6/S7: a harness ANSWER (the ok tool_result to a parked
+				// ask-user or propose-plan) and an S7 fence refusal are NOT
+				// tool-call consumers. An invalid/exhausted call (status
+				// 'error', non-fence code) DOES count.
 				++$tool_calls_used;
 			}
 		}
@@ -413,6 +427,28 @@ final class Runner {
 					}
 					++$tool_calls_used;
 					$run = $this->refresh( $run );
+					continue;
+				}
+
+				// S7: same interception for the plan tool.
+				if ( PlanTools::functionName() === $call['name'] ) {
+					$harness = $this->runProposePlan( $run, $call, $new_steps );
+					if ( isset( $harness['park'] ) ) {
+						return $harness['park']; // Park ends the tick.
+					}
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
+
+				// S7 plan fence: before ANY ability executes, a Tier-1+ call
+				// must be inside the accepted plan's verb set. A refusal is a
+				// tool_result error the model sees, and is NEVER counted
+				// against max_tool_calls (it never executed anything).
+				$refusal = $this->fenceRefusal( $registry, $run, $call );
+				if ( null !== $refusal ) {
+					$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
+					$run         = $this->refresh( $run );
 					continue;
 				}
 
@@ -843,7 +879,7 @@ final class Runner {
 			match ( $step->kind ) {
 				StepKind::Question   => ++$questions,
 				StepKind::Plan       => ++$plans,
-				StepKind::ToolResult => ++$tool_used,
+				StepKind::ToolResult => $this->countsAsToolCall( $step ) ? ++$tool_used : null,
 				default              => null,
 			};
 		}
@@ -853,7 +889,9 @@ final class Runner {
 			remaining_plans: max( 0, $run->budget['max_plans'] - $plans ),
 			remaining_steps: max( 0, $run->budget['max_steps'] - $run->stepCount ),
 			remaining_tool_calls: max( 0, $run->budget['max_tool_calls'] - $tool_used ),
-			remaining_tokens: max( 0, $run->budget['max_tokens'] - $run->tokensIn - $run->tokensOut )
+			remaining_tokens: max( 0, $run->budget['max_tokens'] - $run->tokensIn - $run->tokensOut ),
+			// S7: remind the model after a refused write so it fixes course.
+			last_refusal: $this->lastRefusalCode( $run->id )
 		);
 	}
 
@@ -1398,5 +1436,590 @@ final class Runner {
 		}
 
 		return 0;
+	}
+
+	// ------------------------------------------------------------------
+	// S7: plan park + fence
+	// ------------------------------------------------------------------
+
+	/**
+	 * remaining_plans = max_plans − count(plan steps), floored at 0.
+	 */
+	private function remainingPlans( Run $run ): int {
+		$used = 0;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Plan === $step->kind ) {
+				++$used;
+			}
+		}
+
+		return PlanTools::remaining( (int) ( $run->budget['max_plans'] ?? 0 ), $used );
+	}
+
+	/** Count of persisted plan steps (the ceiling-rejection probe). */
+	private function countPlanSteps( int $run_id ): int {
+		$count = 0;
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::Plan === $step->kind ) {
+				++$count;
+			}
+		}
+
+		return $count;
+	}
+
+	/**
+	 * Handle a `senroflux__propose-plan` call. Returns array{ 'park': array{run,ui} }
+	 * when it parked (ends the tick); otherwise it has appended an error
+	 * tool_result (invalid payload / plans exhausted) and returns array().
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param list<array<string,mixed>>               $new_steps Accumulator.
+	 * @return array<string,mixed>
+	 */
+	private function runProposePlan( Run $run, array $call, array &$new_steps ): array {
+		if ( 0 >= $this->remainingPlans( $run ) ) {
+			// Withdrawn, yet still called: fail closed, count as a tool call.
+			$new_steps[] = $this->appendPlanError( $run->id, $call, PlanTools::ERROR_PLANS_EXHAUSTED );
+
+			return array();
+		}
+
+		$payload = PlanTools::validateProposePlan( $call['args'] ?? null, $run->id );
+		if ( is_wp_error( $payload ) ) {
+			$new_steps[] = $this->appendPlanError( $run->id, $call, PlanTools::ERROR_INVALID_PLAN );
+
+			return array();
+		}
+
+		// Valid: park. message_json holds the VALIDATED (tier-annotated) payload
+		// (S4); the harness tool name goes in tool_name. This step is NOT history.
+		$new_steps[] = $this->appendPlanStep( $run->id, $call, $payload );
+		$this->store->updateRun( $run->id, array( 'status' => RunStatus::AwaitingPlan->value ) );
+
+		// ui is keyed 'plan' (S7: ui.plan = {...}); exactly one park key is
+		// present when parked.
+		return array(
+			'park' => array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(
+					'plan' => $this->planUi(
+						$payload,
+						$this->latestPlanStepId( $run->id ),
+						$this->remainingPlans( $run ), // includes this parked plan
+						$run->id
+					),
+				),
+			),
+		);
+	}
+
+	/**
+	 * Resume an awaiting_plan run with accept / accept_preapprove / veto (or
+	 * re-surface the card). S7 acting-user rule as S6: a delegated (non-owner)
+	 * human records an `answered_by` system step first.
+	 *
+	 * @param Run                       $run       Snapshot.
+	 * @param array<string,mixed>|null  $resume    Park resolution (null = re-surface).
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 * @return array{run:Run,ui:array<string,mixed>}|WP_Error|null
+	 *         array = cancelled / still parked; WP_Error = 400; null = loop may proceed.
+	 */
+	private function resumeFromPlan( Run $run, ?array $resume, array &$new_steps ): array|WP_Error|null {
+		$context = $this->latestPlanContext( $run->id );
+		if ( null === $context ) {
+			// Corrupted state: fail explicitly rather than looping ungoverned.
+			$this->failError( $run, 'missing_plan_context', 'No parked plan for an awaiting_plan run.' );
+
+			return array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(),
+			);
+		}
+
+		if ( null === $resume || array() === $resume ) {
+			// No decision yet: remain parked, re-surfacing the plan card (S7).
+			return array(
+				'run' => $this->refresh( $run ),
+				'ui'  => array(
+					'plan' => $this->planUi(
+						$context['payload'],
+						$context['step_id'],
+						$this->remainingPlans( $run ),
+						$run->id
+					),
+				),
+			);
+		}
+
+		// Resume::check already guaranteed exactly { plan: { action, note? } }.
+		$action  = (string) $resume['plan']['action'];
+		$note    = is_string( $resume['plan']['note'] ?? null ) ? $resume['plan']['note'] : '';
+		$call_id = (string) ( $context['call_id'] ?? '' );
+
+		if ( 'accept_preapprove' === $action ) {
+			// S7: accepted only when the filter is on AND grants (S14) exist.
+			// Stage 4 has no grants, so this always 400s — fail closed, nothing
+			// persisted (checked BEFORE the acting-user/result steps).
+			if ( ! $this->preapprovalEnabled() ) {
+				return new WP_Error(
+					'preapproval_disabled',
+					__( 'Pre-approval is not enabled for this site.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
+			// Stage 11 wires grants here (per distinct Tier-2 verb in the plan).
+		}
+
+		// S7 acting-user rule (as S6) — only once we know the action proceeds.
+		$this->appendAnsweredBy( $run, $new_steps );
+
+		if ( 'veto' === $action ) {
+			$new_steps[] = $this->appendPlanResult(
+				$run->id,
+				$call_id,
+				array(
+					'accepted' => false,
+					'mode'     => 'veto',
+					'note'     => $note,
+				)
+			);
+			$this->store->updateRun(
+				$run->id,
+				array(
+					'status'                => RunStatus::Running->value,
+					'accepted_plan_step_id' => null,
+				)
+			);
+
+			if ( $this->countPlanSteps( $run->id ) >= (int) $run->budget['max_plans'] ) {
+				// S7: exceeded the plan ceiling on a veto — reject the plan.
+				$this->store->updateRun(
+					$run->id,
+					array(
+						'status'      => RunStatus::Cancelled->value,
+						'error_json'  => array( 'code' => 'plan_rejected' ),
+						'finished_at' => gmdate( 'Y-m-d H:i:s' ),
+					)
+				);
+
+				return array(
+					'run' => $this->refresh( $run ),
+					'ui'  => array(),
+				);
+			}
+
+			return null; // Model re-plans.
+		}
+
+		// accept (or the enabled accept_preapprove): carry the plan forward.
+		$new_steps[] = $this->appendPlanResult(
+			$run->id,
+			$call_id,
+			array(
+				'accepted' => true,
+				'mode'     => $action,
+				'note'     => $note,
+			)
+		);
+		$this->store->updateRun(
+			$run->id,
+			array(
+				'status'                => RunStatus::Running->value,
+				'accepted_plan_step_id' => $context['step_id'],
+			)
+		);
+
+		return null;
+	}
+
+	/**
+	 * Append a plan park step: message_json = the VALIDATED payload.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call    Parked call.
+	 * @param array<string,mixed>                     $payload Validated payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendPlanStep( int $run_id, array $call, array $payload ): array {
+		unset( $call );
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			$payload,
+			PlanTools::toolName(),
+			null,
+			'parked'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::Plan->value,
+			'message'     => $payload,
+			'tool_name'   => PlanTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'parked',
+		);
+	}
+
+	/**
+	 * Tool_result for a plan accept/veto. The FunctionResponse NAME is the
+	 * harness function name, NOT `functionNameFor()` (same rule as the ask-user
+	 * answer path) so the id stays aligned with the call the model made.
+	 *
+	 * @param string              $call_id  The originating propose-plan id (for crash-resume).
+	 * @param array<string,mixed> $response FunctionResponse payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendPlanResult( int $run_id, string $call_id, array $response ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call_id ? $call_id : null,
+							PlanTools::functionName(),
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			PlanTools::toolName(),
+			null,
+			'ok'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => PlanTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Tool_result error to the model for an invalid/exhausted propose-plan call.
+	 * Counts as a tool call (the caller bumps the counter).
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code invalid_plan | plans_exhausted.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendPlanError( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							PlanTools::functionName(),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			PlanTools::toolName(),
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => PlanTools::toolName(),
+			'approval_id' => null,
+			'status'      => 'error',
+		);
+	}
+
+	/**
+	 * Fence refusal tool_result for an ABILITY call: the FunctionResponse NAME
+	 * is the ability's function name (functionNameFor), matching the call, so
+	 * crash-resume sees it consumed. NEVER counted as a tool call.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code plan_required | not_in_plan.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendFenceRefusal( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							self::functionNameFor( $call['name'] ),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			$call['name'],
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => $call['name'],
+			'approval_id' => null,
+			'status'      => 'error',
+		);
+	}
+
+	/**
+	 * S7 fence: refuse (return a code) or allow (return null) one ability call.
+	 *
+	 * The call's verb is the ABILITY NAME at stage 4 (a direct-allow run has no
+	 * pack, so its verbs ARE ability names — S7). Its tier comes from Agent
+	 * Safety's classifier via {@see VerbTier}, never from the model. Tier-0
+	 * reads are free before the plan; a Tier-1+ call needs an accepted plan that
+	 * contains the verb.
+	 *
+	 * @param ToolRegistry                             $registry The run's tool surface.
+	 * @param array{id:string,name:string,args:mixed}  $call     Call shape.
+	 * @return string|null 'plan_required' | 'not_in_plan' | null (allow).
+	 */
+	private function fenceRefusal( ToolRegistry $registry, Run $run, array $call ): ?string {
+		$verb = ToolRegistry::abilityName( (string) $call['name'] );
+
+		// An unadmitted call is unknown_tool, not a fence case — the allow-list
+		// verdict (downstream in executeCall) must win over the fence.
+		if ( ! $registry->admits( $verb ) ) {
+			return null;
+		}
+
+		$tier = VerbTier::tierFor( $verb, null, $run->id );
+
+		if ( $tier < VerbTier::TIER_1 ) {
+			return null; // Tier-0 reads are free before and inside the plan.
+		}
+
+		$accepted = $this->acceptedPlan( $run );
+		if ( null === $accepted ) {
+			return 'plan_required';
+		}
+
+		if ( ! in_array( $verb, $this->planVerbSet( $accepted ), true ) ) {
+			return 'not_in_plan';
+		}
+
+		return null;
+	}
+
+	/**
+	 * The accepted plan's verb set = the union of every step's verbs.
+	 *
+	 * @param array<string,mixed> $payload The validated plan payload.
+	 * @return list<string>
+	 */
+	private function planVerbSet( array $payload ): array {
+		$verbs = array();
+		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
+			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
+				if ( is_string( $verb ) && '' !== $verb ) {
+					$verbs[ $verb ] = true;
+				}
+			}
+		}
+
+		return array_keys( $verbs );
+	}
+
+	/**
+	 * The accepted plan's stored payload, or null when no plan is accepted (or
+	 * the accepted step is missing/corrupt — fail closed to plan_required).
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private function acceptedPlan( Run $run ): ?array {
+		if ( null === $run->acceptedPlanStepId ) {
+			return null;
+		}
+
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Plan === $step->kind
+				&& $step->seq === $run->acceptedPlanStepId
+				&& null !== $step->messageArray ) {
+				return $step->messageArray;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Is this persisted tool_result a real budget consumer? False for a harness
+	 * answer (ask-user/propose-plan `ok`) and for an S7 fence refusal.
+	 */
+	private function countsAsToolCall( Step $step ): bool {
+		if ( 'ok' === $step->status
+			&& ( HarnessTools::toolName() === $step->toolName
+				|| PlanTools::toolName() === $step->toolName ) ) {
+			return false;
+		}
+
+		return ! $this->isFenceRefusal( $step );
+	}
+
+	/**
+	 * A fence refusal tool_result: status 'error' whose response error is
+	 * plan_required or not_in_plan.
+	 */
+	private function isFenceRefusal( Step $step ): bool {
+		if ( 'error' !== $step->status || null === $step->messageArray ) {
+			return false;
+		}
+
+		return in_array(
+			$this->toolResultErrorCode( $step->messageArray ),
+			array( 'plan_required', 'not_in_plan' ),
+			true
+		);
+	}
+
+	/**
+	 * The `error` code in a tool_result step's FunctionResponse, or null.
+	 *
+	 * @param array<string,mixed> $message_array Stored message shape.
+	 */
+	private function toolResultErrorCode( array $message_array ): ?string {
+		foreach ( (array) ( $message_array['parts'] ?? array() ) as $part ) {
+			$response = $part['functionResponse']['response'] ?? null;
+			if ( is_array( $response ) && isset( $response['error'] ) && is_string( $response['error'] ) ) {
+				return $response['error'];
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The most recent plan-fence refusal code, or null.
+	 */
+	private function lastRefusalCode( int $run_id ): ?string {
+		$steps = $this->store->getSteps( $run_id );
+		if ( array() === $steps ) {
+			return null;
+		}
+
+		$last = $steps[ count( $steps ) - 1 ];
+		if ( StepKind::ToolResult !== $last->kind || null === $last->messageArray ) {
+			return null;
+		}
+
+		$code = $this->toolResultErrorCode( $last->messageArray );
+
+		return in_array( $code, array( 'plan_required', 'not_in_plan' ), true ) ? $code : null;
+	}
+
+	/**
+	 * The S7 plan card payload.
+	 *
+	 * @param array<string,mixed> $payload   Validated (tier-annotated) payload.
+	 * @param int                 $step_id   The plan step's seq.
+	 * @param int                 $remaining Plans left (minus this parked one).
+	 * @param int                 $run_id    For the run-detail review URL.
+	 * @return array<string,mixed>
+	 */
+	private function planUi( array $payload, int $step_id, int $remaining, int $run_id ): array {
+		return array(
+			'step_id'              => $step_id,
+			'goal'                 => (string) ( $payload['goal'] ?? '' ),
+			'steps'                => (array) ( $payload['steps'] ?? array() ),
+			'assumptions'          => (array) ( $payload['assumptions'] ?? array() ),
+			'remaining_plans'      => $remaining,
+			'preapprove_available' => $this->preapprovalEnabled(),
+			'review_url'           => function_exists( 'admin_url' )
+				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
+				: '',
+		);
+	}
+
+	/**
+	 * Latest parked plan context (validated payload + step seq + the
+	 * originating propose-plan call id).
+	 *
+	 * @return array{payload:array<string,mixed>,step_id:int,call_id:?string}|null
+	 */
+	private function latestPlanContext( int $run_id ): ?array {
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Plan === $step->kind && null !== $step->messageArray ) {
+				return array(
+					'payload' => $step->messageArray,
+					'step_id' => (int) $step->seq,
+					'call_id' => $this->latestProposePlanCallId( $run_id ),
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The propose-plan call id of the newest model step (the parked message).
+	 * The plan step's message_json stores only the validated payload (S4), so
+	 * the call id is recovered from the model turn for the FunctionResponse.
+	 */
+	private function latestProposePlanCallId( int $run_id ): ?string {
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			foreach ( $this->extractCalls( Message::fromArray( $step->messageArray ) ) as $call ) {
+				if ( PlanTools::functionName() === $call['name'] ) {
+					return (string) $call['id'];
+				}
+			}
+			break; // Only the newest model step is the parked message.
+		}
+
+		return null;
+	}
+
+	/** Seq of the newest plan step, or 0. */
+	private function latestPlanStepId( int $run_id ): int {
+		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
+			if ( StepKind::Plan === $step->kind ) {
+				return (int) $step->seq;
+			}
+		}
+
+		return 0;
+	}
+
+	/**
+	 * Is pre-approval offerable? Only when the `senroflux_enable_preapproval`
+	 * filter is true AND the Agent Safety grants service exists (S14). Stage 4
+	 * wires neither, so this is false and an accept_preapprove resume 400s.
+	 */
+	private function preapprovalEnabled(): bool {
+		if ( ! (bool) apply_filters( 'senroflux_enable_preapproval', false ) ) {
+			return false;
+		}
+
+		return function_exists( 'agent_safety' ) && method_exists( agent_safety(), 'grants' );
 	}
 }

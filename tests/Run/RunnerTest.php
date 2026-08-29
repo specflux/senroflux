@@ -63,7 +63,25 @@ final class RunnerTest extends TestCase {
 				),
 			),
 		);
+		// The S7 plan fence is separately tested in PlanParkTest. These tests
+		// exercise the approval/park mechanics with fence-free (tier-0) verbs.
+		add_filter(
+			'senroflux_verb_map',
+			static fn (): array => array(
+				'agsafe-smoke/spend'   => 0,
+				'agsafe-smoke/blocked' => 0,
+				'agsafe-smoke/read'    => 0,
+				'other-plugin/refund'  => 0,
+			),
+			10,
+			0
+		);
 	}
+
+	protected function tearDown(): void {
+		remove_all_filters( 'senroflux_verb_map' );
+	}
+
 
 	private function createRun(): int {
 		return $this->store->createRun(
