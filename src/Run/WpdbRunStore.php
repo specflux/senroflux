@@ -185,6 +185,45 @@ final class WpdbRunStore implements RunStore {
 	}
 
 	/** {@inheritDoc} */
+	public function prependSystemStep( int $run_id, array $message_array ): int {
+		$steps_table = Schema::stepsTable( $this->db );
+
+		// Seq 0 without the step_count bump: the audit record must not shift
+		// the tick protocol's optimistic lock.
+		$this->db->insert(
+			$steps_table,
+			array(
+				'run_id'       => $run_id,
+				'seq'          => 0,
+				'kind'         => StepKind::System->value,
+				'message_json' => (string) wp_json_encode( $message_array ),
+				'tool_name'    => null,
+				'approval_id'  => null,
+				'status'       => 'ok',
+				'tokens_in'    => 0,
+				'tokens_out'   => 0,
+				'duration_ms'  => 0,
+				'created_at'   => gmdate( 'Y-m-d H:i:s' ),
+			),
+			array( '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s' )
+		);
+
+		return 0;
+	}
+
+	/** {@inheritDoc} */
+	public function appendSystemNote( int $run_id, array $message_array ): int {
+		return $this->appendStep(
+			$run_id,
+			StepKind::System,
+			$message_array,
+			null,
+			null,
+			'ok'
+		);
+	}
+
+	/** {@inheritDoc} */
 	public function listRecent( int $limit = 50 ): array {
 		$table = Schema::runsTable( $this->db );
 		$rows  = $this->db->get_results(

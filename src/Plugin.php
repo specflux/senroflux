@@ -18,6 +18,8 @@ use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\WpdbRunStore;
+use Specflux\SenroFlux\Skills\Skill;
+use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use WP_Error;
 
@@ -161,12 +163,38 @@ final class Plugin {
 			);
 		}
 
-		$run_id = $this->runner()->store()->createRun(
+		// S8: the skills ceiling is a start-time gate — a run whose
+		// instruction could never render is refused, never truncated.
+		$skills  = SkillSet::collect( $consumer, $goal );
+		$ceiling = SkillSet::ceilingError( $skills );
+		if ( null !== $ceiling ) {
+			return $ceiling;
+		}
+
+		$store  = $this->runner()->store();
+		$run_id = $store->createRun(
 			(int) get_current_user_id(),
 			$consumer,
 			$goal,
 			$allow,
 			Budget::sanitize( $budget )
+		);
+
+		// S8: snapshot the skill set at start (skills_json) — the audit trail
+		// of what the instruction was assembled from.
+		$store->updateRun(
+			$run_id,
+			array(
+				'skills_json' => array_map(
+					static fn ( Skill $skill ): array => array(
+						'id'      => $skill->id,
+						'sha256'  => hash( 'sha256', $skill->body ),
+						'source'  => $skill->source->value,
+						'version' => $skill->version,
+					),
+					$skills
+				),
+			)
 		);
 
 		return $this->get( $run_id );

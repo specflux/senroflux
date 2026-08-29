@@ -70,6 +70,25 @@ interface RunStore {
 	public function updateRun( int $run_id, array $fields ): void;
 
 	/**
+	 * Persist the seq-0 system step (the rendered system instruction's audit
+	 * record, 0.2 S8). Seq 0 is reserved: it precedes the goal step and does
+	 * NOT bump step_count — the optimistic lock counts only steps the
+	 * browser's tick protocol has seen.
+	 *
+	 * @param array<string,mixed> $message_array The system-step payload.
+	 */
+	public function prependSystemStep( int $run_id, array $message_array ): int;
+
+	/**
+	 * Append a harness system-note step (e.g. `skills_changed`, 0.2 S8):
+	 * message_json holds the note payload (`{"note": ..., ...}`), the step
+	 * occupies the next seq and bumps step_count like any recorded step.
+	 *
+	 * @param array<string,mixed> $message_array The note payload.
+	 */
+	public function appendSystemNote( int $run_id, array $message_array ): int;
+
+	/**
 	 * Most recently updated runs first (the Runs screen's list).
 	 *
 	 * @param int $limit Max rows.
