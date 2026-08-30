@@ -465,6 +465,91 @@ final class AbilitiesTest extends TestCase {
 		$this->assertSame( 'not_found', $result->get_error_code() );
 	}
 
+	/**
+	 * Run 51: the model published with `{id, status:"publish", content:""}`
+	 * and was refused "A page needs 2 to 8 patterns; 0 given". An empty
+	 * `content` is "content unchanged": status changes, markup does not.
+	 */
+	public function test_update_post_publishes_a_valid_draft_with_empty_content_and_leaves_the_markup(): void {
+		$post               = $this->seedPost();
+		$post->post_content = $this->validContent();
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'      => 100,
+				'status'  => 'publish',
+				'content' => '',
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'publish', $result['status'] );
+		$this->assertSame( 'publish', $post->post_status );
+		$this->assertSame( $this->validContent(), $post->post_content, 'empty content must not touch post_content' );
+	}
+
+	/** Omitted entirely is the same contract as an empty string. */
+	public function test_update_post_publishes_a_valid_draft_with_content_omitted(): void {
+		$post               = $this->seedPost();
+		$post->post_content = $this->validContent();
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'     => 100,
+				'title'  => 'Renamed',
+				'status' => 'publish',
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'publish', $post->post_status );
+		$this->assertSame( 'Renamed', $post->post_title );
+		$this->assertSame( $this->validContent(), $post->post_content );
+	}
+
+	/**
+	 * Fail closed: "content unchanged" is not a way past the validator. The
+	 * seeded draft's stored markup is a bare paragraph (no patterns), so the
+	 * publish is refused on the STORED content.
+	 */
+	public function test_update_post_refuses_publishing_a_draft_whose_stored_content_is_invalid(): void {
+		$post = $this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'      => 100,
+				'status'  => 'publish',
+				'content' => '',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'unknown_pattern', $result->get_error_code() );
+		$this->assertSame( 'draft', $post->post_status, 'a refused publish must persist nothing' );
+		$this->assertStringContainsString( 'original', $post->post_content );
+	}
+
+	/** An empty content on a NON-publish update touches nothing and passes. */
+	public function test_update_post_empty_content_on_a_draft_update_leaves_the_stored_markup(): void {
+		$post = $this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'      => 100,
+				'title'   => 'Renamed',
+				'content' => '',
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'Renamed', $post->post_title );
+		$this->assertStringContainsString( 'original', $post->post_content );
+	}
+
 	public function test_update_post_refuses_invalid_content_and_persists_nothing(): void {
 		$post = $this->seedPost();
 		$this->grant( 'edit_pages', 'edit_post' );

@@ -367,6 +367,71 @@ final class GrantsTest extends TestCase {
 		$this->assertSame( 2, $this->grants->issued[0]['count'] );
 	}
 
+	/**
+	 * A model that re-plans (run 51 did, to add `pages/update-draft`) gets its
+	 * replacement plan accepted — and the FIRST plan's grants must go with the
+	 * plan they were bought for, or two accepts stack two plans' worth of
+	 * Tier-2 spend on a run that only ever had one live plan.
+	 */
+	public function test_a_replacement_plan_revokes_the_previous_plans_grants(): void {
+		list( $run_id ) = $this->parkPlan( array( array( 'agsafe-smoke/publish' ) ) );
+
+		// Accept #1 (pre-approved), then the model re-plans and parks again.
+		$this->gateway->script[] = self::callTurn(
+			'call_p2',
+			PlanTools::FUNCTION_NAME,
+			self::planArgs( array( array( 'agsafe-smoke/write' ), array( 'agsafe-smoke/publish' ) ) )
+		);
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$replan                  = $this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+		$this->assertIsArray( $replan );
+		$this->assertSame( 'awaiting_plan', $replan['run']['status'] );
+		$this->assertCount( 1, $this->grants->issued );
+		$this->assertSame( array(), $this->grants->revoked, 'nothing is revoked while the first plan stands' );
+
+		// Accept #2. The run stays parked (a third plan) so no TERMINAL
+		// revocation can be mistaken for the replacement's.
+		$this->gateway->script[] = self::callTurn(
+			'call_p3',
+			PlanTools::FUNCTION_NAME,
+			self::planArgs( array( array( 'agsafe-smoke/publish' ) ) )
+		);
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		$this->assertSame(
+			array( self::correlationFor( $run_id ) ),
+			$this->grants->revoked,
+			'accepting the replacement revokes the replaced plan\'s grants exactly once'
+		);
+		$this->assertCount( 2, $this->grants->issued, 'the replacement issues its own grant' );
+		$this->assertSame( 'agsafe-smoke/publish', $this->grants->issued[1]['verb'] );
+	}
+
+	/** The same clearing happens on a PLAIN accept: it issues nothing AND leaves nothing. */
+	public function test_a_plain_accept_of_a_replacement_plan_clears_the_earlier_grants(): void {
+		list( $run_id ) = $this->parkPlan( array( array( 'agsafe-smoke/publish' ) ) );
+
+		$this->gateway->script[] = self::callTurn(
+			'call_p2',
+			PlanTools::FUNCTION_NAME,
+			self::planArgs( array( array( 'agsafe-smoke/publish' ) ) )
+		);
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		$this->gateway->script[] = self::callTurn(
+			'call_p3',
+			PlanTools::FUNCTION_NAME,
+			self::planArgs( array( array( 'agsafe-smoke/publish' ) ) )
+		);
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertSame( array( self::correlationFor( $run_id ) ), $this->grants->revoked );
+		$this->assertCount( 1, $this->grants->issued, 'a plain accept issues nothing of its own' );
+	}
+
 	public function test_no_grant_is_issued_when_agent_safety_can_name_no_subject(): void {
 		RequestContext::$token = null;
 

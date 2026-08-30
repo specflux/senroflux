@@ -851,8 +851,10 @@ final class Abilities {
 	}
 
 	/**
-	 * update-post execute: target post must exist; content validated when
-	 * present; status allowlist draft|pending|publish.
+	 * update-post execute: target post must exist; non-empty content is
+	 * validated, omitted/empty content leaves `post_content` untouched (and a
+	 * publish then validates the STORED content); status allowlist
+	 * draft|pending|publish.
 	 *
 	 * @param array<string,mixed> $input     Call input.
 	 * @param Validator           $validator Write validator.
@@ -891,8 +893,17 @@ final class Abilities {
 			$args['post_title'] = (string) $input['title'];
 		}
 
-		if ( isset( $input['content'] ) ) {
-			$clean = $validator->clean( (string) $input['content'], array( 'post_type' => (string) ( $post->post_type ?? 'page' ) ) );
+		// `content` omitted OR an empty string means "content unchanged": the
+		// stored markup is left exactly as it is and the validator is not
+		// asked about markup the caller never sent. Observed live (run 51): a
+		// model publishing with `{id, status:"publish", content:""}` was
+		// refused "A page needs 2 to 8 patterns; 0 given" four calls running.
+		// Any NON-empty content stays fully validated, whole-write refusal.
+		$new_content = isset( $input['content'] ) ? (string) $input['content'] : '';
+		$post_type   = array( 'post_type' => (string) ( $post->post_type ?? 'page' ) );
+
+		if ( '' !== $new_content ) {
+			$clean = $validator->clean( $new_content, $post_type );
 			if ( ! $clean['ok'] ) {
 				/** @var WP_Error $error */
 				$error = $clean['wp_error'];
@@ -900,6 +911,18 @@ final class Abilities {
 				return $error;
 			}
 			$args['post_content'] = $clean['content'];
+		} elseif ( 'publish' === $status ) {
+			// Fail closed (§0.2): "content unchanged" must never be a way to
+			// put unvalidated markup live. On a publish the STORED content is
+			// validated instead — and left untouched either way, so a page
+			// that goes live is markup the validator has accepted.
+			$stored = $validator->clean( (string) ( $post->post_content ?? '' ), $post_type );
+			if ( ! $stored['ok'] ) {
+				/** @var WP_Error $error */
+				$error = $stored['wp_error'];
+
+				return $error;
+			}
 		}
 
 		if ( isset( $input['slug'] ) ) {

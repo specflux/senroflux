@@ -1981,6 +1981,19 @@ final class Runner {
 			)
 		);
 
+		// S7: "a newly accepted plan replaces the old one" — and so do its
+		// grants. Pre-approval bought against a plan that is no longer the
+		// accepted plan must not survive it (§0.2 fail closed), or a model
+		// that re-plans twice walks away with three plans' worth of spend. A
+		// PLAIN accept of a replacement clears them too: accepting without
+		// pre-approval is the human asking to be shown every Tier-2 call.
+		// Revoking before issuing keeps the run's live grants == this plan's.
+		// Only a replacement needs it: on a run's first plan there is nothing
+		// under the correlation id yet (grants are issued on accept alone).
+		if ( $this->countPlanSteps( $run->id ) > 1 ) {
+			$this->revokeGrants( $run->id );
+		}
+
 		if ( 'accept_preapprove' === $action ) {
 			// AFTER the acceptance is persisted: a grant must never outlive an
 			// accept that did not land.
