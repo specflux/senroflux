@@ -38,6 +38,8 @@ require_once __DIR__ . '/stubs/abilities.php';
 require_once __DIR__ . '/stubs/run-doubles.php';
 // Admin-screen shims (S13): nonce/fields/enqueue for the Runs screen handlers.
 require_once __DIR__ . '/stubs/admin.php';
+// HTTP-surface shims (S9/S17): wp_send_json_*, check_ajax_referer, REST doubles.
+require_once __DIR__ . '/stubs/http.php';
 
 // The global senroflux() locator (function_exists-guarded, same as main).
 require_once dirname( __DIR__ ) . '/src/api.php';
@@ -136,7 +138,7 @@ if ( ! function_exists( 'esc_html__' ) ) {
 	 * @return string
 	 */
 	function esc_html__( string $text, string $domain = 'default' ): string {
-		return $text;
+		return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' );
 	}
 }
 
@@ -217,7 +219,7 @@ if ( ! function_exists( '__' ) ) {
 if ( ! function_exists( 'esc_attr' ) ) {
 	/** Identity shim. */
 	function esc_attr( $text ) {
-		return (string) $text;
+		return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' );
 	}
 }
 
@@ -236,7 +238,7 @@ if ( ! function_exists( 'esc_html' ) ) {
 	 * @return string
 	 */
 	function esc_html( $text ) {
-		return (string) $text;
+		return htmlspecialchars( (string) $text, ENT_QUOTES, 'UTF-8' );
 	}
 }
 

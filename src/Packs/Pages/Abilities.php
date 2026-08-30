@@ -13,6 +13,20 @@
  * All WRITE abilities (`create-post`, `update-post`) route their `content`
  * through {@see Validator::clean()} BEFORE `wp_insert_post`/`wp_update_post`:
  * a validation failure returns the WP_Error whole-write — nothing is persisted.
+ * `Validator` also owns the tag/attribute allow-list: these runs execute as an
+ * administrator, who holds `unfiltered_html`, so WordPress installs no kses of
+ * its own on this path.
+ *
+ * CAPABILITIES. Every gate is applied in BOTH the `permission_callback` and the
+ * execute callback — execute is reachable on its own, and a write must never
+ * assume an earlier gate ran. The primitive `edit_posts` / `edit_pages` check is
+ * not sufficient on its own:
+ *   - create → the post type's `create_posts` capability;
+ *   - update → the PER-POST `edit_post` capability for the target id;
+ *   - a publish transition → additionally the type's `publish_posts` /
+ *     `publish_pages`;
+ *   - read by id or slug → the PER-POST `read_post` capability, and the post
+ *     type must be on the `page|post` allow-list.
  *
  * Every ability that returns an id follows the S12 contract (the run tracker
  * keys its verify-nudge on `id`).
@@ -39,6 +53,15 @@ final class Abilities {
 	 * The ability category for all five polyfills.
 	 */
 	public const CATEGORY = 'senroflux-pages-content';
+
+	/**
+	 * The post types these abilities will touch at all (S10 allow-list). Every
+	 * read/write path re-checks this — the input schema's `enum` is enforced by
+	 * the Abilities API, not by this class, and the pack fails closed on its own.
+	 *
+	 * @var list<string>
+	 */
+	private const POST_TYPES = array( 'page', 'post' );
 
 	/**
 	 * The default `fields` list for read-content (content_rendered is OFF).
@@ -146,9 +169,18 @@ final class Abilities {
 				},
 				'permission_callback' => static function ( $input = array() ) {
 					$input = is_array( $input ) ? $input : array();
-					$pt    = $input['post_type'] ?? 'page';
+					$pt    = (string) ( $input['post_type'] ?? 'page' );
+					if ( ! self::allowedPostType( $pt ) || ! current_user_can( self::postTypeCap( $pt ) ) ) {
+						return false;
+					}
 
-					return current_user_can( self::postTypeCap( (string) $pt ) );
+					// The by-id mode carries no post_type, so the per-object
+					// read check happens here as well as in the execute path.
+					if ( isset( $input['id'] ) && is_numeric( $input['id'] ) ) {
+						return current_user_can( 'read_post', (int) $input['id'] );
+					}
+
+					return true;
 				},
 				'meta'                => self::meta(
 					array(
@@ -177,10 +209,7 @@ final class Abilities {
 					return self::executeCreatePost( is_array( $input ) ? $input : array(), $validator );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					$input = is_array( $input ) ? $input : array();
-					$pt    = $input['post_type'] ?? 'post';
-
-					return current_user_can( self::postTypeCap( (string) $pt ) );
+					return self::mayCreate( is_array( $input ) ? $input : array() );
 				},
 				'meta'                => self::meta(
 					array(
@@ -210,11 +239,7 @@ final class Abilities {
 					return self::executeUpdatePost( is_array( $input ) ? $input : array(), $validator );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					$input = is_array( $input ) ? $input : array();
-					$post  = isset( $input['id'] ) && is_numeric( $input['id'] ) ? get_post( (int) $input['id'] ) : null;
-					$pt    = is_object( $post ) ? $post->post_type : 'page';
-
-					return current_user_can( self::postTypeCap( (string) $pt ) );
+					return self::mayUpdate( is_array( $input ) ? $input : array() );
 				},
 				'meta'                => self::meta(
 					array(
@@ -420,8 +445,11 @@ final class Abilities {
 		return array(
 			'oneOf' => array(
 				array(
+					// Only `id` is required: `shapePost()` emits the rest only
+					// when `fields` asks for it, and a narrow `fields` list must
+					// not fail the ability's own output validation.
 					'type'                 => 'object',
-					'required'             => array( 'id', 'content_raw' ),
+					'required'             => array( 'id' ),
 					'additionalProperties' => false,
 					'properties'           => array(
 						'id'                => array( 'type' => 'integer' ),
@@ -578,10 +606,136 @@ final class Abilities {
 	}
 
 	/**
-	 * The post-type capability (page → edit_pages, else edit_posts).
+	 * The post-type EDIT capability (page → edit_pages, else edit_posts).
 	 */
 	private static function postTypeCap( string $post_type ): string {
 		return 'page' === $post_type ? 'edit_pages' : 'edit_posts';
+	}
+
+	/**
+	 * The post-type CREATE capability. WordPress derives `create_posts` from
+	 * the registered post type (it defaults to the type's `edit_posts` cap), so
+	 * ask the type object when it is available and fall back to the same
+	 * default when it is not.
+	 */
+	private static function createCap( string $post_type ): string {
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( $post_type );
+			if ( is_object( $object ) && isset( $object->cap->create_posts ) && is_string( $object->cap->create_posts ) ) {
+				return $object->cap->create_posts;
+			}
+		}
+
+		return self::postTypeCap( $post_type );
+	}
+
+	/**
+	 * The post-type PUBLISH capability (page → publish_pages, else publish_posts).
+	 * A publish transition needs this on top of `edit_post` for the target.
+	 */
+	private static function publishCap( string $post_type ): string {
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( $post_type );
+			if ( is_object( $object ) && isset( $object->cap->publish_posts ) && is_string( $object->cap->publish_posts ) ) {
+				return $object->cap->publish_posts;
+			}
+		}
+
+		return 'page' === $post_type ? 'publish_pages' : 'publish_posts';
+	}
+
+	/**
+	 * The single refusal for every capability failure. Deliberately one code and
+	 * one message: which capability was missing is a detail the model cannot act
+	 * on, and spelling it out narrates the site's permission map to a caller
+	 * that just failed a permission check.
+	 */
+	private static function forbidden(): WP_Error {
+		return new WP_Error(
+			'forbidden',
+			__( 'You are not allowed to do that.', 'senroflux' ),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * Whether a post type is one this pack will touch at all.
+	 */
+	private static function allowedPostType( string $post_type ): bool {
+		return in_array( $post_type, self::POST_TYPES, true );
+	}
+
+	/**
+	 * The create/update capability gate, shared by `permission_callback` and the
+	 * execute callback so a caller that reaches execute by another route (a
+	 * direct `Ability::execute()`, a future transport) is checked too.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function mayCreate( array $input ): bool {
+		$post_type = (string) ( $input['post_type'] ?? 'page' );
+
+		return self::allowedPostType( $post_type ) && current_user_can( self::createCap( $post_type ) );
+	}
+
+	/**
+	 * The update gate: the PER-POST `edit_post` capability, plus the post type's
+	 * publish capability when the call is a publish transition.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function mayUpdate( array $input ): bool {
+		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) ) {
+			return false;
+		}
+
+		$id   = (int) $input['id'];
+		$post = function_exists( 'get_post' ) ? get_post( $id ) : null;
+		if ( ! is_object( $post ) ) {
+			return false;
+		}
+
+		$post_type = (string) $post->post_type;
+		if ( ! self::allowedPostType( $post_type ) ) {
+			return false;
+		}
+
+		if ( ! current_user_can( 'edit_post', $id ) ) {
+			return false;
+		}
+
+		if ( 'publish' === ( $input['status'] ?? null ) && ! current_user_can( self::publishCap( $post_type ) ) ) {
+			return false;
+		}
+
+		return true;
+	}
+
+	/**
+	 * The single-post read gate: the type must be on the allow-list and the
+	 * user must hold `read_post` for that exact post.
+	 *
+	 * @param object              $post  The resolved WP_Post.
+	 * @param array<string,mixed> $input Call input.
+	 * @return true|WP_Error true when readable, else the refusal.
+	 */
+	private static function readablePost( object $post, array $input ): true|WP_Error {
+		$post_type = (string) ( $post->post_type ?? '' );
+
+		if ( ! self::allowedPostType( $post_type ) ) {
+			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$requested = $input['post_type'] ?? null;
+		if ( is_string( $requested ) && $requested !== $post_type ) {
+			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		if ( ! current_user_can( 'read_post', (int) ( $post->ID ?? 0 ) ) ) {
+			return self::forbidden();
+		}
+
+		return true;
 	}
 
 	/**
@@ -596,18 +750,33 @@ final class Abilities {
 
 		if ( isset( $input['id'] ) ) {
 			$post = function_exists( 'get_post' ) ? get_post( (int) $input['id'] ) : null;
+			if ( ! is_object( $post ) ) {
+				return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+			}
 
-			return is_object( $post )
-				? self::shapePost( $post, $fields )
-				: new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+			$readable = self::readablePost( $post, $input );
+
+			return true === $readable ? self::shapePost( $post, $fields ) : $readable;
 		}
 
 		if ( isset( $input['slug'] ) && function_exists( 'get_page_by_path' ) ) {
-			$post = get_page_by_path( (string) $input['slug'], 'OBJECT', (string) ( $input['post_type'] ?? 'page' ) );
+			$post_type = (string) ( $input['post_type'] ?? 'page' );
+			if ( ! self::allowedPostType( $post_type ) ) {
+				return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+			}
 
-			return is_object( $post )
-				? self::shapePost( $post, $fields )
-				: new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+			$post = get_page_by_path( (string) $input['slug'], 'OBJECT', $post_type );
+			if ( ! is_object( $post ) ) {
+				return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+
+			$readable = self::readablePost( $post, $input );
+
+			return true === $readable ? self::shapePost( $post, $fields ) : $readable;
+		}
+
+		if ( ! self::allowedPostType( (string) ( $input['post_type'] ?? 'page' ) ) ) {
+			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
 		if ( ! class_exists( '\WP_Query' ) || ! function_exists( 'apply_filters' ) ) {
@@ -633,6 +802,12 @@ final class Abilities {
 	 * @return array<string,mixed>|WP_Error
 	 */
 	private static function executeCreatePost( array $input, Validator $validator ): array|WP_Error {
+		// Re-checked here, not only in permission_callback: execute is reachable
+		// on its own and a write must never rely on an earlier gate having run.
+		if ( ! self::mayCreate( $input ) ) {
+			return self::forbidden();
+		}
+
 		if ( ( $input['status'] ?? 'draft' ) !== 'draft' ) {
 			return new WP_Error( 'status_not_allowed', __( 'Only draft is allowed on create.', 'senroflux' ), array( 'status' => 400 ) );
 		}
@@ -687,6 +862,23 @@ final class Abilities {
 			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
+		if ( ! self::allowedPostType( (string) ( $post->post_type ?? '' ) ) ) {
+			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		// The status allow-list runs BEFORE the capability gate so a refused
+		// status never reveals whether the caller could have published.
+		$status = $input['status'] ?? null;
+		if ( null !== $status && ! in_array( $status, array( 'draft', 'pending', 'publish' ), true ) ) {
+			return new WP_Error( 'status_not_allowed', __( 'That status is not allowed on update.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		// Per-post `edit_post`, plus the type's publish cap on a publish
+		// transition. Re-checked here for the same reason as create.
+		if ( ! self::mayUpdate( $input ) ) {
+			return self::forbidden();
+		}
+
 		$args = array( 'ID' => (int) ( $post->ID ?? 0 ) );
 
 		if ( isset( $input['title'] ) ) {
@@ -714,10 +906,6 @@ final class Abilities {
 			$args['post_excerpt'] = (string) $input['excerpt'];
 		}
 
-		$status = $input['status'] ?? null;
-		if ( null !== $status && ! in_array( $status, array( 'draft', 'pending', 'publish' ), true ) ) {
-			return new WP_Error( 'status_not_allowed', __( 'That status is not allowed on update.', 'senroflux' ), array( 'status' => 400 ) );
-		}
 		if ( null !== $status ) {
 			$args['post_status'] = (string) $status;
 		}
@@ -807,6 +995,14 @@ final class Abilities {
 		}
 		if ( $want( 'content_raw' ) ) {
 			$out['content_raw'] = (string) ( $post->post_content ?? '' );
+		}
+		if ( $want( 'author' ) ) {
+			$author_id     = (int) ( $post->post_author ?? 0 );
+			$user          = function_exists( 'get_userdata' ) ? get_userdata( $author_id ) : false;
+			$out['author'] = array(
+				'id'   => $author_id,
+				'name' => is_object( $user ) ? (string) ( $user->display_name ?? '' ) : '',
+			);
 		}
 		if ( $want( 'content_rendered' ) && function_exists( 'apply_filters' ) ) {
 			$out['content_rendered'] = (string) apply_filters( 'the_content', (string) ( $post->post_content ?? '' ) ); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- consuming a core hook

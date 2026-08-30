@@ -26,6 +26,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Admin;
 
 use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Http\ConsumerPolicy;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Run\Budget;
@@ -40,11 +41,23 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Render + act on SenroFlux runs.
  *
- * The one consumer id the screen starts runs for is `senroflux-admin` (S13).
- * Because a pack is always chosen, `start()` derives the allow-list from the
- * pack and ignores any `$allow`, so the screen is the "one start path" and
- * never needs to consult `ConsumerPolicy` (that seam is for arbitrary HTTP
- * consumers, not the logged-in admin).
+ * The one consumer id the screen starts runs for is `senroflux-admin` (S13),
+ * and it goes through the SAME server-side policy seam as every other
+ * consumer. `senroflux-admin` is registered in `senroflux_http_consumers`
+ * ONLY while the current user holds the screen capability (see
+ * {@see self::registerAdminConsumer()}), and the New-run handler resolves the
+ * request through {@see ConsumerPolicy} before it ever reaches `start()`. So:
+ *
+ *   - one start path, one allow-list authority, one budget ceiling;
+ *   - a user without the capability resolves to `senroflux_unknown_consumer`
+ *     (403) at the policy seam — fail closed — as well as being stopped by the
+ *     handler's own `current_user_can()` check;
+ *   - a JS consumer POSTing `wp_ajax_senroflux_start` with `senroflux-admin`
+ *     gets exactly the same treatment, because it is the same filter entry.
+ *
+ * The chosen pack still narrows the allow-list inside `start()` (S9: with a
+ * pack, the pack is the single source of the allow-list), so the policy
+ * allow-list is the OUTER bound, not the effective one.
  */
 class RunsScreen {
 
@@ -56,6 +69,9 @@ class RunsScreen {
 	/** Goal length cap (S13: required, ≤ 1000 chars). */
 	private const MAX_GOAL = 1000;
 
+	/** The id the question card's rationale <p> carries for aria-describedby (S15). */
+	private const RATIONALE_ID = 'senroflux-rationale';
+
 	/** Register on admin_menu (+ posts + assets). */
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
@@ -65,6 +81,7 @@ class RunsScreen {
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
 		add_action( 'admin_post_senroflux_plan_decision', array( $this, 'handlePlanDecision' ) );
 		add_action( 'admin_post_senroflux_approval_decision', array( $this, 'handleApprovalDecision' ) );
+		add_filter( ConsumerPolicy::FILTER, array( $this, 'registerAdminConsumer' ) );
 	}
 
 	/**
@@ -75,8 +92,57 @@ class RunsScreen {
 	 * drive a run from this screen.
 	 */
 	public function capability(): string {
-		/** Filters the capability required for the Runs screen. */
-		return (string) apply_filters( 'senroflux_runs_capability', 'manage_options' );
+		return ScreenCapability::current();
+	}
+
+	/**
+	 * Register `senroflux-admin` as an HTTP consumer — ONLY for a user who
+	 * holds the screen capability (S13).
+	 *
+	 * This is what makes the Runs screen's start "one start path": the New-run
+	 * form and any `wp_ajax_senroflux_start` call resolve through the SAME
+	 * {@see ConsumerPolicy} entry, so the allow-list and the budget ceiling are
+	 * server-owned in both. A visitor without the capability never sees the
+	 * consumer registered at all, so `ConsumerPolicy::resolve()` refuses with
+	 * `senroflux_unknown_consumer` (403) — fail closed.
+	 *
+	 * The allow-list here is the union of the registered packs' allow-lists:
+	 * the OUTER bound of what an admin-started run may ever touch. `start()`
+	 * then narrows it to the chosen pack (S9), which is always given from this
+	 * screen. The ceiling is the site's `Budget::defaults()`, which is exactly
+	 * the "lower-only" rule S13 asks for.
+	 *
+	 * @param mixed $consumers The consumer map so far.
+	 * @return array<string,array{allow?:list<string>,budget?:array<string,int>}>
+	 */
+	public function registerAdminConsumer( mixed $consumers ): array {
+		$consumers = is_array( $consumers ) ? $consumers : array();
+
+		if ( ! ScreenCapability::held() ) {
+			return $consumers;
+		}
+
+		$allow = array();
+		foreach ( PackRegistry::fromFilters()->all() as $pack ) {
+			foreach ( $pack->allowList() as $ability ) {
+				if ( is_string( $ability ) && '' !== $ability ) {
+					$allow[ $ability ] = true;
+				}
+			}
+		}
+
+		if ( array() === $allow ) {
+			// No pack, nothing to allow: leave the consumer UNregistered rather
+			// than registering an empty (and therefore refused) entry.
+			return $consumers;
+		}
+
+		$consumers[ self::CONSUMER ] = array(
+			'allow'  => array_keys( $allow ),
+			'budget' => Budget::defaults(),
+		);
+
+		return $consumers;
 	}
 
 	/** Add the Tools submenu. */
@@ -97,20 +163,39 @@ class RunsScreen {
 		}
 
 		wp_enqueue_style( 'senroflux-runs', SENROFLUX_URL . 'assets/runs.css', array(), '0.2.0' );
-		wp_enqueue_script( 'senroflux-runs', SENROFLUX_URL . 'assets/runs.js', array(), '0.2.0', true );
+		wp_enqueue_script( 'senroflux-runs', SENROFLUX_URL . 'assets/runs.js', array( 'wp-i18n' ), '0.2.0', true );
+
+		// S15 recorded `wp_set_script_translations` as "added with runs.js's
+		// first string" — runs.js now carries strings, so it is wired here.
+		if ( function_exists( 'wp_set_script_translations' ) ) {
+			wp_set_script_translations( 'senroflux-runs', 'senroflux' );
+		}
 
 		wp_localize_script(
 			'senroflux-runs',
 			'senrofluxRuns',
 			array(
-				'cancelConfirm' => __( 'Cancel this run?', 'senroflux' ),
-				'pollInterval'  => 3000,
+				'cancelConfirm'  => __( 'Cancel this run?', 'senroflux' ),
+				'pollInterval'   => 3000,
 				// The poll uses the SAME admin-ajax tick surface as any other
 				// logged-in consumer; a screen-capability holder answers by
 				// submitting the park-card form, not by polling (polling drives
 				// running pendings only).
-				'ajaxUrl'       => function_exists( 'admin_url' ) ? admin_url( 'admin-ajax.php' ) : '',
-				'nonce'         => function_exists( 'wp_create_nonce' ) ? wp_create_nonce( 'senroflux_run' ) : '',
+				'ajaxUrl'        => function_exists( 'admin_url' ) ? admin_url( 'admin-ajax.php' ) : '',
+				'nonce'          => function_exists( 'wp_create_nonce' ) ? wp_create_nonce( 'senroflux_run' ) : '',
+				// Every string runs.js renders, translated server-side so the
+				// script never hardcodes English (S15). The status map is the
+				// SAME one the server render uses.
+				'i18n'           => array(
+					'statuses'       => self::statusLabels(),
+					/* translators: %s is the translated run status label. */
+					'statusAnnounce' => __( 'Status: %s', 'senroflux' ),
+					'json'           => __( 'JSON', 'senroflux' ),
+					'pollError'      => __( 'Live updates stopped. Use Refresh to see the latest state.', 'senroflux' ),
+				),
+				// The park reload waits this long so the aria-live status
+				// announcement is actually spoken before the page goes away.
+				'parkAnnounceMs' => 1500,
 			)
 		);
 	}
@@ -140,9 +225,17 @@ class RunsScreen {
 	/**
 	 * admin-post endpoint backing the "New run" form (S13).
 	 *
-	 * ONE start path: verify nonce + capability, validate the goal (required,
-	 * ≤ 1000) and clamp the five ceilings LOWER-ONLY against the site defaults,
-	 * then call `senroflux()->start( 'senroflux-admin', $goal, [], $budget, $pack )`.
+	 * ONE start path (S13): verify nonce + capability, validate the goal
+	 * (required, ≤ 1000), then resolve the request through the SAME
+	 * {@see ConsumerPolicy} seam every HTTP consumer goes through. The policy
+	 * owns the allow-list and the budget CEILING; the request may only lower
+	 * the budget. Only then does this call
+	 * `senroflux()->start( 'senroflux-admin', $goal, $allow, $budget, $pack )`.
+	 *
+	 * `senroflux-admin` is only in the consumer map while the current user
+	 * holds the screen capability, so a request that slips past the capability
+	 * check would still be refused at the policy seam (fail closed, twice).
+	 *
 	 * The pack's own S13 preflight is re-run inside `start()` (fail closed);
 	 * a preflight failure surfaces as the preflight notice on the list view.
 	 */
@@ -174,17 +267,22 @@ class RunsScreen {
 			return;
 		}
 
-		// Lower-only: an admin may only reduce a ceiling below the site default,
-		// never raise it. `Budget::clamp( $requested, Budget::defaults() )` does
-		// exactly that (S13).
-		$budget = Budget::clamp( $this->rawBudgetInput(), Budget::defaults() );
+		// The one policy seam: the server owns the allow-list and the ceiling,
+		// the request may only lower the budget (S13 "lower-only" is exactly
+		// `Budget::clamp( $requested, $ceiling )` inside ConsumerPolicy).
+		$policy = ConsumerPolicy::resolve( self::CONSUMER, $this->rawBudgetInput() );
+		if ( is_wp_error( $policy ) ) {
+			$this->redirectList( (string) $policy->get_error_code() );
+
+			return;
+		}
 
 		$result = senroflux()->start(
 			self::CONSUMER,
 			$goal,
-			array(),   // A pack is always chosen: start() ignores this (S9).
-			$budget,
-			$pack      // The pack is the single source of the allow-list.
+			$policy['allow'],   // Outer bound; start() narrows it to the pack (S9).
+			$policy['budget'],
+			$pack               // The pack is the single source of the allow-list.
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -208,8 +306,7 @@ class RunsScreen {
 			return;
 		}
 
-		$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), $resume );
-		$this->redirectBack( $run_id );
+		$this->redirectBack( $run_id, $this->tickErrorCode( $this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), $resume ) ) );
 	}
 
 	/** admin-post endpoint backing the plan park's Submit (S5/S7). */
@@ -224,8 +321,7 @@ class RunsScreen {
 			return;
 		}
 
-		$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), $resume );
-		$this->redirectBack( $run_id );
+		$this->redirectBack( $run_id, $this->tickErrorCode( $this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), $resume ) ) );
 	}
 
 	/** admin-post endpoint backing the approval park's Approve/Reject (S5/S6). */
@@ -241,8 +337,32 @@ class RunsScreen {
 		}
 
 		// Approval parks resume with exactly { "action": "approve" | "reject" }.
-		$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), array( 'action' => $action ) );
-		$this->redirectBack( $run_id );
+		$this->redirectBack(
+			$run_id,
+			$this->tickErrorCode(
+				$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), array( 'action' => $action ) )
+			)
+		);
+	}
+
+	/**
+	 * The error code to carry back in the redirect, or null on success.
+	 *
+	 * A park handler used to DISCARD the tick result, so a 403 (or a
+	 * `senroflux_conflict`) redirected silently back to a card that looked
+	 * unchanged. Surfacing the code lets `renderRunErrorFlash()` say what
+	 * happened.
+	 *
+	 * @param array<string,mixed>|WP_Error $result The tick outcome.
+	 */
+	private function tickErrorCode( array|WP_Error $result ): ?string {
+		if ( ! is_wp_error( $result ) ) {
+			return null;
+		}
+
+		$code = (string) $result->get_error_code();
+
+		return '' !== $code ? $code : 'senroflux_bad_request';
 	}
 
 	// ------------------------------------------------------------------
@@ -339,32 +459,24 @@ class RunsScreen {
 	 * The Runner's `mayTick()` defaults to owner-only but is gated by the
 	 * `senroflux_can_tick` filter (the delegation seam). A holder of the screen
 	 * capability may answer/act on a run even when they are not its owner; the
-	 * Runner itself records the `answered_by` system step (S6/S7). The filter
-	 * allowance is added ONLY for the duration of this handler's single tick
-	 * call — it never leaks outside the screen context — and the handler has
-	 * ALREADY verified `current_user_can($capability)` at its top.
+	 * Runner itself records the `answered_by` system step (S6/S7).
+	 *
+	 * The capability check happens HERE, inside
+	 * {@see ScreenCapability::tickAsScreen()} — the park handlers above verify
+	 * the nonce, not the capability, so this method must never assume they did.
+	 * The allowance is scoped to this ONE run id and removed in a `finally`, so
+	 * it never leaks outside this call. The exact same helper backs the
+	 * admin-ajax poll ({@see \Specflux\SenroFlux\Http\Ajax::handleTick()}), so
+	 * polling a delegated run behaves like submitting its form.
 	 *
 	 * @param array<string,mixed>|null $resume Park resolution.
 	 * @return array<string,mixed>|WP_Error RunState or an error.
 	 */
 	private function tickThroughScreen( int $run_id, int $step_count, ?array $resume ): array|WP_Error {
-		if ( ! current_user_can( $this->capability() ) ) {
-			return new WP_Error(
-				'senroflux_forbidden',
-				__( 'Insufficient permissions.', 'senroflux' ),
-				array( 'status' => 403 )
-			);
-		}
-
-		// Delegation allowance, scoped to this handler's own tick.
-		$callback = static fn (): bool => true;
-		add_filter( 'senroflux_can_tick', $callback, 10, 0 );
-
-		try {
-			return senroflux()->tick( $run_id, $step_count, $resume );
-		} finally {
-			remove_filter( 'senroflux_can_tick', $callback, 10 );
-		}
+		return ScreenCapability::tickAsScreen(
+			$run_id,
+			static fn (): array|WP_Error => senroflux()->tick( $run_id, $step_count, $resume )
+		);
 	}
 
 	// ------------------------------------------------------------------
@@ -422,8 +534,21 @@ class RunsScreen {
 
 		echo '<h2>' . esc_html__( 'Recent runs', 'senroflux' ) . '</h2>';
 
+		// Column headers are harness chrome (S15): translated, not machine codes.
+		$columns = array(
+			__( 'ID', 'senroflux' ),
+			__( 'User', 'senroflux' ),
+			__( 'Consumer', 'senroflux' ),
+			__( 'Goal', 'senroflux' ),
+			__( 'Status', 'senroflux' ),
+			__( 'Steps', 'senroflux' ),
+			__( 'Tokens', 'senroflux' ),
+			__( 'Updated', 'senroflux' ),
+			'',
+		);
+
 		echo '<table class="widefat striped senroflux-runs-table"><thead><tr>';
-		foreach ( array( 'ID', 'User', 'Consumer', 'Goal', 'Status', 'Steps', 'Tokens', 'Updated', '' ) as $col ) {
+		foreach ( $columns as $col ) {
 			echo '<th>' . esc_html( $col ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';
@@ -434,12 +559,15 @@ class RunsScreen {
 
 		foreach ( $runs as $run ) {
 			printf(
-				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s">%5$s</span></td><td>%6$d</td><td>%7$d/%8$d</td><td>%9$s</td><td><a href="%10$s">%11$s</a></td></tr>',
+				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a></td></tr>',
 				(int) $run['id'],
 				(int) $run['user_id'],
 				esc_html( (string) $run['consumer'] ),
 				esc_html( wp_trim_words( (string) $run['goal'], 8, '…' ) ),
 				esc_attr( (string) $run['status'] ),
+				// The badge TEXT is chrome: a translated label, never the raw
+				// enum value (the machine value stays in the class + data-status).
+				esc_html( self::statusLabel( (string) $run['status'] ) ),
 				(int) $run['step_count'],
 				(int) $run['tokens_in'],
 				(int) $run['tokens_out'],
@@ -455,39 +583,52 @@ class RunsScreen {
 	/**
 	 * The "New run" form, or the S13 preflight notice instead.
 	 *
-	 * Preflight blocks the ENTIRE form (S13): resolve the pages pack (the
-	 * stage-9 default) and call `preflight( get_current_user_id() )`. On a
-	 * WP_Error render the notice — with a link to Agent Capability Packs — and
-	 * RENDER NO FORM. SenroFlux never auto-binds, so an unbound user must go
-	 * bind, not start.
+	 * Preflight is PER PACK, not per screen. The old code preflighted `pages`
+	 * and then offered EVERY registered pack in the `<select>`, so a user bound
+	 * to `pages` could pick an unbound pack and only discover it at `start()` —
+	 * and a user unbound to `pages` was blocked from packs they COULD run.
+	 *
+	 * Now every registered pack is preflighted and its state is shown in the
+	 * select: a blocked pack renders as a `disabled` option carrying the reason,
+	 * and a notice lists the blocked packs with a link to Agent Capability
+	 * Packs. If EVERY pack is blocked the form is not rendered at all — the S13
+	 * "preflight blocks" rule, evaluated over what the user can actually run.
+	 * SenroFlux never auto-binds; `start()` re-runs the chosen pack's preflight
+	 * regardless (fail closed).
 	 */
 	private function renderNewRunForm(): void {
 		$registry = PackRegistry::fromFilters();
+		$packs    = $registry->all();
 
-		// Preflight the DEFAULT pack (the pages pack); if it is missing there is
-		// nothing to gate (stage 9 always ships it).
-		$gate_pack = $registry->get( 'pages' );
-		if ( null === $gate_pack ) {
-			$first = $registry->all();
-			if ( array() !== $first ) {
-				$gate_pack = reset( $first );
-			}
-		}
-
-		if ( null !== $gate_pack ) {
-			$preflight = $gate_pack->preflight( get_current_user_id() );
-			if ( is_wp_error( $preflight ) ) {
-				$this->renderPreflightNotice( $preflight );
-
-				return;
-			}
-		}
-
-		$packs = $registry->all();
 		if ( array() === $packs ) {
 			echo '<div class="notice notice-error"><p>' . esc_html__( 'No capability pack is registered, so no run can be started from here.', 'senroflux' ) . '</p></div>';
 
 			return;
+		}
+
+		$user_id = get_current_user_id();
+
+		/** @var array<string,true|WP_Error> $states pack name => preflight outcome. */
+		$states  = array();
+		$blocked = array();
+		foreach ( $packs as $pack ) {
+			$state                   = $pack->preflight( $user_id );
+			$states[ $pack->name() ] = $state;
+			if ( is_wp_error( $state ) ) {
+				$blocked[ $pack->name() ] = $state;
+			}
+		}
+
+		// Every pack blocked → no form at all (S13), with the first reason shown.
+		if ( count( $blocked ) === count( $states ) ) {
+			$this->renderPreflightNotice( $this->firstPreflightError( $states ) );
+
+			return;
+		}
+
+		// Some packs blocked → the form stands, but say which are unavailable.
+		if ( array() !== $blocked ) {
+			$this->renderPartialPreflightNotice( $blocked );
 		}
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="senroflux-new-run-form">';
@@ -502,11 +643,29 @@ class RunsScreen {
 		echo '<p>';
 		echo '<label for="senroflux-pack">' . esc_html__( 'Capability pack', 'senroflux' ) . '</label>';
 		echo '<select id="senroflux-pack" name="pack">';
+
+		$selected_done = false;
 		foreach ( $packs as $pack ) {
-			$label = $this->packLabel( $pack );
+			$name         = $pack->name();
+			$state        = $states[ $name ] ?? true;
+			$blocked_here = is_wp_error( $state );
+			$label        = $this->packLabel( $pack );
+
+			if ( $blocked_here ) {
+				/* translators: 1: pack label, 2: the reason the pack cannot be used. */
+				$label = sprintf( __( '%1$s — unavailable: %2$s', 'senroflux' ), $label, $state->get_error_message() );
+			}
+
+			// The first RUNNABLE pack is preselected, so the default choice is
+			// never one the user cannot start.
+			$select_this   = ( ! $blocked_here && ! $selected_done );
+			$selected_done = $selected_done || $select_this;
+
 			printf(
-				'<option value="%s">%s</option>',
-				esc_attr( $pack->name() ),
+				'<option value="%s"%s%s>%s</option>',
+				esc_attr( $name ),
+				$blocked_here ? ' disabled' : '',
+				$select_this ? ' selected' : '',
 				esc_html( $label )
 			);
 		}
@@ -542,6 +701,58 @@ class RunsScreen {
 		echo '</form>';
 	}
 
+	/**
+	 * The first WP_Error in a preflight state map (there is always one when
+	 * this is called; the `true` fallback keeps the return type honest).
+	 *
+	 * @param array<string,true|WP_Error> $states pack name => preflight outcome.
+	 */
+	private function firstPreflightError( array $states ): WP_Error {
+		// Prefer the default `pages` pack's reason when it is one of the failures.
+		if ( isset( $states['pages'] ) && is_wp_error( $states['pages'] ) ) {
+			return $states['pages'];
+		}
+
+		foreach ( $states as $state ) {
+			if ( is_wp_error( $state ) ) {
+				return $state;
+			}
+		}
+
+		return new WP_Error(
+			'pack_unbound',
+			__( 'No capability pack is available to you.', 'senroflux' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * A warning notice naming the packs this user cannot currently start.
+	 *
+	 * @param array<string,WP_Error> $blocked pack name => reason.
+	 */
+	private function renderPartialPreflightNotice( array $blocked ): void {
+		$packs_url = admin_url( 'tools.php?page=agent-safety-packs' );
+
+		echo '<div class="notice notice-warning"><p>';
+		echo esc_html__( 'Some capability packs are unavailable to you and cannot be selected:', 'senroflux' );
+		echo '</p><ul class="senroflux-blocked-packs">';
+
+		foreach ( $blocked as $name => $error ) {
+			printf(
+				'<li><code>%s</code> — %s</li>',
+				esc_html( (string) $name ),
+				esc_html( $error->get_error_message() )
+			);
+		}
+
+		printf(
+			'</ul><p><a href="%s">%s</a></p></div>',
+			esc_url( $packs_url ),
+			esc_html__( 'Open Agent Capability Packs', 'senroflux' )
+		);
+	}
+
 	/** The preflight notice: message + a link to Agent Capability Packs. */
 	private function renderPreflightNotice( WP_Error $error ): void {
 		// `agent-safety-packs` is registered via add_management_page in the
@@ -554,6 +765,34 @@ class RunsScreen {
 			esc_url( $packs_url ),
 			esc_html__( 'Open Agent Capability Packs', 'senroflux' )
 		);
+	}
+
+	/**
+	 * status value => translated label (S15 harness chrome).
+	 *
+	 * The enum VALUES stay machine-stable everywhere they matter (the CSS
+	 * class, `data-status`, the poll payload); only what a human READS is
+	 * translated. The same map is handed to `runs.js` so a JS-swapped badge
+	 * reads identically to a server-rendered one.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function statusLabels(): array {
+		return array(
+			RunStatus::Pending->value          => __( 'pending', 'senroflux' ),
+			RunStatus::Running->value          => __( 'running', 'senroflux' ),
+			RunStatus::AwaitingApproval->value => __( 'awaiting approval', 'senroflux' ),
+			RunStatus::AwaitingUser->value     => __( 'awaiting your answer', 'senroflux' ),
+			RunStatus::AwaitingPlan->value     => __( 'awaiting plan decision', 'senroflux' ),
+			RunStatus::Completed->value        => __( 'completed', 'senroflux' ),
+			RunStatus::Failed->value           => __( 'failed', 'senroflux' ),
+			RunStatus::Cancelled->value        => __( 'cancelled', 'senroflux' ),
+		);
+	}
+
+	/** One translated status label; an unknown value falls back to itself. */
+	public static function statusLabel( string $status ): string {
+		return self::statusLabels()[ $status ] ?? $status;
 	}
 
 	/** A human pack label for the <select> (name => label). */
@@ -600,10 +839,12 @@ class RunsScreen {
 		echo '<div id="senroflux-live-status" class="senroflux-sr-only" aria-live="polite"></div>';
 
 		printf(
-			'<h2>%s <span id="senroflux-status-badge" class="senroflux-badge senroflux-badge-%s">%s</span></h2>',
+			'<h2>%s <span id="senroflux-status-badge" class="senroflux-badge senroflux-badge-%s" data-status="%s">%s</span></h2>',
 			esc_html( (string) $run['goal'] ),
 			esc_attr( (string) $run['status'] ),
-			esc_html( (string) $run['status'] )
+			esc_attr( (string) $run['status'] ),
+			// Chrome: translated label; the machine value lives in data-status.
+			esc_html( self::statusLabel( (string) $run['status'] ) )
 		);
 
 		$this->renderRunErrorFlash();
@@ -645,10 +886,14 @@ class RunsScreen {
 				admin_url( 'admin-post.php?action=senroflux_cancel_run&run_id=' . $run_id ),
 				'senroflux_cancel_' . $run_id
 			);
+			// NO inline onclick: `assets/runs.js` already confirms this link
+			// (one prompt, not two), and an inline handler would be broken by
+			// any translation of "Cancel this run?" containing an apostrophe.
+			// Without JS the link is followed directly — `handleCancel()`
+			// verifies the nonce and the capability server-side.
 			printf(
-				'<p><a class="button button-secondary" href="%s" onclick="return confirm(\'%s\');">%s</a></p>',
+				'<p><a class="button button-secondary" href="%s">%s</a></p>',
 				esc_url( $cancel_url ),
-				esc_attr__( 'Cancel this run?', 'senroflux' ),
 				esc_html__( 'Cancel run', 'senroflux' )
 			);
 		}
@@ -718,14 +963,23 @@ class RunsScreen {
 		wp_nonce_field( 'senroflux_answer_' . (int) $run['id'] );
 
 		// The rationale describes the question; link it via aria-describedby (S15).
-		$described_by = ( '' !== $rationale ) ? ' aria-describedby="senroflux-rationale"' : '';
-		echo '<fieldset' . esc_attr( $described_by ) . '>';
+		// Escape the VALUE, never the whole attribute fragment: escaping the
+		// fragment turns the quotes into entities and the association is lost.
+		if ( '' !== $rationale ) {
+			printf( '<fieldset aria-describedby="%s">', esc_attr( self::RATIONALE_ID ) );
+		} else {
+			echo '<fieldset>';
+		}
 		// CONTENT BOUNDARY — the legend is the question text, verbatim (S15).
 		echo '<legend>' . esc_html( $text ) . '</legend>';
 
 		if ( '' !== $rationale ) {
 			// CONTENT BOUNDARY — rationale is MODEL-AUTHORED prose (S15), verbatim.
-			printf( '<p id="senroflux-rationale" class="senroflux-rationale">%s</p>', esc_html( $rationale ) );
+			printf(
+				'<p id="%s" class="senroflux-rationale">%s</p>',
+				esc_attr( self::RATIONALE_ID ),
+				esc_html( $rationale )
+			);
 		}
 
 		if ( array() !== $choices ) {
@@ -971,8 +1225,17 @@ class RunsScreen {
 			return;
 		}
 
+		// Chrome again (S15): translated headers, not raw English constants.
+		$columns = array(
+			__( 'Type', 'senroflux' ),
+			__( 'Title', 'senroflux' ),
+			__( 'Status', 'senroflux' ),
+			__( 'Verified', 'senroflux' ),
+			__( 'Links', 'senroflux' ),
+		);
+
 		echo '<table class="widefat striped senroflux-report"><thead><tr>';
-		foreach ( array( 'Type', 'Title', 'Status', 'Verified', 'Links' ) as $col ) {
+		foreach ( $columns as $col ) {
 			echo '<th>' . esc_html( $col ) . '</th>';
 		}
 		echo '</tr></thead><tbody>';

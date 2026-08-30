@@ -82,7 +82,8 @@ final class Tail {
 	/**
 	 * The human-readable language name for a locale (S15). Best-effort: an
 	 * unknown locale renders as-is. Filterable via `senroflux_language_name`.
-	composer.json  * @param string $locale Locale code, e.g. 'en_US'.
+	 *
+	 * @param string $locale Locale code, e.g. 'en_US'.
 	 */
 	public static function languageName( string $locale ): ?string {
 		$names = array(
@@ -95,7 +96,8 @@ final class Tail {
 
 		/**
 		 * Filters the locale => language-name map for the tail line.
-		composer.json  * @param array<string,string> $names Known locale names.
+		 *
+		 * @param array<string,string> $names Known locale names.
 		 */
 		$names = apply_filters( 'senroflux_language_name', $names );
 

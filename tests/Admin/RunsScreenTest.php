@@ -14,7 +14,9 @@ use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Admin\RunsScreen;
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Approval\ApprovalBridge;
+use Specflux\SenroFlux\Http\ConsumerPolicy;
 use Specflux\SenroFlux\Packs\Pack;
+use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\WpdbRunStore;
 use Specflux\SenroFlux\Tools\ToolExecutor;
@@ -36,12 +38,14 @@ final class RunsScreenTest extends TestCase {
 		remove_all_filters( 'senroflux_runs_capability' );
 		remove_all_filters( 'senroflux_packs' );
 		remove_all_filters( 'senroflux_can_tick' );
+		remove_all_filters( ConsumerPolicy::FILTER );
 	}
 
 	protected function tearDown(): void {
 		remove_all_filters( 'senroflux_runs_capability' );
 		remove_all_filters( 'senroflux_packs' );
 		remove_all_filters( 'senroflux_can_tick' );
+		remove_all_filters( ConsumerPolicy::FILTER );
 	}
 
 	/**
@@ -49,12 +53,32 @@ final class RunsScreenTest extends TestCase {
 	 *
 	 * @param bool|WP_Error $preflight The preflight outcome to return.
 	 */
-	private function fakePack( bool|WP_Error $preflight ): Pack {
+	private function fakePack( bool|WP_Error $preflight, string $name = 'pages' ): Pack {
 		$pack = new class() extends Pack {
 			public bool|WP_Error $preflightResult = true;
+			public string $packName               = 'pages';
+
+			/** @var list<string> */
+			public array $allow = array( 'senroflux/read-content' );
 
 			public function name(): string {
-				return 'pages';
+				return $this->packName;
+			}
+
+			/** @return list<string> */
+			public function allowList(): array {
+				return $this->allow;
+			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array( 'read' => 0 );
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
 			}
 
 			public function preflight( int $user_id ): true|WP_Error {
@@ -65,20 +89,34 @@ final class RunsScreenTest extends TestCase {
 		};
 
 		$pack->preflightResult = $preflight;
+		$pack->packName        = $name;
 
 		return $pack;
 	}
 
-	private function registerFakePack( bool|WP_Error $preflight ): Pack {
-		$pack = $this->fakePack( $preflight );
+	private function registerFakePack( bool|WP_Error $preflight, string $name = 'pages' ): Pack {
+		$pack = $this->fakePack( $preflight, $name );
 		add_filter(
 			'senroflux_packs',
-			static fn ( array $packs ): array => $packs + array( 'pages' => $pack ),
+			static fn ( array $packs ): array => $packs + array( $name => $pack ),
 			10,
 			1
 		);
 
 		return $pack;
+	}
+
+	/**
+	 * Register `senroflux-admin` in the consumer map the way `register()` does
+	 * in production, so `handleNewRun()` can resolve its policy (S13).
+	 */
+	private function registerAdminConsumer(): void {
+		add_filter(
+			ConsumerPolicy::FILTER,
+			array( new RunsScreen(), 'registerAdminConsumer' ),
+			10,
+			1
+		);
 	}
 
 	// ------------------------------------------------------------------
@@ -125,6 +163,7 @@ final class RunsScreenTest extends TestCase {
 		Plugin::set_dependency_probe( true );
 		$this->seedRunnerGraph();
 		$this->registerFakePack( true );
+		$this->registerAdminConsumer();
 
 		$_POST = array(
 			'goal'      => 'Publish the about page',
@@ -274,6 +313,149 @@ final class RunsScreenTest extends TestCase {
 	}
 
 	// ------------------------------------------------------------------
+	// handleApprovalDecision (S5/S6): shape, delegation, and the error the
+	// redirect must now carry
+	// ------------------------------------------------------------------
+
+	public function test_handle_approval_decision_rejects_an_action_outside_the_park_shape(): void {
+		$screen = $this->recordingScreen();
+
+		$_POST = array(
+			'run_id'                    => '7',
+			'step_count'                => '0',
+			'senroflux_approval_action' => 'maybe',
+		);
+
+		$screen->handleApprovalDecision();
+
+		$this->assertSame( 7, $screen->redirectedRunId );
+		$this->assertSame( 'resume_mismatch', $screen->redirectedError );
+	}
+
+	public function test_handle_approval_decision_surfaces_a_failed_tick_in_the_redirect(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+
+		$screen = $this->recordingScreen();
+
+		$_POST = array(
+			'run_id'                    => '404',
+			'step_count'                => '0',
+			'senroflux_approval_action' => 'approve',
+		);
+
+		$screen->handleApprovalDecision();
+
+		// The handler used to DISCARD the tick result, so this redirected back
+		// to an unchanged card with no explanation at all.
+		$this->assertSame( 404, $screen->redirectedRunId );
+		$this->assertNotNull( $screen->redirectedError, 'a failed tick must surface an error code' );
+		$this->assertSame( 'senroflux_not_found', $screen->redirectedError );
+	}
+
+	public function test_handle_approval_decision_without_the_capability_redirects_with_forbidden(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$GLOBALS['senroflux_test_user_caps'] = array( 'read' => true );
+
+		$screen = $this->recordingScreen();
+
+		$_POST = array(
+			'run_id'                    => '1',
+			'step_count'                => '0',
+			'senroflux_approval_action' => 'approve',
+		);
+
+		$screen->handleApprovalDecision();
+
+		$this->assertSame( 'senroflux_forbidden', $screen->redirectedError );
+	}
+
+	// ------------------------------------------------------------------
+	// S13 one start path: the admin consumer + the policy seam
+	// ------------------------------------------------------------------
+
+	public function test_register_admin_consumer_only_registers_for_capability_holders(): void {
+		$this->registerFakePack( true );
+		$screen = new RunsScreen();
+
+		$this->assertArrayHasKey( 'senroflux-admin', $screen->registerAdminConsumer( array() ) );
+
+		$GLOBALS['senroflux_test_user_caps'] = array( 'read' => true );
+		$this->assertArrayNotHasKey( 'senroflux-admin', $screen->registerAdminConsumer( array() ) );
+	}
+
+	public function test_the_admin_consumer_carries_the_pack_allow_list_and_the_default_ceiling(): void {
+		$this->registerFakePack( true );
+
+		$entry = ( new RunsScreen() )->registerAdminConsumer( array() )['senroflux-admin'];
+
+		$this->assertSame( array( 'senroflux/read-content' ), $entry['allow'] );
+		$this->assertSame( Budget::defaults(), $entry['budget'] );
+	}
+
+	public function test_handle_new_run_is_refused_when_the_admin_consumer_is_not_registered(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+		// Deliberately DO NOT register the consumer: the start must fail at the
+		// policy seam rather than sliding past it.
+
+		$screen = $this->recordingScreen();
+
+		$_POST = array(
+			'goal' => 'Publish the about page',
+			'pack' => 'pages',
+		);
+
+		$screen->handleNewRun();
+
+		$this->assertSame( 'senroflux_unknown_consumer', $screen->redirectedListError );
+	}
+
+	// ------------------------------------------------------------------
+	// S13 preflight is PER PACK
+	// ------------------------------------------------------------------
+
+	public function test_a_blocked_pack_is_disabled_while_a_runnable_pack_stays_selectable(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+		$this->registerFakePack(
+			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
+			'widgets'
+		);
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		// The form still stands, because ONE pack is runnable…
+		$this->assertStringContainsString( 'name="goal"', $html );
+		$this->assertStringContainsString( '<option value="pages" selected>', $html );
+		// …and the blocked one is visible but unselectable, with its reason.
+		$this->assertStringContainsString( '<option value="widgets" disabled>', $html );
+		$this->assertStringContainsString( 'Bind `user:1` to the widgets pack.', $html );
+	}
+
+	public function test_every_pack_blocked_renders_the_notice_and_no_form(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( new WP_Error( 'pack_unbound', 'Bind `user:1` to the pages pack.', array( 'status' => 400 ) ) );
+		$this->registerFakePack(
+			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
+			'widgets'
+		);
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertStringNotContainsString( 'name="goal"', $html );
+		$this->assertStringContainsString( 'agent-safety-packs', $html );
+	}
+
+	// ------------------------------------------------------------------
 	// Capability filter + wiring
 	// ------------------------------------------------------------------
 
@@ -299,6 +481,29 @@ final class RunsScreenTest extends TestCase {
 		$this->assertContains( 'admin_post_senroflux_answer', $hooks );
 		$this->assertContains( 'admin_post_senroflux_plan_decision', $hooks );
 		$this->assertContains( 'admin_post_senroflux_approval_decision', $hooks );
+	}
+
+	/**
+	 * A screen that records where it redirected instead of exiting.
+	 */
+	private function recordingScreen(): RunsScreen {
+		return new class() extends RunsScreen {
+			public string $redirectedTo         = '';
+			public ?int $redirectedRunId        = null;
+			public ?string $redirectedError     = null;
+			public ?string $redirectedListError = null;
+
+			protected function redirectBack( int $run_id, ?string $error_code = null ): void {
+				$this->redirectedRunId = $run_id;
+				$this->redirectedError = $error_code;
+				$this->redirectedTo    = admin_url( 'tools.php?page=senroflux-runs&run_id=' . $run_id );
+			}
+
+			protected function redirectList( string $error_code ): void {
+				$this->redirectedListError = $error_code;
+				$this->redirectedTo        = admin_url( 'tools.php?page=senroflux-runs' );
+			}
+		};
 	}
 
 	// ------------------------------------------------------------------

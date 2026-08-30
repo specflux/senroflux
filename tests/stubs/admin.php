@@ -64,11 +64,38 @@ if ( ! function_exists( 'wp_create_nonce' ) ) {
 }
 
 if ( ! function_exists( 'remove_filter' ) ) {
-	/** Recording filter-removal shim. */
+	/**
+	 * Remove ONE callback, like WordPress does.
+	 *
+	 * This used to delegate to `remove_all_filters()`, which (a) returns void,
+	 * so the declared `bool` return raised a TypeError the moment any code
+	 * actually removed a filter, and (b) wiped EVERY callback on the hook —
+	 * including a test's own spy. Both made the scoped-allowance seams
+	 * (`senroflux_can_tick`) untestable.
+	 *
+	 * @param string $hook     Filter name.
+	 * @param mixed  $callback The exact callback to remove.
+	 * @param int    $priority The priority it was added at.
+	 */
 	function remove_filter( string $hook, $callback, int $priority = 10 ): bool {
-		unset( $priority );
+		$bucket = $GLOBALS['senroflux_test_filters'][ $hook ][ $priority ] ?? null;
+		if ( ! is_array( $bucket ) ) {
+			return false;
+		}
 
-		return remove_all_filters( $hook );
+		$removed = false;
+		foreach ( $bucket as $index => $entry ) {
+			if ( ( $entry[0] ?? null ) === $callback ) {
+				unset( $GLOBALS['senroflux_test_filters'][ $hook ][ $priority ][ $index ] );
+				$removed = true;
+			}
+		}
+
+		if ( array() === $GLOBALS['senroflux_test_filters'][ $hook ][ $priority ] ) {
+			unset( $GLOBALS['senroflux_test_filters'][ $hook ][ $priority ] );
+		}
+
+		return $removed;
 	}
 }
 
