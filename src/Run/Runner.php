@@ -63,6 +63,8 @@ final class Runner {
 		private readonly mixed $verb_resolver = null,
 		/** @var callable(Run):mixed|null Pack resolver (S8/S9): the run's pack descriptor, passed opaquely to SkillSet; absent = a direct-allow run. */
 		private readonly mixed $pack_resolver = null,
+		/** @var callable(Run,string):string|null Object-id key resolver (S12): which input/output key carries a verb's object id; absent = 'id'. */
+		private readonly mixed $object_id_key_resolver = null,
 	) {
 	}
 
@@ -296,7 +298,7 @@ final class Runner {
 				);
 			}
 
-			$new_steps[] = $this->appendToolResult( run_id: $run->id, call: $call, outcome: $outcome );
+			$new_steps[] = $this->appendToolResult( run: $run, call: $call, outcome: $outcome );
 		}
 
 		// Running again: the loop's crash-resume drains any REMAINING sibling
@@ -475,7 +477,7 @@ final class Runner {
 					return $this->park( $run, $new_steps, $call, $remaining, $outcome );
 				}
 
-				$new_steps[] = $this->appendToolResult( $run->id, $call, $outcome );
+				$new_steps[] = $this->appendToolResult( $run, $call, $outcome );
 				$run         = $this->refresh( $run );
 				// Errors/denials flow back to the model as error text; it decides.
 			}
@@ -536,10 +538,12 @@ final class Runner {
 	 * Append a tool_result step from an outcome; payload mirrors S5
 	 * normalization and carries the originating call id for crash-resume.
 	 *
+	 * @param Run                                     $run  The run (S12 needs its verb map).
 	 * @param array{id:string,name:string,args:mixed} $call Originating call.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendToolResult( int $run_id, array $call, ToolOutcome $outcome ): array {
+	private function appendToolResult( Run $run, array $call, ToolOutcome $outcome ): array {
+		$run_id   = $run->id;
 		$response = match ( $outcome->kind ) {
 			'result' => $outcome->output ?? array(),
 			default  => array( 'error' => (string) $outcome->errorMessage ),
@@ -570,7 +574,7 @@ final class Runner {
 		);
 
 		// S12: fold this successful result into the written-object set.
-		$this->trackObjects( $run_id, $call, $outcome, $seq );
+		$this->trackObjects( $run, $call, $outcome, $seq );
 
 		return array(
 			'seq'       => $seq,
@@ -939,12 +943,53 @@ final class Runner {
 			remaining_tokens: max( 0, $run->budget['max_tokens'] - $run->tokensIn - $run->tokensOut ),
 			// S7: remind the model after a refused write so it fixes course.
 			last_refusal: $this->lastRefusalCode( $run->id ),
+			// S12: the re-read nudge is a system step the model never sees —
+			// the tail is the only place it reaches the prompt at all.
+			verify_objects: $this->verifyObjectTitles( $run ),
 			// S15: the conversation language is fixed at start for the run's
 			// life; a different admin answering a park never switches it.
 			conversation_language: ( null !== $run->conversationLocale && '' !== $run->conversationLocale )
 				? Tail::languageName( $run->conversationLocale )
 				: null,
 		);
+	}
+
+	/**
+	 * S12: the outstanding written objects, named the way a human would name
+	 * them ("Pricing (42)"), for the tail's re-read line. Null when nothing is
+	 * outstanding, so the line is omitted entirely.
+	 *
+	 * The harness knows only opaque object ids; the human-readable name comes
+	 * from the same injectable lookup the report uses, and a lookup that fails
+	 * or knows nothing falls back to the bare id.
+	 *
+	 * @return list<string>|null
+	 */
+	private function verifyObjectTitles( Run $run ): ?array {
+		$objects = is_array( $run->objects ) ? $run->objects : array();
+		$ids     = Tracker::unverified( $objects );
+		if ( array() === $ids ) {
+			return null;
+		}
+
+		$lookup = is_callable( $this->post_lookup ) ? $this->post_lookup : Report::wpPostLookup();
+
+		$titles = array();
+		foreach ( $ids as $id ) {
+			$title = '';
+			try {
+				$resolved = $lookup( $id );
+				if ( is_array( $resolved ) && is_string( $resolved['title'] ?? null ) ) {
+					$title = $resolved['title'];
+				}
+			} catch ( \Throwable $e ) {
+				unset( $e ); // Fail soft: a nameless object is still named by id.
+			}
+
+			$titles[] = '' !== $title ? $title . ' (' . $id . ')' : $id;
+		}
+
+		return $titles;
 	}
 
 	/**
@@ -1906,8 +1951,7 @@ final class Runner {
 
 		// S9: a pack resolves the verb map for its own runs; direct-allow runs
 		// fall back to the site-wide senroflux_verb_map filter (stage 4 seam).
-		$pack_map = is_callable( $this->verb_map_resolver ) ? ( $this->verb_map_resolver )( $run ) : null;
-		$tier     = VerbTier::tierFor( $verb, is_array( $pack_map ) ? $pack_map : null, $run->id );
+		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
 
 		if ( $tier < VerbTier::TIER_1 ) {
 			return null; // Tier-0 reads are free before and inside the plan.
@@ -2172,40 +2216,100 @@ final class Runner {
 	/**
 	 * S12: fold one tool_result into the written-object set.
 	 *
-	 * A result output whose 'id' is a non-empty string|int records a WRITE
-	 * (re-opening verification); a call whose args carry an already-tracked
-	 * 'id' records a VERIFICATION (a read-back of that object). Both use the
-	 * appended step's seq. A missing/corrupt objects_json is fail-closed to an
-	 * empty set and never blocks the tool_result.
+	 * Scoped by the call's TIER, which is the only thing that makes the set a
+	 * record of CHANGES:
+	 *   - Tier ≥ 1 (a write): the returned object id opens a change and
+	 *     re-opens verification. A tier-0 read that happens to echo an id is
+	 *     not a change and must never appear in the report.
+	 *   - Tier 0 (a read): an already-tracked object id in the call's INPUT
+	 *     records the verification. Restricting this to reads is the point —
+	 *     accepting any successful call carrying the id would let the model
+	 *     attest to its own verification by passing the id to a write.
 	 *
+	 * The id key itself is resolved per verb ({@see $object_id_key_resolver}),
+	 * defaulting to `id`, so a pack whose read takes `post_id` still verifies
+	 * without the harness learning what a post is.
+	 *
+	 * A missing/corrupt objects_json is fail-closed to an empty set and never
+	 * blocks the tool_result.
+	 *
+	 * @param Run                                     $run     The run.
 	 * @param array{id:string,name:string,args:mixed} $call    Originating call.
 	 * @param ToolOutcome                             $outcome Tool outcome.
 	 */
-	private function trackObjects( int $run_id, array $call, ToolOutcome $outcome, int $seq ): void {
-		$current = $this->store->getRun( $run_id );
+	private function trackObjects( Run $run, array $call, ToolOutcome $outcome, int $seq ): void {
+		if ( 'result' !== $outcome->kind ) {
+			return;
+		}
+
+		$current = $this->store->getRun( $run->id );
 		$before  = ( null !== $current && is_array( $current->objects ) ) ? $current->objects : array();
 		$objects = $before;
 
-		if ( 'result' === $outcome->kind ) {
-			$output   = $outcome->output ?? array();
-			$write_id = $output['id'] ?? null;
-			if ( is_string( $write_id ) && '' !== $write_id ) {
-				$objects = Tracker::recordWrite( $objects, $write_id, $seq );
-			} elseif ( is_int( $write_id ) ) {
-				$objects = Tracker::recordWrite( $objects, (string) $write_id, $seq );
-			}
+		$verb = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
+		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
+		$key  = $this->objectIdKeyFor( $run, $verb );
 
-			$args   = $call['args'] ?? null;
-			$arg_id = ( is_array( $args ) && isset( $args['id'] ) ) ? $args['id'] : null;
-			$arg_id = is_int( $arg_id ) ? (string) $arg_id : $arg_id;
-			if ( is_string( $arg_id ) && '' !== $arg_id && array_key_exists( $arg_id, $objects ) ) {
-				$objects = Tracker::recordVerification( $objects, $arg_id, $seq );
+		if ( $tier >= VerbTier::TIER_1 ) {
+			$write_id = self::objectIdIn( $outcome->output ?? array(), $key );
+			if ( null !== $write_id ) {
+				$objects = Tracker::recordWrite( $objects, $write_id, $seq );
+			}
+		} elseif ( VerbTier::TIER_0 === $tier ) {
+			$args    = $call['args'] ?? null;
+			$read_id = is_array( $args ) ? self::objectIdIn( $args, $key ) : null;
+			if ( null !== $read_id && array_key_exists( $read_id, $objects ) ) {
+				$objects = Tracker::recordVerification( $objects, $read_id, $seq );
 			}
 		}
 
 		if ( $objects !== $before ) {
-			$this->store->updateRun( $run_id, array( 'objects_json' => $objects ) );
+			$this->store->updateRun( $run->id, array( 'objects_json' => $objects ) );
 		}
+	}
+
+	/**
+	 * The object-id key for one verb: whatever the injected resolver answers,
+	 * else S12's default `id`. A resolver that misbehaves falls back to `id`
+	 * rather than tracking nothing.
+	 */
+	private function objectIdKeyFor( Run $run, string $verb ): string {
+		if ( ! is_callable( $this->object_id_key_resolver ) ) {
+			return 'id';
+		}
+
+		$key = ( $this->object_id_key_resolver )( $run, $verb );
+
+		return is_string( $key ) && '' !== $key ? $key : 'id';
+	}
+
+	/**
+	 * The object id at `$key` in a result output or a call's args, normalised
+	 * to a non-empty string; null when absent or unusable.
+	 *
+	 * @param array<string,mixed> $source Output or args map.
+	 */
+	private static function objectIdIn( array $source, string $key ): ?string {
+		$value = $source[ $key ] ?? null;
+
+		if ( is_int( $value ) ) {
+			return (string) $value;
+		}
+
+		return ( is_string( $value ) && '' !== $value ) ? $value : null;
+	}
+
+	/**
+	 * The run's pack verb map, or null when it has none (direct-allow: the
+	 * site-wide `senroflux_verb_map` filter answers instead).
+	 *
+	 * @return array<string,int>|null
+	 */
+	private function packVerbMap( Run $run ): ?array {
+		$pack_map = is_callable( $this->verb_map_resolver ) ? ( $this->verb_map_resolver )( $run ) : null;
+
+		/** @var array<string,int>|null */
+		return is_array( $pack_map ) ? $pack_map : null;
 	}
 
 	/**

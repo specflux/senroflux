@@ -296,6 +296,22 @@ abstract class Pack {
 	}
 
 	/**
+	 * S12: the input/output key carrying an object's id for one PACK VERB.
+	 *
+	 * The harness tracks written objects by an opaque id and verifies them
+	 * when a READ call targets that id — but which argument carries the id is
+	 * domain knowledge (`id`, `post_id`, `page_id`). The base answers S12's
+	 * default; a pack whose read ability names it differently overrides.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdKey( string $verb ): string {
+		unset( $verb );
+
+		return 'id';
+	}
+
+	/**
 	 * PACK verb => tier (S10). Abstract on purpose: an empty default would let a
 	 * pack ship with no map at all and rely on VerbTier's fail-closed tier 2 for
 	 * every call, which reads as governance but is really an unfenced accident.

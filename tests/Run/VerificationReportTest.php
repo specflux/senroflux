@@ -1,11 +1,12 @@
 <?php
 /**
  * Runner::tick() tests for the S12 written-object set, the verify nudge, and
- * the harness-built terminal report (stage-5 draft).
+ * the harness-built terminal report.
  *
- * Unlike PlanParkTest (S7), the verb map marks BOTH read and write as tier 0,
- * so a write executes WITHOUT the plan fence — the point here is the S12
- * write/verify/report mechanics, not the fence.
+ * S12 scopes the written-object set to Tier >= 1 writes, so the write verb here
+ * really is tier 1 and every run seeds an ACCEPTED plan covering it — the S7
+ * fence is not what these tests are about, but a tier-0 write would make them
+ * test nothing.
  *
  * @package SenroFlux
  */
@@ -27,6 +28,7 @@ use Specflux\SenroFlux\Tools\VerbTier;
 use SenroFlux_Test_Fake_Ability;
 use WordPress\AiClient\Messages\DTO\MessagePart;
 use WordPress\AiClient\Messages\DTO\ModelMessage;
+use WordPress\AiClient\Messages\DTO\UserMessage;
 use WordPress\AiClient\Tools\DTO\FunctionCall;
 use wpdb;
 
@@ -63,15 +65,28 @@ final class VerificationReportTest extends TestCase {
 				permission_result: true,
 				execute_result: array( 'ok' => true )
 			),
+			// A tier-1 call that confirms nothing: the model may pass the id
+			// but it is not a read-back.
+			'agsafe-smoke/touch' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/touch',
+				permission_result: true,
+				execute_result: array( 'ok' => true )
+			),
+			// A tier-0 read that happens to echo an id of its own.
+			'agsafe-smoke/list'  => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/list',
+				permission_result: true,
+				execute_result: array( 'id' => 77 )
+			),
 		);
 
-		// S12 needs the write to EXECUTE (no plan fence), so both verbs are
-		// tier 0 here — unlike PlanParkTest where write is tier 1.
 		add_filter(
 			'senroflux_verb_map',
 			static fn ( array $map ): array => $map + array(
 				'agsafe-smoke/read'  => VerbTier::TIER_0,
-				'agsafe-smoke/write' => VerbTier::TIER_0,
+				'agsafe-smoke/list'  => VerbTier::TIER_0,
+				'agsafe-smoke/write' => VerbTier::TIER_1,
+				'agsafe-smoke/touch' => VerbTier::TIER_1,
 			),
 			10,
 			1
@@ -105,13 +120,47 @@ final class VerificationReportTest extends TestCase {
 	 * @param array<string,int> $budget_override Keys to merge over Budget::defaults().
 	 */
 	private function createRun( array $budget_override = array() ): int {
-		return $this->store->createRun(
+		$run_id = $this->store->createRun(
 			1,
 			'test-consumer',
 			'Clear the cache',
 			array( 'agsafe-smoke/*' ),
 			array_merge( Budget::defaults(), $budget_override )
 		);
+
+		// The goal step the loop would seed itself, then an ACCEPTED plan
+		// covering the tier-1 verbs (S7) so the writes below actually execute.
+		$this->store->appendStep(
+			$run_id,
+			StepKind::User,
+			( new UserMessage( array( new MessagePart( 'Clear the cache' ) ) ) )->toArray()
+		);
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'Write the page',
+				'steps'       => array(
+					array(
+						'text'  => 'Write it',
+						'verbs' => array( 'agsafe-smoke/write', 'agsafe-smoke/touch' ),
+						'tier'  => VerbTier::TIER_1,
+					),
+				),
+				'assumptions' => array(),
+			),
+			'senroflux/propose-plan',
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		return $run_id;
+	}
+
+	/** The run's current step_count — the optimistic-lock echo for tick(). */
+	private function stepCount( int $run_id ): int {
+		return $this->store->getRun( $run_id )->stepCount;
 	}
 
 	private static function textTurn( string $text ): ModelTurn {
@@ -157,7 +206,7 @@ final class VerificationReportTest extends TestCase {
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
-		$result = $this->runner->tick( $run_id, 0, null );
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertIsArray( $result );
 		$this->assertNotSame( 'completed', $result['run']['status'], 'a first finish with an unverified write stays running' );
@@ -166,7 +215,7 @@ final class VerificationReportTest extends TestCase {
 		$this->assertNotNull( $run );
 		$this->assertNotNull( $run->objects, 'objects_json is recorded after a write' );
 		$this->assertArrayHasKey( '42', $run->objects );
-		$this->assertSame( 3, $run->objects['42']['last_write_seq'], 'user(1)+model(2)+tool_result(3)' );
+		$this->assertSame( 4, $run->objects['42']['last_write_seq'], 'user(1)+plan(2)+model(3)+tool_result(4)' );
 		$this->assertNull( $run->objects['42']['verified_seq'], 'a new write resets verified_seq to null' );
 
 		// EXACTLY ONE nudge is appended this tick.
@@ -187,13 +236,12 @@ final class VerificationReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
-		$first                   = $this->runner->tick( $run_id, 0, null );
+		$first                   = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 		$this->assertNotSame( 'completed', $first['run']['status'] );
 		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
 
 		$this->gateway->script[] = self::textTurn( 'Done.' );
-		$before                  = $this->store->getRun( $run_id )->stepCount;
-		$second                  = $this->runner->tick( $run_id, $before, null );
+		$second                  = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertIsArray( $second );
 		$this->assertSame( 'completed', $second['run']['status'], 'the second finish attempt completes anyway' );
@@ -221,7 +269,7 @@ final class VerificationReportTest extends TestCase {
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
-		$result = $this->runner->tick( $run_id, 0, null );
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'], 'a verification read lets the finish complete in the same tick' );
@@ -229,7 +277,7 @@ final class VerificationReportTest extends TestCase {
 		$run = $this->store->getRun( $run_id );
 		$this->assertNotNull( $run );
 		$this->assertNotNull( $run->objects );
-		$this->assertSame( 5, $run->objects['42']['verified_seq'] ?? null, 'read-back tool_result seq' );
+		$this->assertSame( 6, $run->objects['42']['verified_seq'] ?? null, 'read-back tool_result seq' );
 
 		$report = $result['ui']['report'] ?? array();
 		$this->assertSame( 'Done.', $report['summary'] ?? null );
@@ -249,12 +297,11 @@ final class VerificationReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'https://model.example/evil' );
-		$first                   = $this->runner->tick( $run_id, 0, null );
+		$first                   = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 		$this->assertNotSame( 'completed', $first['run']['status'] );
 
 		$this->gateway->script[] = self::textTurn( 'https://model.example/evil' );
-		$before                  = $this->store->getRun( $run_id )->stepCount;
-		$final                   = $this->runner->tick( $run_id, $before, null );
+		$final                   = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$report = $final['ui']['report'] ?? array();
 		$this->assertSame( 'https://model.example/evil', $report['summary'] ?? null, 'summary IS the model text' );
@@ -278,7 +325,7 @@ final class VerificationReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
 		);
 
-		$result = $this->runner->tick( $run_id, 0, null );
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'failed', $result['run']['status'] );
@@ -288,6 +335,126 @@ final class VerificationReportTest extends TestCase {
 		$this->assertSame( 'Writing the page.', $report['summary'] ?? null, 'a partial report keeps the model prose' );
 		$this->assertCount( 1, $report['changes'] ?? array() );
 		$this->assertFalse( $report['changes'][0]['verified'] ?? true );
+	}
+
+	// ------------------------------------------------------------------
+	// (g) a tier-0 read is not a change, however id-shaped its result
+	// ------------------------------------------------------------------
+
+	public function test_g_a_tier_0_read_returning_an_id_is_not_a_change(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Listing.' ),
+			new MessagePart( new FunctionCall( 'call_l', 'wpab__agsafe-smoke__list', array() ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'], 'nothing was written, so nothing needs re-reading' );
+
+		$run = $this->store->getRun( $run_id );
+		$this->assertNotNull( $run );
+		$this->assertSame( array(), $run->objects ?? array(), 'a tier-0 read never opens a change' );
+		$this->assertSame( array(), $result['ui']['report']['changes'] ?? array() );
+		$this->assertCount( 0, $this->verifyNudges( $run_id ) );
+	}
+
+	// ------------------------------------------------------------------
+	// (h) verification is a READ, not the model passing the id to a write
+	// ------------------------------------------------------------------
+
+	public function test_h_a_tier_1_call_carrying_the_id_does_not_verify_it(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		// A successful tier-1 call whose args carry the id: model-attestable
+		// "verification" the harness must refuse to count.
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Touching it.' ),
+			new MessagePart( new FunctionCall( 'call_t', 'wpab__agsafe-smoke__touch', array( 'id' => 42 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertNotSame( 'completed', $result['run']['status'], 'the object is still unverified' );
+
+		$run = $this->store->getRun( $run_id );
+		$this->assertNotNull( $run );
+		$this->assertArrayHasKey( '42', $run->objects ?? array() );
+		$this->assertNull( $run->objects['42']['verified_seq'], 'only a read-role call verifies' );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
+	}
+
+	// ------------------------------------------------------------------
+	// (i) the object-id key is resolvable per verb (a post_id read counts)
+	// ------------------------------------------------------------------
+
+	public function test_i_a_read_verifies_through_the_resolved_object_id_key(): void {
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			$this->bridge,
+			self::lookup(),
+			null,
+			null,
+			null,
+			// The pack's read ability names the id `post_id`; the write still
+			// returns plain `id`.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb ): string {
+				unset( $run );
+
+				return 'agsafe-smoke/read' === $verb ? 'post_id' : 'id';
+			}
+		);
+
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Reading it back.' ),
+			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array( 'post_id' => 42 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'] );
+		$this->assertSame( 6, $this->store->getRun( $run_id )->objects['42']['verified_seq'] ?? null );
+		$this->assertTrue( $result['ui']['report']['changes'][0]['verified'] ?? false );
+	}
+
+	// ------------------------------------------------------------------
+	// (j) the nudge reaches the MODEL, through the tail, on the next tick
+	// ------------------------------------------------------------------
+
+	public function test_j_the_next_tick_tells_the_model_what_to_re_read(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		// One tick can drive several model calls; the nudged tick's instruction
+		// is the LAST one the gateway saw.
+		$nudged = (string) end( $this->gateway->systemInstructions );
+		$this->assertStringContainsString( 'Before finishing, re-read:', $nudged );
+		$this->assertStringContainsString( 'The draft for 42 (42)', $nudged, 'named by title, not by bare id' );
 	}
 
 	// ------------------------------------------------------------------

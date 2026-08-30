@@ -622,7 +622,14 @@ final class Plugin {
 			// S8: the pack whose skills ride every tick's instruction. The
 			// Runner passes it straight to SkillSet without knowing the type —
 			// the pack seam stays a composition-root concern.
-			static fn ( \Specflux\SenroFlux\Run\Run $run ): ?\Specflux\SenroFlux\Packs\Pack => self::pack_for_run( $run )
+			static fn ( \Specflux\SenroFlux\Run\Run $run ): ?\Specflux\SenroFlux\Packs\Pack => self::pack_for_run( $run ),
+			// S12: which argument carries an object's id is the pack's
+			// knowledge; the harness only knows the id is opaque.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb ): string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->objectIdKey( $verb ) : 'id';
+			}
 		);
 
 		return $this->runner;
