@@ -59,6 +59,8 @@ final class Runner {
 		private readonly mixed $post_lookup = null,
 		/** @var callable(Run):(array<string,int>|null)|null Verb-map resolver (S9): a pack maps verb => tier; null return = site-wide filter seam. */
 		private readonly mixed $verb_map_resolver = null,
+		/** @var callable(Run,string,array<string,mixed>):string|null Verb resolver (S9): ability + args => verb; absent = the ability name IS the verb. */
+		private readonly mixed $verb_resolver = null,
 	) {
 	}
 
@@ -1833,24 +1835,31 @@ final class Runner {
 	/**
 	 * S7 fence: refuse (return a code) or allow (return null) one ability call.
 	 *
-	 * The call's verb is the ABILITY NAME at stage 4 (a direct-allow run has no
-	 * pack, so its verbs ARE ability names — S7). Its tier comes from Agent
-	 * Safety's classifier via {@see VerbTier}, never from the model. Tier-0
-	 * reads are free before the plan; a Tier-1+ call needs an accepted plan that
-	 * contains the verb.
+	 * A call is fenced by its VERB, and the verb is not always the ability name:
+	 * one ability can span several verbs of different tiers depending on its
+	 * arguments. Resolving ability + args => verb is domain knowledge, so it
+	 * arrives as an injected resolver ({@see $verb_resolver}) rather than
+	 * anything this file understands. With no resolver — a direct-allow run,
+	 * which has no pack — the ability name IS the verb (S9).
+	 *
+	 * The tier then comes from {@see VerbTier} against the run's verb map,
+	 * never from the model. Tier-0 reads are free before the plan; a Tier-1+
+	 * call needs an accepted plan that contains the verb.
 	 *
 	 * @param ToolRegistry                             $registry The run's tool surface.
 	 * @param array{id:string,name:string,args:mixed}  $call     Call shape.
 	 * @return string|null 'plan_required' | 'not_in_plan' | null (allow).
 	 */
 	private function fenceRefusal( ToolRegistry $registry, Run $run, array $call ): ?string {
-		$verb = ToolRegistry::abilityName( (string) $call['name'] );
+		$ability = ToolRegistry::abilityName( (string) $call['name'] );
 
 		// An unadmitted call is unknown_tool, not a fence case — the allow-list
 		// verdict (downstream in executeCall) must win over the fence.
-		if ( ! $registry->admits( $verb ) ) {
+		if ( ! $registry->admits( $ability ) ) {
 			return null;
 		}
+
+		$verb = $this->verbFor( $run, $ability, $call['args'] ?? null );
 
 		// S9: a pack resolves the verb map for its own runs; direct-allow runs
 		// fall back to the site-wide senroflux_verb_map filter (stage 4 seam).
@@ -1871,6 +1880,29 @@ final class Runner {
 		}
 
 		return null;
+	}
+
+	/**
+	 * The verb one ability call is fenced as, through the injected resolver.
+	 *
+	 * Fail closed on a resolver that misbehaves: a non-string answer (or none)
+	 * leaves the ability name standing, which no pack verb map answers, so
+	 * {@see VerbTier} tiers the call 2 and the fence demands a plan.
+	 *
+	 * @param Run    $run     The run.
+	 * @param string $ability The concrete ability id.
+	 * @param mixed  $args    The raw call args.
+	 */
+	private function verbFor( Run $run, string $ability, mixed $args ): string {
+		if ( ! is_callable( $this->verb_resolver ) ) {
+			return $ability;
+		}
+
+		/** @var array<string,mixed> $call_args */
+		$call_args = is_array( $args ) ? $args : array();
+		$verb      = ( $this->verb_resolver )( $run, $ability, $call_args );
+
+		return is_string( $verb ) && '' !== $verb ? $verb : $ability;
 	}
 
 	/**

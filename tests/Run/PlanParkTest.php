@@ -13,7 +13,9 @@ namespace Specflux\SenroFlux\Tests\Run;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Model\ModelTurn;
+use Specflux\SenroFlux\Packs\Pages\PagesPack;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Run;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
@@ -763,5 +765,191 @@ final class PlanParkTest extends TestCase {
 			),
 			$result['new_steps'][0]['message'] ?? array()
 		);
+	}
+
+	// ------------------------------------------------------------------
+	// (k) THE FENCE resolves ABILITY -> VERB before tiering
+	// ------------------------------------------------------------------
+
+	/**
+	 * A Runner wired the way the composition root wires it for a pack run: the
+	 * pack supplies both the verb map AND the ability+args => verb predicate.
+	 * Without the predicate the fence would look the raw ability id up in a map
+	 * keyed on `pages/*` verbs, miss every time, and fail closed to tier 2 —
+	 * which made even a read `plan_required`.
+	 */
+	private function packRunner(): Runner {
+		$pack = new PagesPack();
+
+		return new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			$this->bridge,
+			null,
+			static function ( Run $run ) use ( $pack ): ?array {
+				unset( $run );
+
+				return $pack->verbMap();
+			},
+			static function ( Run $run, string $ability, array $args ) use ( $pack ): string {
+				unset( $run );
+
+				return $pack->verbFor( $ability, $args );
+			}
+		);
+	}
+
+	private function seedPagesAbilities(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'senroflux/read-content' => new SenroFlux_Test_Fake_Ability(
+				'senroflux/read-content',
+				permission_result: true,
+				execute_result: array( 'ok' => true )
+			),
+			'senroflux/update-post'  => new SenroFlux_Test_Fake_Ability(
+				'senroflux/update-post',
+				permission_result: true,
+				execute_result: array( 'ok' => true )
+			),
+		);
+	}
+
+	private function createPagesRun(): int {
+		return $this->store->createRun(
+			1,
+			'test-consumer',
+			'Design a pricing page',
+			array( 'senroflux/*' ),
+			Budget::defaults()
+		);
+	}
+
+	public function test_fence_tiers_a_read_ability_as_tier0_through_the_pack_verb(): void {
+		$this->seedPagesAbilities();
+		$run_id = $this->createPagesRun();
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Reading.' ),
+			new MessagePart( new FunctionCall( 'call_r', 'wpab__senroflux__read-content', array( 'id' => 7 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		// pages/read is tier 0: free before any plan, so the call EXECUTES.
+		$read = $result['new_steps'][2];
+		$this->assertSame( 'ok', $read['status'] );
+		$this->assertSame( 'wpab__senroflux__read-content', $read['tool_name'] );
+	}
+
+	public function test_fence_tiers_a_publish_transition_as_tier2_through_the_pack_verb(): void {
+		$this->seedPagesAbilities();
+		$run_id = $this->createPagesRun();
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Publishing.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_p',
+					'wpab__senroflux__update-post',
+					array(
+						'id'     => 7,
+						'status' => 'publish',
+					)
+				)
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		// The SAME ability, tiered 2 because of its args: refused for want of a plan.
+		$publish = $result['new_steps'][2];
+		$this->assertSame( 'error', $publish['status'] );
+		$response = $publish['message']['parts'][0]['functionResponse'] ?? array();
+		$this->assertSame( array( 'error' => 'plan_required' ), $response['response'] ?? null );
+	}
+
+	public function test_the_same_ability_is_in_plan_as_a_draft_edit_and_not_in_plan_as_a_publish(): void {
+		$this->seedPagesAbilities();
+		$run_id = $this->createPagesRun();
+		$runner = $this->packRunner();
+
+		// A plan that allows draft edits only.
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Edit the draft',
+						'verbs' => array( 'pages/update-draft' ),
+					),
+				),
+			)
+		);
+		$parked                  = $runner->tick( $run_id, 0, null );
+		$this->assertSame( 'awaiting_plan', $parked['run']['status'] );
+
+		// One ability, two calls: the publish is outside the plan's verb set,
+		// the draft edit is inside it. Only an args-aware verb can tell them
+		// apart — on the ability id alone both would land the same way.
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Continuing.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_pub',
+					'wpab__senroflux__update-post',
+					array(
+						'id'     => 7,
+						'status' => 'publish',
+					)
+				)
+			),
+			new MessagePart(
+				new FunctionCall(
+					'call_draft',
+					'wpab__senroflux__update-post',
+					array(
+						'id'     => 7,
+						'status' => 'draft',
+					)
+				)
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$before = $this->store->getRun( $run_id )->stepCount;
+		$result = $runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertIsArray( $result );
+
+		$publish  = $result['new_steps'][2];
+		$response = $publish['message']['parts'][0]['functionResponse'] ?? array();
+		$this->assertSame( 'error', $publish['status'] );
+		$this->assertSame( array( 'error' => 'not_in_plan' ), $response['response'] ?? null );
+
+		$draft = $result['new_steps'][3];
+		$this->assertSame( 'ok', $draft['status'] );
+	}
+
+	public function test_a_run_without_a_pack_keeps_ability_names_as_verbs(): void {
+		// No verb resolver at all: $this->runner is the direct-allow wiring, and
+		// the stage-4 filter map keys on ability names (S9).
+		$run_id = $this->createRun();
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Reading.' ),
+			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array() ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'ok', $result['new_steps'][2]['status'] );
 	}
 }

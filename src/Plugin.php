@@ -589,17 +589,38 @@ final class Plugin {
 			// verb map; direct-allow runs keep the site-wide filter seam. The
 			// composition root is the one place that may reference Packs.
 			static function ( \Specflux\SenroFlux\Run\Run $run ): ?array {
-				if ( null === $run->pack || '' === $run->pack ) {
-					return null;
-				}
-
-				$pack = \Specflux\SenroFlux\Packs\PackRegistry::fromFilters()->get( $run->pack );
+				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->verbMap() : null;
+			},
+			// S7/S10: the fence tiers a call by its PACK VERB, not by the
+			// ability that carries it — `senroflux/update-post` is
+			// `pages/update-draft` or `pages/publish` depending on the args,
+			// and only the pack can tell them apart. A direct-allow run has no
+			// pack, so its verb stays the ability id (S9).
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $ability, array $args ): string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->verbFor( $ability, $args ) : $ability;
 			}
 		);
 
 		return $this->runner;
+	}
+
+	/**
+	 * The pack a run was started with, or null for a direct-allow run (and for
+	 * a pack name no longer registered — fail closed to the ability-name verb
+	 * space, where nothing is mapped and the fence treats every call as tier 2).
+	 *
+	 * @param \Specflux\SenroFlux\Run\Run $run The run.
+	 */
+	private static function pack_for_run( \Specflux\SenroFlux\Run\Run $run ): ?\Specflux\SenroFlux\Packs\Pack {
+		if ( null === $run->pack || '' === $run->pack ) {
+			return null;
+		}
+
+		return \Specflux\SenroFlux\Packs\PackRegistry::fromFilters()->get( $run->pack );
 	}
 
 	/**
