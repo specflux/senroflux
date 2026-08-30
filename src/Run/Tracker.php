@@ -1,6 +1,6 @@
 <?php
 /**
- * The written-object set behind the S12 re-read nudge (draft).
+ * The written-object set behind the S12 re-read nudge.
  *
  * @package SenroFlux
  */

@@ -114,10 +114,27 @@ final class ToolRegistry {
 	 * Harness tools are not abilities, so they only touch the DECLARATION
 	 * surface — never `names()`, so `admits()` stays ability-only.
 	 *
+	 * COLLISIONS ARE RESOLVED EXPLICITLY, not by array_merge's last-wins. The
+	 * harness tools live in the `senroflux/` namespace, which is also where a
+	 * pack's polyfill abilities live, so an ability named `senroflux/ask-user`
+	 * is possible — and a plain merge would have let it silently take over the
+	 * harness tool's declaration while `admits()` still routed calls to the
+	 * ability. Fail closed both ways: the HARNESS declaration wins, and the
+	 * colliding ability is dropped from the admitted set, so a call to that
+	 * name is intercepted by the harness and can never reach the executor
+	 * under the harness's description.
+	 *
 	 * @param array<string, FunctionDeclaration|array<string,mixed>> $extra Declarations keyed by tool name.
 	 */
 	public function withDeclarations( array $extra ): self {
-		return new self( $this->names, array_merge( $this->declarations, $extra ) );
+		$names = array();
+		foreach ( $this->names as $name ) {
+			if ( ! array_key_exists( $name, $extra ) ) {
+				$names[] = $name;
+			}
+		}
+
+		return new self( $names, array_merge( $this->declarations, $extra ) );
 	}
 
 	/**

@@ -13,11 +13,10 @@
  * name in a declaration is `senroflux__ask-user` (the 0.1 namespace mapping),
  * and its `tool_name` column value is `senroflux/ask-user`.
  *
- * In the README "Ask" the difference from an ability is deliberate: a harness
- * tool has no Agent Safety tier, no allow-list entry, no `wpab__` prefix —
- * so `functionNameFor()`/`abilityName()` MUST NOT round-trip it (see the note
- * in Runner.diff.md about the answer path using {@see self::functionName()}
- * directly instead of the ability mapping).
+ * The difference from an ability is deliberate: a harness tool has no Agent
+ * Safety tier, no allow-list entry and no `wpab__` prefix, so
+ * `functionNameFor()`/`abilityName()` MUST NOT round-trip it — the answer path
+ * uses {@see self::functionName()} directly instead of the ability mapping.
  *
  * @package SenroFlux
  */
@@ -53,7 +52,7 @@ final class HarnessTools {
 	/**
 	 * 0.2 S6 says nothing about what happens if the model calls ask-user at
 	 * zero remaining (the tool is withdrawn). Fail closed: it is refused with
-	 * this code and still counts as a tool call. (See NOTES.md.)
+	 * this code and still counts as a tool call.
 	 */
 	public const ERROR_QUESTIONS_EXHAUSTED = 'questions_exhausted';
 

@@ -74,6 +74,26 @@ final class ToolRegistryTest extends TestCase {
 		$this->assertTrue( $registry->admits( 'secret/open-tool' ) );
 	}
 
+	public function test_a_harness_declaration_never_silently_shadows_a_same_named_ability(): void {
+		$GLOBALS['senroflux_test_abilities']['senroflux/ask-user'] = new SenroFlux_Test_Fake_Ability(
+			'senroflux/ask-user',
+			description: 'An ability wearing the harness tool\'s name'
+		);
+
+		$registry = ToolRegistry::forRun( $this->runWithAllow( array( '*' ) ) );
+		$this->assertTrue( $registry->admits( 'senroflux/ask-user' ), 'the ability is admitted before the merge' );
+
+		$merged = $registry->withDeclarations( array( 'senroflux/ask-user' => array( 'name' => 'senroflux__ask-user' ) ) );
+
+		// The harness declaration wins AND the colliding ability leaves the
+		// admitted set: the model can never be shown the harness description
+		// while calls under that name reach the executor.
+		$declarations = $merged->declarations();
+		$this->assertSame( 'senroflux__ask-user', $declarations['senroflux/ask-user']['name'] ?? null );
+		$this->assertFalse( $merged->admits( 'senroflux/ask-user' ), 'the shadowed ability is dropped, not silently kept' );
+		$this->assertTrue( $merged->admits( 'agsafe-smoke/spend' ), 'unrelated abilities are untouched' );
+	}
+
 	public function test_declarations_use_the_wpab_function_name_mapping(): void {
 		$registry = ToolRegistry::forRun( $this->runWithAllow( array( 'agsafe-smoke/spend' ) ) );
 

@@ -1278,7 +1278,7 @@ final class Runner {
 
 		// Valid: park. message_json holds the VALIDATED payload (S4); the
 		// harness tool name goes in tool_name (S4). This step is NOT history.
-		$new_steps[] = $this->appendQuestionStep( $run->id, $call, $payload );
+		$new_steps[] = $this->appendQuestionStep( $run->id, $payload );
 		$this->store->updateRun( $run->id, array( 'status' => RunStatus::AwaitingUser->value ) );
 
 		// S6: ui.question is the only park key on a question park.
@@ -1403,12 +1403,14 @@ final class Runner {
 	/**
 	 * Append a question park step: message_json = the VALIDATED payload.
 	 *
-	 * @param array{id:string,name:string,args:mixed} $call    Parked call.
-	 * @param array<string,mixed>                     $payload Validated payload.
+	 * The originating call is deliberately NOT a parameter: S4 stores only the
+	 * validated payload here, and the call id is recovered from the model turn
+	 * when the answer is written.
+	 *
+	 * @param array<string,mixed> $payload Validated payload.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendQuestionStep( int $run_id, array $call, array $payload ): array {
-		unset( $call );
+	private function appendQuestionStep( int $run_id, array $payload ): array {
 		$seq = $this->store->appendStep(
 			$run_id,
 			StepKind::Question,
@@ -1702,7 +1704,7 @@ final class Runner {
 
 		// Valid: park. message_json holds the VALIDATED (tier-annotated) payload
 		// (S4); the harness tool name goes in tool_name. This step is NOT history.
-		$new_steps[] = $this->appendPlanStep( $run->id, $call, $payload );
+		$new_steps[] = $this->appendPlanStep( $run->id, $payload );
 		$this->store->updateRun( $run->id, array( 'status' => RunStatus::AwaitingPlan->value ) );
 
 		// ui is keyed 'plan' (S7: ui.plan = {...}); exactly one park key is
@@ -1849,12 +1851,13 @@ final class Runner {
 	/**
 	 * Append a plan park step: message_json = the VALIDATED payload.
 	 *
-	 * @param array{id:string,name:string,args:mixed} $call    Parked call.
-	 * @param array<string,mixed>                     $payload Validated payload.
+	 * The originating call is deliberately NOT a parameter, for the same reason
+	 * as {@see self::appendQuestionStep()}.
+	 *
+	 * @param array<string,mixed> $payload Validated payload.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendPlanStep( int $run_id, array $call, array $payload ): array {
-		unset( $call );
+	private function appendPlanStep( int $run_id, array $payload ): array {
 		$seq = $this->store->appendStep(
 			$run_id,
 			StepKind::Plan,
@@ -2275,16 +2278,11 @@ final class Runner {
 	// S12: verification read-back + harness-built report
 	// ------------------------------------------------------------------
 
-	// ------------------------------------------------------------------
-	// S12: verification nudge + terminal report
-	// ------------------------------------------------------------------
-
 	/**
 	 * Build + persist the terminal report (S12).
 	 *
 	 * Public so Plugin::cancel() can build a partial report on a user-initiated
-	 * terminal transition that never passes through the loop (see
-	 * Plugin.diff.md §2).
+	 * terminal transition that never passes through the loop.
 	 *
 	 * @return array{summary:string,changes:list<array<string,mixed>>}
 	 */

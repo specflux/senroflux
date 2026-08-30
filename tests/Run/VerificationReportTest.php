@@ -464,8 +464,8 @@ final class VerificationReportTest extends TestCase {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Requires Plugin.diff.md (get() adds 'report'); the run's result_json is
-	 * seeded directly and read back through the plugin API.
+	 * The run's result_json is seeded directly and read back through
+	 * Plugin::get(), which surfaces it as `report`.
 	 */
 	public function test_f_plugin_get_surfaces_persisted_report(): void {
 		$run_id = $this->createRun();

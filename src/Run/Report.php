@@ -1,6 +1,6 @@
 <?php
 /**
- * The harness-built report (0.2 S12) (draft).
+ * The harness-built report (0.2 S12).
  *
  * @package SenroFlux
  */
