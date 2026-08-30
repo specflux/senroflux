@@ -162,6 +162,14 @@ final class Runner {
 				throw $error;
 			}
 
+			if ( $run->status->isTerminal() ) {
+				// A finished run has nothing left to govern, and its recorded
+				// outcome is not rewritten by a scope it never needed — a
+				// polling consumer must not turn a completed run into a failed
+				// one just by asking again.
+				return $this->state( $run, array(), null );
+			}
+
 			// S14: "a notice is not a stop" — a tick that cannot own its
 			// correlation id would run ungoverned under someone else's scope,
 			// so the run fails and the reason is recorded.

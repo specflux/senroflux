@@ -244,6 +244,22 @@ final class GrantsTest extends TestCase {
 		$this->assertSame( array(), $this->gateway->calls, 'the model must never be called outside the scope' );
 	}
 
+	public function test_a_conflict_never_rewrites_the_outcome_of_a_finished_run(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, 0, null );
+		$this->assertSame( 'completed', $this->store->getRun( $run_id )->status->value );
+
+		RequestContext::$conflict = true;
+		$before                   = $this->store->getRun( $run_id )->stepCount;
+
+		$result = $this->runner->tick( $run_id, $before, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'] );
+		$this->assertSame( RunStatus::Completed, $this->store->getRun( $run_id )->status );
+	}
+
 	public function test_a_throw_from_inside_the_tick_body_is_not_swallowed_as_a_conflict(): void {
 		$run_id = $this->createRun();
 
