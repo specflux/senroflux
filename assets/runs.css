@@ -1,5 +1,12 @@
 /* SenroFlux Runs screen (S10/S13/S15): badges, park cards, new-run form.
- * Minimal by design; the WP admin already supplies base form/button styling. */
+ * Minimal by design; the WP admin already supplies base form/button styling.
+ *
+ * BADGE COLOURS ARE A WCAG 2.1 AA CONSTRAINT, not a palette choice: badge text
+ * is 12px, so every foreground/background pair here must clear 4.5:1. The
+ * WordPress status greens and reds (#00a32a, #d63638) do NOT on their own tints
+ * (3.11:1 and 4.25:1) — @axe-core/playwright flagged the completed badge as a
+ * serious colour-contrast violation on the runs list in the stage-10 proof bar.
+ * The darker pair below reads as the same status colour and clears the bar. */
 
 /* Visually-hidden but available to assistive tech (aria-live region + labels). */
 .senroflux-sr-only {
@@ -41,12 +48,12 @@
 
 .senroflux-badge-completed {
 	background: #edfaef;
-	color: #00a32a;
+	color: #005c12; /* 7.69:1 on #edfaef. */
 }
 
 .senroflux-badge-failed {
 	background: #fcf0f1;
-	color: #d63638;
+	color: #b32d2e; /* 5.67:1 on #fcf0f1. */
 }
 
 .senroflux-badge-cancelled {
@@ -56,12 +63,12 @@
 
 .senroflux-badge-verified {
 	background: #edfaef;
-	color: #00a32a;
+	color: #005c12; /* 7.69:1 on #edfaef. */
 }
 
 .senroflux-badge-unverified {
 	background: #fcf0f1;
-	color: #d63638;
+	color: #b32d2e; /* 5.67:1 on #fcf0f1. */
 }
 
 /* Steps timeline (existing). */
