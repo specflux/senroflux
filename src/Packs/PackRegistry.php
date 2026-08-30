@@ -11,6 +11,11 @@
  * consulted by `Plugin::start()` / `preflight()` only, and hands the Runner an
  * explicit allow-list / skill set / verb map (never a Pack object).
  *
+ * It is also where every registered pack's GOVERNANCE data is collected and
+ * handed to Agent Safety ({@see contributeToAgentSafety()}). Without that,
+ * Agent Safety's gate returns early for `senroflux/*` ability names and the
+ * whole verdict / approval / audit chain is a no-op for pack writes.
+ *
  * @package SenroFlux
  */
 
@@ -78,5 +83,89 @@ final class PackRegistry {
 	 */
 	public function all(): array {
 		return $this->packs;
+	}
+
+	/**
+	 * Every ability namespace the registered packs ask Agent Safety to govern,
+	 * deduped.
+	 *
+	 * @return list<string>
+	 */
+	public function governedNamespaces(): array {
+		$namespaces = array();
+		foreach ( $this->packs as $pack ) {
+			foreach ( $pack->governedNamespaces() as $namespace ) {
+				if ( '' !== $namespace ) {
+					$namespaces[ $namespace ] = true;
+				}
+			}
+		}
+
+		return array_keys( $namespaces );
+	}
+
+	/**
+	 * The merged Agent Safety verb map (ability id => tier) across every
+	 * registered pack. Two packs claiming the same ability keep the HIGHER
+	 * tier: a merge must never be the step that relaxes a pack's own reading.
+	 *
+	 * @return array<string,int>
+	 */
+	public function agentSafetyVerbMap(): array {
+		$map = array();
+		foreach ( $this->packs as $pack ) {
+			foreach ( $pack->agentSafetyVerbMap() as $ability => $tier ) {
+				$map[ $ability ] = isset( $map[ $ability ] ) ? max( $map[ $ability ], $tier ) : $tier;
+			}
+		}
+
+		return $map;
+	}
+
+	/**
+	 * Hand every registered pack's governance data to Agent Safety.
+	 *
+	 * The two filters are companions and neither is optional: governing a
+	 * namespace without mapping its verbs denies every call in it as
+	 * `unknown_verb`, and mapping verbs without governing the namespace leaves
+	 * `AbilityPermissionGate::wrap()` returning early — no verdict, no approval
+	 * park, no audit row (agent-safety plugin/src/Hooks/AbilityPermissionGate.php:84-88).
+	 *
+	 * TIMING, load-bearing: Agent Safety applies both filters inside its own
+	 * `plugins_loaded` priority-0 bootstrap (agent-safety plugin/agent-safety.php:119,
+	 * :171, :186), so these callbacks must be ADDED before that. The callbacks
+	 * themselves read the registry lazily, so a pack registered on
+	 * `senroflux_packs` any time before priority 0 is governed too.
+	 */
+	public static function contributeToAgentSafety(): void {
+		if ( ! function_exists( 'add_filter' ) ) {
+			return;
+		}
+
+		add_filter(
+			'agent_safety_governed_namespaces',
+			static function ( $namespaces ): array {
+				$namespaces = is_array( $namespaces ) ? $namespaces : array();
+
+				return array_values( array_unique( array_merge( $namespaces, self::fromFilters()->governedNamespaces() ) ) );
+			},
+			10,
+			1
+		);
+
+		add_filter(
+			'agent_safety_verb_map',
+			static function ( $map ): array {
+				$map = is_array( $map ) ? $map : array();
+
+				// Ours are added, never allowed to overwrite an existing entry:
+				// another contributor's tier for the same ability may be
+				// stricter, and Agent Safety's own core map is authoritative
+				// for anything it already answers.
+				return $map + self::fromFilters()->agentSafetyVerbMap();
+			},
+			10,
+			1
+		);
 	}
 }

@@ -31,12 +31,16 @@ final class PackRegistryTest extends TestCase {
 		Plugin::reset();
 		remove_all_filters( 'senroflux_packs' );
 		remove_all_filters( 'senroflux_skills_max_tokens' );
+		remove_all_filters( 'agent_safety_governed_namespaces' );
+		remove_all_filters( 'agent_safety_verb_map' );
 		$GLOBALS['senroflux_test_abilities'] = array();
 	}
 
 	protected function tearDown(): void {
 		remove_all_filters( 'senroflux_packs' );
 		remove_all_filters( 'senroflux_skills_max_tokens' );
+		remove_all_filters( 'agent_safety_governed_namespaces' );
+		remove_all_filters( 'agent_safety_verb_map' );
 		unset( $GLOBALS['wpdb'] );
 		Plugin::reset();
 	}
@@ -44,24 +48,69 @@ final class PackRegistryTest extends TestCase {
 	/**
 	 * A minimal concrete pack for tests.
 	 *
-	 * @param string               $name  Pack name.
-	 * @param array<string,string> $roles Role => template.
+	 * @param string                     $name       Pack name.
+	 * @param array<string,string>       $roles      Role => template.
+	 * @param array<string,int>          $verb_map   Verb => tier.
+	 * @param array<string,list<string>> $role_verbs Role => verbs.
 	 */
-	private function pack( string $name, array $roles = array() ): Pack {
-		return new class( $name, $roles ) extends Pack {
+	private function pack( string $name, array $roles = array(), array $verb_map = array(), array $role_verbs = array() ): Pack {
+		return new class( $name, $roles, $verb_map, $role_verbs ) extends Pack {
 			/** @var string */
 			private string $packName;
 
-			/** @param array<string,string> $roles Role => template. */
-			public function __construct( string $name, array $roles ) {
-				$this->packName = $name;
+			/** @var array<string,int> */
+			private array $verbTiers;
+
+			/** @var array<string,list<string>> */
+			private array $roleVerbs;
+
+			/**
+			 * @param string                     $name       Pack name.
+			 * @param array<string,string>       $roles      Role => template.
+			 * @param array<string,int>          $verb_map   Verb => tier.
+			 * @param array<string,list<string>> $role_verbs Role => verbs.
+			 */
+			public function __construct( string $name, array $roles, array $verb_map, array $role_verbs ) {
+				$this->packName  = $name;
+				$this->verbTiers = $verb_map;
+				$this->roleVerbs = $role_verbs;
 				parent::__construct( $roles );
 			}
 
 			public function name(): string {
 				return $this->packName;
 			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return $this->verbTiers;
+			}
+
+			/** @return array<string,list<string>> */
+			public function roleVerbs(): array {
+				return $this->roleVerbs;
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
 		};
+	}
+
+	/**
+	 * Apply one of AGENT SAFETY's filters. The hook name travels through a
+	 * variable on purpose: phpcs reads a literal hook name as this plugin
+	 * claiming the hook, and these two belong to Agent Safety.
+	 *
+	 * @param string $hook  The Agent Safety hook name.
+	 * @param mixed  $value The value to filter.
+	 * @return mixed
+	 */
+	private function applyAgentSafetyFilter( string $hook, mixed $value ): mixed {
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound -- these two hooks are Agent Safety's, not this plugin's; the test only reads what our filters contributed to them.
+		return apply_filters( $hook, $value );
 	}
 
 	public function test_register_and_resolve_by_name(): void {
@@ -100,6 +149,17 @@ final class PackRegistryTest extends TestCase {
 						'pages' => new class() extends Pack {
 							public function name(): string {
 								return 'pages';
+							}
+
+							/** @return array<string,int> */
+							public function verbMap(): array {
+								return array();
+							}
+
+							protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+								unset( $user_id );
+
+								return null;
 							}
 						},
 						'junk'  => 'not-a-pack',
@@ -146,6 +206,17 @@ final class PackRegistryTest extends TestCase {
 
 				return array( 'id', 'post_type', 'fields' );
 			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
 		};
 
 		$this->assertSame( array( 'read' => 'core/read-content' ), $pack->resolveAbilities() );
@@ -181,6 +252,17 @@ final class PackRegistryTest extends TestCase {
 
 				return array( 'id', 'content', 'status' );
 			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
 		};
 
 		$this->assertSame( array( 'update' => 'senroflux/update-post' ), $pack->resolveAbilities() );
@@ -194,84 +276,6 @@ final class PackRegistryTest extends TestCase {
 		$this->assertSame( $first, $second );
 	}
 
-
-	public function test_verb_for_maps_abilities_to_s10_verbs(): void {
-		$pack = $this->pack( 'pages' );
-
-		$this->assertSame( 'pages/read', $pack->verbFor( 'core/read-content', array( 'id' => 1 ) ) );
-		$this->assertSame( 'pages/list-patterns', $pack->verbFor( 'senroflux/list-patterns', array() ) );
-		$this->assertSame( 'pages/preview', $pack->verbFor( 'senroflux/get-preview-url', array( 'id' => 1 ) ) );
-		$this->assertSame( 'pages/create-draft', $pack->verbFor( 'senroflux/create-post', array( 'status' => 'draft' ) ) );
-
-		// update-post predicate: draft|pending unchanged → update-draft.
-		$this->assertSame(
-			'pages/update-draft',
-			$pack->verbFor(
-				'senroflux/update-post',
-				array(
-					'id'     => 1,
-					'status' => 'draft',
-				)
-			)
-		);
-		// publish target UNCHANGED (current already publish) → update-live.
-		$livePack = new class() extends Pack {
-			public function name(): string {
-				return 'pages';
-			}
-
-			protected function currentStatus( array $input ): string {
-				return 'publish';
-			}
-		};
-		$this->assertSame(
-			'pages/update-live',
-			$livePack->verbFor(
-				'senroflux/update-post',
-				array(
-					'id'     => 1,
-					'status' => 'publish',
-				)
-			)
-		);
-		// status transition to publish (current draft) → publish.
-		$transitionPack = new class() extends Pack {
-			public function name(): string {
-				return 'pages';
-			}
-
-			protected function currentStatus( array $input ): string {
-				return 'draft';
-			}
-		};
-		$this->assertSame(
-			'pages/publish',
-			$transitionPack->verbFor(
-				'senroflux/update-post',
-				array(
-					'id'     => 1,
-					'status' => 'publish',
-				)
-			)
-		);
-	}
-
-	public function test_verb_map_tiers_per_s10(): void {
-		$pack = $this->pack( 'pages' );
-
-		$this->assertSame(
-			array(
-				'pages/read'          => 0,
-				'pages/list-patterns' => 0,
-				'pages/preview'       => 0,
-				'pages/create-draft'  => 1,
-				'pages/update-draft'  => 1,
-				'pages/update-live'   => 2,
-				'pages/publish'       => 2,
-			),
-			$pack->verbMap()
-		);
-	}
 
 	public function test_preflight_passes_within_skills_ceiling_and_no_as_binding(): void {
 		$pack = $this->pack( 'pages' );
@@ -304,6 +308,17 @@ final class PackRegistryTest extends TestCase {
 					),
 				);
 			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
 		};
 
 		$error = $pack->preflight( 1 );
@@ -325,5 +340,158 @@ final class PackRegistryTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'pack_unknown', $result->get_error_code() );
 		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
+	// ------------------------------------------------------------------
+	// Agent Safety governance (S9): namespaces + verb map
+	// ------------------------------------------------------------------
+
+	public function test_base_verb_is_the_ability_id(): void {
+		$pack = $this->pack( 'shop', array( 'read' => 'read-thing' ) );
+
+		// S9 direct-allow reading: with no argument-aware predicate the verb
+		// IS the ability id.
+		$this->assertSame( 'senroflux/read-thing', $pack->verbFor( 'senroflux/read-thing', array( 'status' => 'publish' ) ) );
+	}
+
+	public function test_a_pack_with_roles_governs_the_polyfill_namespace(): void {
+		$pack = $this->pack( 'shop', array( 'read' => 'read-thing' ) );
+
+		$this->assertSame( array( 'senroflux/' ), $pack->governedNamespaces() );
+	}
+
+	public function test_a_pack_without_roles_governs_nothing(): void {
+		$this->assertSame( array(), $this->pack( 'empty' )->governedNamespaces() );
+	}
+
+	public function test_agent_safety_verb_map_collapses_a_role_to_its_highest_tier(): void {
+		$pack = $this->pack(
+			'shop',
+			array(
+				'read'   => 'read-thing',
+				'update' => 'update-thing',
+			),
+			array(
+				'shop/read'         => 0,
+				'shop/update-draft' => 1,
+				'shop/publish'      => 2,
+			),
+			array(
+				'read'   => array( 'shop/read' ),
+				'update' => array( 'shop/update-draft', 'shop/publish' ),
+			)
+		);
+
+		$this->assertSame(
+			array(
+				'senroflux/read-thing'   => 0,
+				'senroflux/update-thing' => 2,
+			),
+			$pack->agentSafetyVerbMap()
+		);
+	}
+
+	public function test_agent_safety_verb_map_fails_closed_for_an_undeclared_role(): void {
+		$pack = $this->pack( 'shop', array( 'delete' => 'delete-thing' ) );
+
+		$this->assertSame( array( 'senroflux/delete-thing' => 2 ), $pack->agentSafetyVerbMap() );
+	}
+
+	public function test_agent_safety_verb_map_fails_closed_for_a_verb_missing_from_the_map(): void {
+		$pack = $this->pack(
+			'shop',
+			array( 'read' => 'read-thing' ),
+			array(),
+			array( 'read' => array( 'shop/read' ) )
+		);
+
+		$this->assertSame( array( 'senroflux/read-thing' => 2 ), $pack->agentSafetyVerbMap() );
+	}
+
+	public function test_registry_merge_keeps_the_higher_tier_for_a_shared_ability(): void {
+		$registry = new PackRegistry();
+		$registry->register(
+			$this->pack(
+				'lenient',
+				array( 'update' => 'update-thing' ),
+				array( 'a/write' => 1 ),
+				array( 'update' => array( 'a/write' ) )
+			)
+		);
+		$registry->register(
+			$this->pack(
+				'strict',
+				array( 'update' => 'update-thing' ),
+				array( 'b/publish' => 2 ),
+				array( 'update' => array( 'b/publish' ) )
+			)
+		);
+
+		$this->assertSame( array( 'senroflux/update-thing' => 2 ), $registry->agentSafetyVerbMap() );
+		$this->assertSame( array( 'senroflux/' ), $registry->governedNamespaces() );
+	}
+
+	public function test_contribute_to_agent_safety_feeds_both_companion_filters(): void {
+		add_filter(
+			'senroflux_packs',
+			fn ( array $packs ): array => $packs + array(
+				'shop' => $this->pack(
+					'shop',
+					array( 'update' => 'update-thing' ),
+					array(
+						'shop/update-draft' => 1,
+						'shop/publish'      => 2,
+					),
+					array( 'update' => array( 'shop/update-draft', 'shop/publish' ) )
+				),
+			),
+			10,
+			1
+		);
+
+		PackRegistry::contributeToAgentSafety();
+
+		$this->assertContains( 'senroflux/', $this->applyAgentSafetyFilter( 'agent_safety_governed_namespaces', array( 'core/' ) ) );
+		$this->assertSame(
+			array(
+				'core/read-content'      => 0,
+				'senroflux/update-thing' => 2,
+			),
+			$this->applyAgentSafetyFilter( 'agent_safety_verb_map', array( 'core/read-content' => 0 ) )
+		);
+	}
+
+	public function test_an_existing_verb_map_entry_is_never_overwritten(): void {
+		add_filter(
+			'senroflux_packs',
+			fn ( array $packs ): array => $packs + array(
+				'shop' => $this->pack(
+					'shop',
+					array( 'update' => 'update-thing' ),
+					array( 'shop/publish' => 2 ),
+					array( 'update' => array( 'shop/publish' ) )
+				),
+			),
+			10,
+			1
+		);
+
+		PackRegistry::contributeToAgentSafety();
+
+		// Another contributor already answered for this ability: leave it be.
+		$map = $this->applyAgentSafetyFilter( 'agent_safety_verb_map', array( 'senroflux/update-thing' => 1 ) );
+		$this->assertSame( array( 'senroflux/update-thing' => 1 ), $map );
+	}
+
+	public function test_plugin_govern_registers_the_pages_pack_governance(): void {
+		Plugin::instance()->govern();
+
+		$this->assertContains( 'senroflux/', $this->applyAgentSafetyFilter( 'agent_safety_governed_namespaces', array() ) );
+
+		$map = $this->applyAgentSafetyFilter( 'agent_safety_verb_map', array() );
+		$this->assertSame( 0, $map['senroflux/read-content'] ?? null );
+		$this->assertSame( 1, $map['senroflux/create-post'] ?? null );
+		// update-post can publish, so Agent Safety must see it as irreversible.
+		$this->assertSame( 2, $map['senroflux/update-post'] ?? null );
 	}
 }

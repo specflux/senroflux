@@ -84,6 +84,22 @@ if ( ! class_exists( Plugin::class ) ) {
 require_once __DIR__ . '/src/api.php';
 
 /**
+ * Register the packs and their Agent Safety governance BEFORE Agent Safety's
+ * own wiring: it reads `agent_safety_governed_namespaces` and
+ * `agent_safety_verb_map` inside its plugins_loaded priority-0 bootstrap, so a
+ * pack wired at our boot priority below would never be governed at all.
+ */
+add_action(
+	'plugins_loaded',
+	static function (): void {
+		if ( class_exists( Plugin::class ) ) {
+			Plugin::instance()->govern();
+		}
+	},
+	-1
+);
+
+/**
  * Boot the plugin on plugins_loaded, AFTER Agent Safety's own wiring
  * (priority 0) so its classes exist when we look for them.
  */

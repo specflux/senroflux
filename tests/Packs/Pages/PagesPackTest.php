@@ -152,4 +152,48 @@ final class PagesPackTest extends TestCase {
 
 		$this->assertNull( ( new PagesPack() )->agentSafetyPack() );
 	}
+
+	// ------------------------------------------------------------------
+	// Agent Safety governance (S9): what the two AS filters get told
+	// ------------------------------------------------------------------
+
+	public function test_role_verbs_cover_every_role(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame( array_keys( $pack->roles() ), array_keys( $pack->roleVerbs() ) );
+	}
+
+	public function test_every_declared_role_verb_is_in_the_verb_map(): void {
+		$pack = new PagesPack();
+		$map  = $pack->verbMap();
+
+		foreach ( $pack->roleVerbs() as $role => $verbs ) {
+			foreach ( $verbs as $verb ) {
+				$this->assertArrayHasKey( $verb, $map, sprintf( 'role %s declares an unmapped verb %s', $role, $verb ) );
+			}
+		}
+	}
+
+	public function test_pack_governs_the_senroflux_namespace(): void {
+		$this->assertSame( array( 'senroflux/' ), ( new PagesPack() )->governedNamespaces() );
+	}
+
+	/**
+	 * The Agent Safety verb map is keyed on ABILITY IDS, because that is what
+	 * the gate seam passes to the pipeline as the verb — never on `pages/*`.
+	 * update-post collapses UP to tier 2: it can publish, and Agent Safety
+	 * carries one tier per verb.
+	 */
+	public function test_agent_safety_verb_map_is_ability_ids_at_the_highest_reachable_tier(): void {
+		$this->assertSame(
+			array(
+				'senroflux/read-content'    => 0,
+				'senroflux/create-post'     => 1,
+				'senroflux/update-post'     => 2,
+				'senroflux/get-preview-url' => 0,
+				'senroflux/list-patterns'   => 0,
+			),
+			( new PagesPack() )->agentSafetyVerbMap()
+		);
+	}
 }

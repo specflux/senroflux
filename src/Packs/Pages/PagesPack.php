@@ -5,13 +5,13 @@
  * TARGET REPO PATH: src/Packs/Pages/PagesPack.php
  *
  * Role → ability template map (resolved `core/*` vs `senroflux/*` by the
- * base), the S10 verb map + verb predicate, the three pack skills, the AS pack
- * descriptor, and the S13 preflight with the REAL Capability-Packs binding
- * check (stage 8 — the base leaves it as a guarded no-op).
+ * base), the S10 verb map + verb predicate + role→verb split, the three pack
+ * skills, the AS pack descriptor, and the S13 Capability-Packs binding check
+ * the abstract base requires of every pack.
  *
  * ISOLATION RULE (harness contract): this pack feeds the Runner through the
- * base's explicit seams only (allow-list / skills / verb map). It never
- * touches the run loop.
+ * base's explicit seams only (allow-list / skills / verb map / verb
+ * predicate). It never touches the run loop.
  *
  * @package SenroFlux
  */
@@ -23,7 +23,6 @@ namespace Specflux\SenroFlux\Packs\Pages;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Run\Tail;
 use Specflux\SenroFlux\Skills\Skill;
-use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
 
@@ -52,20 +51,20 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * @return string 'pages'.
+	 * Register the pack's pattern vocabulary (S11). Called from the
+	 * composition root on `init`; Vocabulary::register() is idempotent.
+	 *
+	 * @return int Number of patterns registered this call.
 	 */
-	/**
- * Register the pack's pattern vocabulary (S11). Called from the
- * composition root on `init`; Vocabulary::register() is idempotent.
- *
- * @return int Number of patterns registered this call.
- */
 	public function registerPatterns(): int {
 		$vocabulary = new Vocabulary();
 
 		return $vocabulary->register();
 	}
 
+	/**
+	 * @return string 'pages'.
+	 */
 	public function name(): string {
 		return 'pages';
 	}
@@ -96,7 +95,7 @@ final class PagesPack extends Pack {
 	 *
 	 * @param array<string,mixed> $input Call input.
 	 */
-	protected function currentStatus( array $input ): string {
+	private function currentStatus( array $input ): string {
 		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) ) {
 			return '';
 		}
@@ -110,28 +109,93 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * S10 verb predicate. The base already encodes the exact rules, keyed on
-	 * {@see currentStatus()} (overridden above) — this override exists to make
-	 * the contract explicit and to document that the predicate is exactly the
-	 * S10 table and never drifts from it.
+	 * The S10 verb predicate: ability + input => PACK verb. This is the seam the
+	 * S7 plan fence resolves every ability call through, so a call is tiered by
+	 * what it actually does, not by which ability carries it.
+	 *
+	 * Dispatch is on the ability's name SEGMENT, so it holds whether the role
+	 * resolved to `senroflux/update-post` or a shape-compatible `core/update-post`
+	 * (S9: for a core-filled role the pack still names the verb).
 	 *
 	 * @param string              $ability The concrete ability id.
 	 * @param array<string,mixed> $input   Call input.
 	 */
-	// phpcs:ignore Generic.CodeAnalysis.UselessOverridingMethod.Found -- documents the S10 verb contract explicitly; the override must stay to pin that the rule set never drifts.
 	public function verbFor( string $ability, array $input ): string {
-		return parent::verbFor( $ability, $input );
+		return match ( $this->baseName( $ability ) ) {
+			'read-content'    => 'pages/read',
+			'list-patterns'   => 'pages/list-patterns',
+			'get-preview-url' => 'pages/preview',
+			'create-post'     => 'pages/create-draft',
+			'update-post'     => $this->updateVerb( $input ),
+			// S9: an ability this pack does not name keeps the ability id as
+			// its verb, which no entry of verbMap() answers — the fence then
+			// fails closed on it.
+			default           => $ability,
+		};
 	}
 
 	/**
-	 * The S10 verb => tier map (unchanged from the base; documented here as the
-	 * authoritative source for the stage-8 fence and the approval-summary hook).
+	 * The update-post predicate (S10): a transition to publish is
+	 * `pages/publish` (tier 2); a publish target with the status unchanged is
+	 * `pages/update-live` (tier 2); a draft|pending target (or no status at
+	 * all) is `pages/update-draft` (tier 1).
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private function updateVerb( array $input ): string {
+		$desired = $input['status'] ?? null;
+		if ( ! is_string( $desired ) || '' === $desired ) {
+			return 'pages/update-draft';
+		}
+
+		$current = $this->currentStatus( $input );
+
+		if ( 'publish' === $desired && $desired !== $current ) {
+			return 'pages/publish';
+		}
+
+		if ( 'publish' === $desired ) {
+			return 'pages/update-live';
+		}
+
+		return 'pages/update-draft';
+	}
+
+	/**
+	 * The S10 verb => tier table — the authoritative source for the plan fence,
+	 * the plan's tier annotation and the approval-summary hook.
 	 *
 	 * @return array<string,int>
 	 */
-	// phpcs:ignore Generic.CodeAnalysis.UselessOverridingMethod.Found -- documents the S10 verb=>tier map as the authoritative source for the stage-8 fence and approval-summary hook.
 	public function verbMap(): array {
-		return parent::verbMap();
+		return array(
+			'pages/read'          => 0,
+			'pages/list-patterns' => 0,
+			'pages/preview'       => 0,
+			'pages/create-draft'  => 1,
+			'pages/update-draft'  => 1,
+			'pages/update-live'   => 2,
+			'pages/publish'       => 2,
+		);
+	}
+
+	/**
+	 * The S10 role => pack-verb split. `update` is the one role that spans more
+	 * than one verb, which is exactly what {@see Pack::agentSafetyVerbMap()}
+	 * collapses (upwards) into the single tier Agent Safety can carry for
+	 * `senroflux/update-post`.
+	 *
+	 * @return array<string,list<string>>
+	 */
+	public function roleVerbs(): array {
+		// Same order as roles(), so the two stay readable side by side.
+		return array(
+			'read'     => array( 'pages/read' ),
+			'create'   => array( 'pages/create-draft' ),
+			'update'   => array( 'pages/update-draft', 'pages/update-live', 'pages/publish' ),
+			'preview'  => array( 'pages/preview' ),
+			'patterns' => array( 'pages/list-patterns' ),
+		);
 	}
 
 	/**
@@ -219,11 +283,22 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The Agent Safety pack descriptor (S10). Per the fixture in
-	 * dev/smoke/senroflux-spike-fixture.php the AS pack allows ABILITY NAMES,
-	 * so `allow` is the resolved allow-list; Tier-2 verbs are approval-gated
-	 * (`approvalByClass: ['tier2' => true]`); nothing is denied (everything
-	 * outside the map fails closed in Agent Safety anyway).
+	 * The Agent Safety pack descriptor (S10), registered on
+	 * `agent_safety_pack_registry`.
+	 *
+	 * `allow` is the RESOLVED ABILITY LIST, not the `pages/*` verb list, and
+	 * that is not a category error — at the gate seam that governs this plugin
+	 * the Agent Safety verb IS the ability id: `AbilityPermissionGate::wrap()`
+	 * hands the registered ability name to `VerdictPipeline::judge()`, which
+	 * passes it to `Gate::evaluate()`, which tests it with `Pack::allows()`
+	 * (agent-safety plugin/src/Hooks/AbilityPermissionGate.php:113,
+	 * plugin/src/Verdict/VerdictPipeline.php:70, src/Gate/Gate.php:39). Agent
+	 * Safety's own `CorePacks` allows `core/read-content` for the same reason.
+	 * An allow-list of `pages/*` here would deny every call as `not_in_pack`.
+	 *
+	 * Tier-2 abilities are approval-gated (`approvalByClass: ['tier2' => true]`);
+	 * nothing is denied — everything outside the verb map fails closed in Agent
+	 * Safety anyway.
 	 *
 	 * @return object|null null when the Agent Safety pack class is absent.
 	 */
@@ -240,32 +315,6 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * S13 preflight — skills ceiling first, then the REAL fail-closed binding
-	 * check. Unlike the base (which only checks the binding when `agent_safety`
-	 * exists), the pages pack fails closed when Agent Safety is absent: the
-	 * Capability Pack is the governance seam, and a missing seam is not a gated
-	 * pass.
-	 *
-	 * @param int $user_id The user the run would be started for.
-	 * @return true|WP_Error
-	 */
-	public function preflight( int $user_id ): true|WP_Error {
-		// S8 ceiling over the COMBINED harness + pack skill set.
-		$skills  = SkillSet::collect( '', '', $this->skills() );
-		$ceiling = SkillSet::ceilingError( $skills );
-		if ( null !== $ceiling ) {
-			return $ceiling;
-		}
-
-		$unbound = $this->agentSafetyBindingError( $user_id );
-		if ( null !== $unbound ) {
-			return $unbound;
-		}
-
-		return true;
-	}
-
-	/**
 	 * S13 real binding check. Uses the Agent Safety plugin's `PackResolver` and
 	 * `PackRegistry` (plugin/src/Support/PackResolver.php + core
 	 * src/Packs/PackRegistry.php):
@@ -276,7 +325,8 @@ final class PagesPack extends Pack {
 	 *   - `registry()->resolve($subject)` returns the resolved pack, falling back
 	 *     to the `default-agent` pack (`allow: []`) — fail closed.
 	 * A user is bound when the FIRST bound token resolves to a pack that allows
-	 * every resolved ability (Tier 0/1) and approval-gates Tier 2. Any other
+	 * every resolved ABILITY (the Agent Safety verb at this seam — see
+	 * {@see agentSafetyPack()}) and approval-gates Tier 2. Any other
 	 * outcome — Agent Safety absent, the pack classes missing, no binding, a
 	 * binding to the empty default pack, an allow gap, or missing Tier-2
 	 * approval — is `pack_unbound` (400).

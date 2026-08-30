@@ -10,10 +10,27 @@
  *
  * ISOLATION RULE (harness contract): NOTHING under src/Packs may be needed by
  * src/Run for the RUN LOOP. A pack feeds the Runner through EXPLICIT seams only
- * — the allow-list (`allowList()`), the skills (via `SkillSet::collect($pack_skills)`)
- * and the verb map (`verbMap()`). No Run class references a Pack; the Runner
- * never reads `Packs\*` classes. The verb→tier map is consulted by the stage-8
- * fence/approval-summary hook, which lives outside the run loop too.
+ * — the allow-list (`allowList()`), the skills (via `SkillSet::collect($pack_skills)`),
+ * the verb map (`verbMap()`) and the ability→verb predicate (`verbFor()`). No Run
+ * class references a Pack; the Runner reaches both verb seams through callables
+ * the composition root injects.
+ *
+ * TWO VERB VOCABULARIES, deliberately. They are NOT the same string space and
+ * conflating them is the bug this class exists to prevent:
+ *   - PACK verbs (`pages/publish`) are SenroFlux's own, argument-aware names.
+ *     They key the S7 plan fence, the plan's `verbs` list and the approval card.
+ *   - AGENT SAFETY verbs are, at the gate seam this plugin is governed by, the
+ *     ABILITY ID itself: `AbilityPermissionGate::wrap()` passes the registered
+ *     ability name straight into `VerdictPipeline::judge()`, which hands it to
+ *     `Gate::evaluate()` as `GateContext::$verb` (agent-safety
+ *     plugin/src/Hooks/AbilityPermissionGate.php:113, plugin/src/Verdict/VerdictPipeline.php:70,
+ *     src/Gate/Gate.php:31-41). Agent Safety's own core module does exactly
+ *     this — `CorePacks` allows `core/read-content` etc. So everything Agent
+ *     Safety sees (`agent_safety_governed_namespaces`, `agent_safety_verb_map`,
+ *     a `Packs\Pack`'s allow-list, the approval-summary `$verb`) is keyed on
+ *     ABILITY IDS, never on `pages/*`.
+ * {@see agentSafetyVerbMap()} is the bridge: it collapses the pack verbs a role
+ * can produce down to the one tier Agent Safety can carry for that ability.
  *
  * @package SenroFlux
  */
@@ -24,6 +41,7 @@ namespace Specflux\SenroFlux\Packs;
 
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\VerbTier;
 use WP_Error;
 
 // Bail on direct access.
@@ -39,6 +57,13 @@ defined( 'ABSPATH' ) || exit;
  * `verbMap()` / `preflight()` as needed.
  */
 abstract class Pack {
+
+	/**
+	 * The namespace every polyfilled pack ability lives in. This is also the
+	 * namespace the pack asks Agent Safety to govern — `core/*` is governed by
+	 * Agent Safety's own core module and must never be re-declared here (S9).
+	 */
+	public const POLYFILL_NAMESPACE = 'senroflux/';
 
 	/** @var array<string,string> role => ability-id template (e.g. 'read' => 'read-content'). */
 	private array $roles = array();
@@ -107,7 +132,7 @@ abstract class Pack {
 			return $core;
 		}
 
-		return 'senroflux/' . $template;
+		return self::POLYFILL_NAMESPACE . $template;
 	}
 
 	/**
@@ -241,100 +266,119 @@ abstract class Pack {
 	}
 
 	/**
-	 * Resolve the S10 VERB for one call. The verb is what Agent Safety tiers,
-	 * grants and audits — it is NOT the ability name. At stage-6 integration the
-	 * RESOLVED verb keys the plan fence and the approval-summary hook; the map
-	 * here mirrors the S10 table so the fence and the hook can key on it.
+	 * Resolve the PACK VERB for one call — the argument-aware name the S7 plan
+	 * fence and the plan's `verbs` list are keyed on. It is NOT the Agent
+	 * Safety verb (see the class docblock).
 	 *
-	 * @param string               $ability The concrete ability id the model called (e.g. 'senroflux/update-post').
-	 * @param array<string,mixed>  $input   The call input (id/status fields drive the predicate).
+	 * The base is the S9 direct-allow rule: with no argument-aware predicate of
+	 * its own, a pack's verb IS the ability id. A pack that tiers one ability
+	 * differently per call (the pages pack's update-post → draft / live /
+	 * publish) overrides this and declares the same split in {@see roleVerbs()}.
+	 *
+	 * @param string              $ability The concrete ability id the model called.
+	 * @param array<string,mixed> $input   The call input (drives an override's predicate).
 	 */
 	public function verbFor( string $ability, array $input ): string {
-		return $this->verbForBase( $this->baseName( $ability ), $input );
-	}
-
-	/**
-	 * Dispatch by the ability name segment.
-	 *
-	 * @param array<string,mixed> $input Call input.
-	 */
-	protected function verbForBase( string $base, array $input ): string {
-		return match ( $base ) {
-			'read-content'    => 'pages/read',
-			'list-patterns'   => 'pages/list-patterns',
-			'get-preview-url' => 'pages/preview',
-			'create-post'     => 'pages/create-draft',
-			'update-post'     => $this->updateVerb( $input ),
-			default           => $base, // Non-verb ability (S9: verbs fall back to ability names).
-		};
-	}
-
-	/**
-	 * The update-post predicate (S10): transition to publish is `pages/publish`
-	 * (tier 2); publish target with unchanged status is `pages/update-live`
-	 * (tier 2); draft|pending target (or no status) is `pages/update-draft`
-	 * (tier 1).
-	 *
-	 * @param array<string,mixed> $input Call input.
-	 */
-	protected function updateVerb( array $input ): string {
-		$desired = $input['status'] ?? null;
-		if ( ! is_string( $desired ) || '' === $desired ) {
-			return 'pages/update-draft';
-		}
-
-		$current = $this->currentStatus( $input );
-
-		if ( 'publish' === $desired && $desired !== $current ) {
-			return 'pages/publish';
-		}
-
-		if ( 'publish' === $desired ) {
-			return 'pages/update-live';
-		}
-
-		return 'pages/update-draft';
-	}
-
-	/**
-	 * The target object's CURRENT status, for the update predicate. Base cannot
-	 * know it from `$input` alone (only `id`), so it returns '' (no transition
-	 * detected); the pages pack overrides to read the post. Thus the base
-	 * treats any publish `status` as a transition → `pages/publish`.
-	 *
-	 * @param array<string,mixed> $input Call input.
-	 */
-	protected function currentStatus( array $input ): string {
 		unset( $input );
 
-		return '';
+		return $ability;
 	}
 
 	/**
 	 * The ability name's final segment (namespace stripped).
+	 *
+	 * @param string $ability Concrete ability id.
 	 */
-	private function baseName( string $ability ): string {
+	protected function baseName( string $ability ): string {
 		$pos = strrpos( $ability, '/' );
 
 		return false === $pos ? $ability : substr( $ability, $pos + 1 );
 	}
 
 	/**
-	 * verb => tier per S10. The tier is what Agent Safety gates on; the fence
-	 * and the approval-summary hook key on the verb, not the ability.
+	 * PACK verb => tier (S10). Abstract on purpose: an empty default would let a
+	 * pack ship with no map at all and rely on VerbTier's fail-closed tier 2 for
+	 * every call, which reads as governance but is really an unfenced accident.
+	 * Every pack states its own table.
 	 *
 	 * @return array<string,int>
 	 */
-	public function verbMap(): array {
-		return array(
-			'pages/read'          => 0,
-			'pages/list-patterns' => 0,
-			'pages/preview'       => 0,
-			'pages/create-draft'  => 1,
-			'pages/update-draft'  => 1,
-			'pages/update-live'   => 2,
-			'pages/publish'       => 2,
-		);
+	abstract public function verbMap(): array;
+
+	/**
+	 * The PACK verbs each role can produce — role => list<verb>. The base
+	 * declares none, which is the S9 direct-allow reading (verb = ability id)
+	 * and, for {@see agentSafetyVerbMap()}, the fail-closed one.
+	 *
+	 * This is the pack DATA that drives Agent Safety governance: it is the only
+	 * place that knows one ability can span several pack verbs, so the bridge
+	 * below never has to hardcode a pack's shape.
+	 *
+	 * @return array<string,list<string>>
+	 */
+	public function roleVerbs(): array {
+		return array();
+	}
+
+	/**
+	 * The ability namespaces this pack asks Agent Safety to govern, contributed
+	 * to `agent_safety_governed_namespaces`. Only the POLYFILL namespace: a
+	 * role that resolved to `core/*` is already governed unconditionally by
+	 * Agent Safety's own core module (S9), and re-declaring it here would be a
+	 * second, weaker opinion on the same ability.
+	 *
+	 * A pack with no roles governs nothing — an empty contribution leaves the
+	 * gate exactly as inert as it is on a site with no integration.
+	 *
+	 * @return list<string>
+	 */
+	public function governedNamespaces(): array {
+		return array() === $this->roles() ? array() : array( self::POLYFILL_NAMESPACE );
+	}
+
+	/**
+	 * The pack's contribution to `agent_safety_verb_map`: Agent Safety verb
+	 * (= polyfill ability id) => tier. Without this, governing the namespace
+	 * would deny every call in it as `unknown_verb` — the gate fails closed on
+	 * unclassified verbs by design (agent-safety README, plugin/agent-safety.php:177).
+	 *
+	 * COLLAPSE RULE — an ability that spans several pack verbs is registered at
+	 * the HIGHEST tier any of them reaches. Agent Safety carries exactly one
+	 * tier per verb, and its only argument-aware seam (`ElevationRule`) is
+	 * constructor-injected by integration modules with no filter a third-party
+	 * host can reach (verified against agent-safety 0.3: no `apply_filters` on
+	 * the elevation-rule list). Rounding UP is the §0 fail-closed reading: the
+	 * pages pack's `update-post` therefore parks for approval on a draft edit
+	 * too, rather than letting a publish through unparked. Rounding down would
+	 * be the only unsafe choice.
+	 *
+	 * Keyed on the polyfill id, never on the resolved one, so this stays a pure
+	 * function of pack data: Agent Safety reads both filters on
+	 * `plugins_loaded` priority 0, long before abilities are registered on
+	 * `init`, so resolution is not knowable here.
+	 *
+	 * @return array<string,int>
+	 */
+	public function agentSafetyVerbMap(): array {
+		$map        = array();
+		$verb_tiers = $this->verbMap();
+		$role_verbs = $this->roleVerbs();
+
+		foreach ( $this->roles() as $role => $template ) {
+			$verbs = $role_verbs[ $role ] ?? array();
+			// Fail closed: a role that declares no verbs is irreversible.
+			$tier = VerbTier::TIER_2;
+			if ( array() !== $verbs ) {
+				$tier = VerbTier::TIER_0;
+				foreach ( $verbs as $verb ) {
+					$tier = max( $tier, VerbTier::tierFor( $verb, $verb_tiers ) );
+				}
+			}
+
+			$map[ self::POLYFILL_NAMESPACE . $template ] = $tier;
+		}
+
+		return $map;
 	}
 
 	/**
@@ -359,16 +403,16 @@ abstract class Pack {
 
 	/**
 	 * S13 preflight: the run may not start from this pack unless (a) the skills
-	 * ceiling holds (S8) and (b) the user is bound to the Agent Safety pack
-	 * (Capability Packs) with every verb in `verbMap()` allowed (tier 0/1) or
-	 * approval-gated (tier 2). Returns true, or a WP_Error (`skills_too_large`
-	 * from the ceiling, or `pack_unbound`).
+	 * ceiling holds (S8) and (b) the user is bound to an Agent Safety Capability
+	 * Pack that allows every ability this pack resolves and approval-gates
+	 * tier 2. Returns true, or a WP_Error (`skills_too_large` from the ceiling,
+	 * or `pack_unbound`).
 	 *
-	 * OPEN SEAM (documented): the Agent Safety binding resolution —
-	 * `agent_safety()` → pack registry → identity tokens (`user:N`,
-	 * `role:administrator`) → "every verb allowed or approval-gated" — is the
-	 * stage-8/9 integration. Until it lands the binding check below is a
-	 * guarded no-op; the skills-ceiling check is real and authoritative NOW.
+	 * The binding check is NOT conditional on `function_exists('agent_safety')`:
+	 * Agent Safety is a hard runtime dependency (S2) and the Capability Pack IS
+	 * the governance seam, so a missing seam is a refusal, never a gated pass.
+	 * Answering that question is each pack's own job — see
+	 * {@see agentSafetyBindingError()}.
 	 *
 	 * @param int $user_id The user the run would be started for.
 	 * @return true|WP_Error
@@ -383,35 +427,26 @@ abstract class Pack {
 			return $ceiling;
 		}
 
-		if ( function_exists( 'agent_safety' ) ) {
-			$unbound = $this->agentSafetyBindingError( $user_id );
-			if ( null !== $unbound ) {
-				return $unbound;
-			}
+		$unbound = $this->agentSafetyBindingError( $user_id );
+		if ( null !== $unbound ) {
+			return $unbound;
 		}
 
 		return true;
 	}
 
 	/**
-	 * S13 seam: resolve the Agent Safety pack for the user's identity tokens and
-	 * require every verb in `verbMap()` to be allowed (tier 0/1) or
-	 * approval-gated (tier 2). Returns null when bound, else `pack_unbound`.
+	 * S13 binding check: is this user bound to an Agent Safety Capability Pack
+	 * that admits every ability this pack resolves and approval-gates tier 2?
+	 * Return null when bound, else the refusal (`pack_unbound`).
 	 *
-	 * Real integration arrives with stage 8 (pack registry resolution) and
-	 * stage 9 (Capability Packs binding). Defensive `function_exists` /
-	 * `class_exists` guards only; callers must not treat this as authoritative
-	 * before then — SenroFlux never auto-binds (S13).
+	 * Abstract on purpose. The base used to answer `null` unconditionally,
+	 * which made {@see preflight()} unable to fail for any pack but the pages
+	 * one — a governance check that cannot fail is not a check. A pack that has
+	 * no binding of its own must say so explicitly by returning a refusal.
 	 *
-	 * @return WP_Error|null null when no binding defect is detectable yet.
+	 * @param int $user_id The user the run would be started for.
+	 * @return WP_Error|null null when bound, else `pack_unbound`.
 	 */
-	protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
-		unset( $user_id );
-
-		// Defensive guard: the Agent Safety surface (agent_safety()->packs()…)
-		// is not consulted until stage 8/9. Keeping the seam type-correct and
-		// returning null means preflight stays permissive for direct-allow runs
-		// and for packs whose binding is not yet wired.
-		return null;
-	}
+	abstract protected function agentSafetyBindingError( int $user_id ): ?WP_Error;
 }

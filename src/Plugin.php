@@ -53,6 +53,12 @@ final class Plugin {
 	/** Lazily built runner. */
 	private ?Runner $runner = null;
 
+	/** The one pages-pack instance this request shares. */
+	private ?\Specflux\SenroFlux\Packs\Pages\PagesPack $pages_pack = null;
+
+	/** Whether {@see govern()} has already wired its filters this request. */
+	private bool $governed = false;
+
 	/**
 	 * Get (and lazily create) the plugin instance. Non-nullable by design:
 	 * consumers feature-detect the FUNCTION (function_exists('senroflux')),
@@ -82,6 +88,50 @@ final class Plugin {
 	}
 
 	/**
+	 * Register the packs and hand their governance data to Agent Safety.
+	 *
+	 * Split out of {@see boot()} and run EARLIER for one reason: Agent Safety
+	 * reads `agent_safety_governed_namespaces` and `agent_safety_verb_map`
+	 * inside its own `plugins_loaded` priority-0 bootstrap, while SenroFlux
+	 * boots at priority 5. A pack registered in `boot()` would therefore be
+	 * ungoverned — the gate would return early for every `senroflux/*` ability
+	 * and no write would produce a verdict, an approval park or an audit row.
+	 * senroflux.php calls this on `plugins_loaded` priority -1.
+	 *
+	 * Idempotent, and deliberately NOT gated on the Agent Safety dependency
+	 * check: with Agent Safety absent both filters are inert, and `start()`
+	 * still refuses every run as `senroflux_ungoverned`.
+	 */
+	public function govern(): void {
+		if ( $this->governed ) {
+			return;
+		}
+		$this->governed = true;
+
+		$pages_pack = $this->pages_pack();
+		add_filter(
+			'senroflux_packs',
+			static fn ( array $packs ): array => $packs + array( 'pages' => $pages_pack ),
+			10,
+			1
+		);
+
+		\Specflux\SenroFlux\Packs\PackRegistry::contributeToAgentSafety();
+	}
+
+	/**
+	 * The request's one pages-pack instance (S10/S11).
+	 */
+	private function pages_pack(): \Specflux\SenroFlux\Packs\Pages\PagesPack {
+		if ( null === $this->pages_pack ) {
+			$content_locale   = function_exists( 'get_locale' ) ? get_locale() : '';
+			$this->pages_pack = new \Specflux\SenroFlux\Packs\Pages\PagesPack( $content_locale );
+		}
+
+		return $this->pages_pack;
+	}
+
+	/**
 	 * Wire runtime seams. Called once from plugins_loaded (priority 5, after
 	 * Agent Safety's own priority-0 bootstrap so its classes exist).
 	 */
@@ -100,17 +150,14 @@ final class Plugin {
 			Schema::maybe_upgrade( $wpdb );
 		}
 
-		// Pages pack (S10/S11): the pack, its polyfill abilities, its pattern
-		// vocabulary and its approval-summary builder. All wiring lives in
-		// this composition root — nothing under src/Run knows packs exist.
-		$content_locale = function_exists( 'get_locale' ) ? get_locale() : '';
-		$pages_pack     = new \Specflux\SenroFlux\Packs\Pages\PagesPack( $content_locale );
-		add_filter(
-			'senroflux_packs',
-			static fn ( array $packs ): array => $packs + array( 'pages' => $pages_pack ),
-			10,
-			1
-		);
+		// Pages pack (S10/S11): its polyfill abilities, its pattern vocabulary
+		// and its approval-summary builder. All wiring lives in this
+		// composition root — nothing under src/Run knows packs exist. The pack
+		// itself and its Agent Safety governance were registered earlier, by
+		// govern(); calling it again here is a no-op that keeps boot() correct
+		// on a host that never fired the early hook.
+		$this->govern();
+		$pages_pack = $this->pages_pack();
 		// The AS pack resolves the ability allow-list, which touches the
 		// Abilities registry — that must not happen before `init`, so the
 		// registration is deferred with the pack captured by value.
