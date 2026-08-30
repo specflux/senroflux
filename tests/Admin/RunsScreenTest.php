@@ -81,8 +81,9 @@ final class RunsScreenTest extends TestCase {
 				return null;
 			}
 
-			public function preflight( int $user_id ): true|WP_Error {
-				unset( $user_id );
+			/** @param list<string>|null $skills_disable Ignored by the double. */
+			public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): true|WP_Error {
+				unset( $user_id, $consumer, $goal, $skills_disable );
 
 				return true === $this->preflightResult ? true : $this->preflightResult;
 			}

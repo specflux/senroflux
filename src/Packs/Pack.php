@@ -10,7 +10,7 @@
  *
  * ISOLATION RULE (harness contract): NOTHING under src/Packs may be needed by
  * src/Run for the RUN LOOP. A pack feeds the Runner through EXPLICIT seams only
- * — the allow-list (`allowList()`), the skills (via `SkillSet::collect($pack_skills)`),
+ * — the allow-list (`allowList()`), the skills (via `SkillSet::collect($consumer, $goal, $pack)`),
  * the verb map (`verbMap()`) and the ability→verb predicate (`verbFor()`). No Run
  * class references a Pack; the Runner reaches both verb seams through callables
  * the composition root injects.
@@ -414,14 +414,24 @@ abstract class Pack {
 	 * Answering that question is each pack's own job — see
 	 * {@see agentSafetyBindingError()}.
 	 *
-	 * @param int $user_id The user the run would be started for.
+	 * The skills arguments exist so this check and `start()`'s are the SAME
+	 * question: `start()` passes the run's real consumer, goal and disable list,
+	 * so the `senroflux_run_skills` filter sees identical inputs in both places
+	 * and the two can never disagree about the ceiling. The screen-time caller
+	 * (no run yet) keeps the empty defaults, which is the pre-run approximation
+	 * and is documented as such.
+	 *
+	 * @param int               $user_id        The user the run would be started for.
+	 * @param string            $consumer       Consumer identifier, when known.
+	 * @param string            $goal           The run's goal, when known.
+	 * @param list<string>|null $skills_disable Non-required skill ids the start would drop.
 	 * @return true|WP_Error
 	 */
-	public function preflight( int $user_id ): true|WP_Error {
+	public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): true|WP_Error {
 		// S8/S13: the ceiling is checked over the COMBINED harness + pack skill
 		// set (the same set `start()` will collect), so a pack that pushes the
 		// instruction over the ceiling is refused here, never truncated.
-		$skills  = SkillSet::collect( '', '', $this->skills() );
+		$skills  = SkillSet::collect( $consumer, $goal, $this, $skills_disable );
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
 			return $ceiling;

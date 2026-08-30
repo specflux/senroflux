@@ -283,7 +283,7 @@ final class Plugin {
 
 			// S13: preflight — skills ceiling plus Capability-Packs binding
 			// (the binding check itself is completed with the pages pack).
-			$preflight = $pack_obj->preflight( $user_id );
+			$preflight = $pack_obj->preflight( $user_id, $consumer, $goal, $skills_disable );
 			if ( is_wp_error( $preflight ) ) {
 				// Refused: skills_too_large (400) or pack_unbound (400).
 				return $preflight;
@@ -302,7 +302,7 @@ final class Plugin {
 
 		// S8: collect skills WITH the pack's skills and the disable list; the
 		// ceiling is a start-time gate — refused, never truncated.
-		$skills  = SkillSet::collect( $consumer, $goal, null !== $pack_obj ? $pack_obj->skills() : null, $skills_disable );
+		$skills  = SkillSet::collect( $consumer, $goal, $pack_obj, $skills_disable );
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
 			return $ceiling;

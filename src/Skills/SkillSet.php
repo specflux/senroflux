@@ -9,6 +9,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Skills;
 
+use Specflux\SenroFlux\Packs\Pack;
 use WP_Error;
 
 // Bail on direct access.
@@ -69,20 +70,29 @@ final class SkillSet {
 	 * occurrence. The result is grouped by source (harness, pack, consumer) so
 	 * the render order is fixed regardless of filter ordering.
 	 *
-	 * @param string             $consumer       Consumer identifier.
-	 * @param string             $goal           The run's goal.
-	 * @param iterable<Skill>|null $pack_skills  Pack-provided skills, in order.
-	 * @param list<string>|null  $skills_disable Skill ids to suppress (required ids ignored).
+	 * Undroppable means UNFORGEABLE, not merely present: a required harness
+	 * skill is re-stamped from {@see self::harnessSkills()} after the filter,
+	 * so a callback that returns a skill carrying a required id but a body of
+	 * its own cannot substitute the harness rules the model is told to follow.
+	 *
+	 * @param string            $consumer       Consumer identifier.
+	 * @param string            $goal           The run's goal.
+	 * @param mixed             $pack           The run's Pack, or null. Anything
+	 *                                          that is not a Pack is treated as
+	 *                                          null (the direct-allow reading).
+	 * @param list<string>|null $skills_disable Skill ids to suppress (required ids ignored).
 	 * @return list<Skill>
 	 */
-	public static function collect( string $consumer, string $goal, ?iterable $pack_skills = null, ?array $skills_disable = null ): array {
+	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null ): array {
+		$pack = $pack instanceof Pack ? $pack : null;
+
 		$base = array();
 		foreach ( self::harnessSkills() as $skill ) {
 			$base[ $skill->id ] = $skill;
 		}
 
-		if ( null !== $pack_skills ) {
-			foreach ( $pack_skills as $skill ) {
+		if ( null !== $pack ) {
+			foreach ( $pack->skills() as $skill ) {
 				if ( ! isset( $base[ $skill->id ] ) ) {
 					$base[ $skill->id ] = $skill;
 				}
@@ -91,19 +101,25 @@ final class SkillSet {
 
 		/**
 		 * Filters the skill list a run will carry, allowing a consumer to add
-		 * skills (typically of source Consumer). Removing a required harness
-		 * skill is ignored below — required skills are undroppable.
+		 * skills (typically of source Consumer). Removing OR rewriting a
+		 * required harness skill is ignored below — they are undroppable and
+		 * re-stamped from the harness set.
 		 *
-		 * @param list<Skill>  $skills   The harness + pack skills so far.
-		 * @param object|null  $pack     The pack descriptor (always null here).
-		 * @param string       $consumer Consumer identifier.
-		 * @param string       $goal     The run's goal.
+		 * @param list<Skill> $skills   The harness + pack skills so far.
+		 * @param Pack|null   $pack     The run's pack, or null for a direct-allow run.
+		 * @param string      $consumer Consumer identifier.
+		 * @param string      $goal     The run's goal.
 		 * @return array<int,Skill>
 		 */
-		$filtered = apply_filters( 'senroflux_run_skills', array_values( $base ), null, $consumer, $goal );
+		$filtered = apply_filters( 'senroflux_run_skills', array_values( $base ), $pack, $consumer, $goal );
 
 		if ( ! is_array( $filtered ) ) {
 			$filtered = array();
+		}
+
+		$required = array();
+		foreach ( self::harnessSkills() as $skill ) {
+			$required[ $skill->id ] = $skill;
 		}
 
 		$seen = array();
@@ -111,15 +127,17 @@ final class SkillSet {
 		foreach ( $filtered as $skill ) {
 			if ( $skill instanceof Skill && ! isset( $seen[ $skill->id ] ) ) {
 				$seen[ $skill->id ] = true;
-				$kept[]             = $skill;
+				// Identity, not just presence: a required id always renders the
+				// harness's own skill object.
+				$kept[] = $required[ $skill->id ] ?? $skill;
 			}
 		}
 
 		// Required harness skills are undroppable: re-add any a filter removed.
-		foreach ( self::harnessSkills() as $skill ) {
-			if ( ! isset( $seen[ $skill->id ] ) ) {
-				$seen[ $skill->id ] = true;
-				$kept[]             = $skill;
+		foreach ( $required as $id => $skill ) {
+			if ( ! isset( $seen[ $id ] ) ) {
+				$seen[ $id ] = true;
+				$kept[]      = $skill;
 			}
 		}
 
@@ -150,7 +168,7 @@ final class SkillSet {
 	}
 
 	/**
-	 * Ceiling check: sum( strlen( body ) ) / 4 over ALL given skills must be
+	 * Ceiling check: sum( mb_strlen( body ) ) / 4 over ALL given skills must be
 	 * <= max tokens, where max = (int) apply_filters(
 	 * 'senroflux_skills_max_tokens', self::DEFAULT_MAX_TOKENS ). Returns null
 	 * when within ceiling, else a WP_Error( 'skills_too_large' ) carrying the
@@ -162,9 +180,12 @@ final class SkillSet {
 	public static function ceilingError( array $skills ): ?WP_Error {
 		$max_tokens = (int) apply_filters( 'senroflux_skills_max_tokens', self::DEFAULT_MAX_TOKENS );
 
+		// S8 says CHARACTERS / 4, not bytes / 4: a body of accented or CJK text
+		// would otherwise be counted two to four times over and refuse a run
+		// that is well inside the ceiling.
 		$total_chars = 0;
 		foreach ( $skills as $skill ) {
-			$total_chars += strlen( $skill->body );
+			$total_chars += mb_strlen( $skill->body );
 		}
 
 		$tokens = (int) ceil( $total_chars / 4 );
