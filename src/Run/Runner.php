@@ -118,15 +118,12 @@ final class Runner {
 		set_transient( $lock_key, 1, 30 );
 
 		try {
-			if ( $run->status->isTerminal() ) {
-				return $this->state( $run, array(), null );
-			}
-
-			$new_steps = array();
-
 			// S5: a park resolution only makes sense on a parked run — a
 			// pending/running/terminal run carrying one is a protocol error,
-			// never a hint to be ignored.
+			// never a hint to be ignored. Terminal runs are checked FIRST so
+			// the guard is reachable for them too: a finished run answering a
+			// resume with its unchanged state would tell the caller their
+			// decision landed when nothing happened.
 			if ( null !== $resume && ! $run->status->isParked() ) {
 				return new WP_Error(
 					'resume_mismatch',
@@ -134,6 +131,12 @@ final class Runner {
 					array( 'status' => 400 )
 				);
 			}
+
+			if ( $run->status->isTerminal() ) {
+				return $this->state( $run, array(), null );
+			}
+
+			$new_steps = array();
 
 			if ( $run->status->isParked() ) {
 				if ( null !== $resume ) {
@@ -288,17 +291,29 @@ final class Runner {
 			// Approve: re-run the parked call. The permission re-check passes
 			// via the by-reference grant; if it STILL demands approval (bridge
 			// unavailable / grant expired), remain parked.
-			$outcome = $this->executeCall( ToolRegistry::forRun( $run ), $call );
+			$registry = ToolRegistry::forRun( $run );
 
-			if ( 'approval_required' === $outcome->kind ) {
-				return array(
-					'run'   => $this->refresh( $run ),
-					'steps' => $new_steps,
-					'ui'    => $this->approvalUi( $outcome, $call ),
-				);
+			// S7, defence in depth: a human approval answers Agent Safety's
+			// question, not the harness's. The plan fence is re-checked here
+			// because the accepted plan can have changed (or been vetoed away)
+			// while the call sat parked, and this is the ONE execution path
+			// that does not come through the loop's fence.
+			$refusal = $this->fenceRefusal( $registry, $run, $call );
+			if ( null !== $refusal ) {
+				$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
+			} else {
+				$outcome = $this->executeCall( $registry, $call );
+
+				if ( 'approval_required' === $outcome->kind ) {
+					return array(
+						'run'   => $this->refresh( $run ),
+						'steps' => $new_steps,
+						'ui'    => $this->approvalUi( $outcome, $call ),
+					);
+				}
+
+				$new_steps[] = $this->appendToolResult( run: $run, call: $call, outcome: $outcome );
 			}
-
-			$new_steps[] = $this->appendToolResult( run: $run, call: $call, outcome: $outcome );
 		}
 
 		// Running again: the loop's crash-resume drains any REMAINING sibling
@@ -322,18 +337,6 @@ final class Runner {
 	 */
 	private function driveLoop( Run $run, array &$new_steps ): array {
 		$registry = ToolRegistry::forRun( $run );
-
-		// S6: the harness tool is in EVERY run's declarations while a question
-		// remains, withdrawn at zero. It is not an ability, so it is merged
-		// onto the permission-agnostic declaration surface only.
-		$harness_declarations = array_merge(
-			HarnessTools::declarations( $this->remainingQuestions( $run ) ),
-			// S7: propose-plan is declared while a plan remains, withdrawn at 0.
-			PlanTools::declarations( $this->remainingPlans( $run ) )
-		);
-		if ( array() !== $harness_declarations ) {
-			$registry = $registry->withDeclarations( $harness_declarations );
-		}
 
 		// S8: the whole system instruction is rendered per tick, audited at
 		// seq 0, and a skills ceiling breach fails the run (never truncation).
@@ -379,8 +382,23 @@ final class Runner {
 			$pending_calls = $this->unconsumedCalls( $run );
 
 			if ( null === $pending_calls ) {
+				// S6/S7: the harness tools are declared while a question / plan
+				// remains and withdrawn at zero. Recomputed for EVERY model call,
+				// not once per tick: an `invalid_question` refusal inside this
+				// loop moves the remaining count, and a stale declaration set
+				// would offer the model a tool the harness has already withdrawn
+				// (or hide one it still has). They are not abilities, so they
+				// touch the permission-agnostic declaration surface only.
+				$harness_declarations = array_merge(
+					HarnessTools::declarations( $this->remainingQuestions( $run ) ),
+					PlanTools::declarations( $this->remainingPlans( $run ) )
+				);
+				$tools                = array() !== $harness_declarations
+					? $registry->withDeclarations( $harness_declarations )
+					: $registry;
+
 				$history = $this->historyForPrompt( $run );
-				$turn    = $this->gateway->generateTurn( $history, $instruction, $registry );
+				$turn    = $this->gateway->generateTurn( $history, $instruction, $tools );
 
 				if ( $turn instanceof WP_Error ) {
 					$report = $this->failError( $run, 'model_error', $turn->get_error_message() );
@@ -407,7 +425,12 @@ final class Runner {
 				if ( array() === $pending_calls ) {
 					// S12: a finish attempt may be parked by a verify nudge.
 					if ( $this->finishAttempt( $run, $new_steps ) ) {
-						// Nudged: still running, no report yet.
+						// Nudged: S12 says KEEP RUNNING. Saying so explicitly
+						// matters — a run nudged on its very first tick has
+						// never left `pending`, and a consumer polling on
+						// status would treat it as never started.
+						$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
 						return array(
 							'run' => $this->refresh( $run ),
 							'ui'  => null,
@@ -1541,14 +1564,30 @@ final class Runner {
 	 * so the call id is recovered from the model turn for the FunctionResponse.
 	 */
 	private function latestAskUserCallId( int $run_id ): ?string {
+		return $this->unansweredCallId( $run_id, HarnessTools::functionName() );
+	}
+
+	/**
+	 * The id of the newest model step's first call to `$function_name` that no
+	 * tool_result has answered yet.
+	 *
+	 * The unconsumed check is what makes two harness calls in ONE model message
+	 * work: without it the first id is returned again after it has been
+	 * answered, so every later answer is written against a call the model
+	 * already has a response for, the second question is re-served forever, and
+	 * the run only ends when its question budget runs out.
+	 */
+	private function unansweredCallId( int $run_id, string $function_name ): ?string {
+		$consumed = $this->consumedCallIds( $run_id );
+
 		// Newest model step first — that is the parked message. (Steps are
-		// ordered by seq ASC; the park's model step carries the ask-user call.)
+		// ordered by seq ASC; the park's model step carries the harness call.)
 		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
 			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
 				continue;
 			}
 			foreach ( $this->extractCalls( Message::fromArray( $step->messageArray ) ) as $call ) {
-				if ( HarnessTools::functionName() === $call['name'] ) {
+				if ( $function_name === $call['name'] && ! isset( $consumed[ $call['id'] ] ) ) {
 					return (string) $call['id'];
 				}
 			}
@@ -1556,6 +1595,29 @@ final class Runner {
 		}
 
 		return null;
+	}
+
+	/**
+	 * Every function-call id some tool_result step has already answered
+	 * (executed, refused or explicitly rejected).
+	 *
+	 * @return array<string,true>
+	 */
+	private function consumedCallIds( int $run_id ): array {
+		$consumed = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::ToolResult !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			foreach ( (array) ( $step->messageArray['parts'] ?? array() ) as $part ) {
+				$id = $part['functionResponse']['id'] ?? null;
+				if ( is_string( $id ) && '' !== $id ) {
+					$consumed[ $id ] = true;
+				}
+			}
+		}
+
+		return $consumed;
 	}
 
 	/** Seq of the newest question step, or 0. */
@@ -1734,9 +1796,14 @@ final class Runner {
 					)
 				);
 
+				// S12: EVERY terminal transition builds and returns the report,
+				// cancellation included — a run that ends without one leaves the
+				// consumer with no record of what it changed before the veto.
+				$report = $this->report( $run->id );
+
 				return array(
 					'run' => $this->refresh( $run ),
-					'ui'  => array(),
+					'ui'  => array( 'report' => $report ),
 				);
 			}
 
@@ -2147,19 +2214,7 @@ final class Runner {
 	 * the call id is recovered from the model turn for the FunctionResponse.
 	 */
 	private function latestProposePlanCallId( int $run_id ): ?string {
-		foreach ( array_reverse( $this->store->getSteps( $run_id ) ) as $step ) {
-			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
-				continue;
-			}
-			foreach ( $this->extractCalls( Message::fromArray( $step->messageArray ) ) as $call ) {
-				if ( PlanTools::functionName() === $call['name'] ) {
-					return (string) $call['id'];
-				}
-			}
-			break; // Only the newest model step is the parked message.
-		}
-
-		return null;
+		return $this->unansweredCallId( $run_id, PlanTools::functionName() );
 	}
 
 	/** Seq of the newest plan step, or 0. */

@@ -212,10 +212,122 @@ final class RunnerResumeTest extends TestCase {
 		$this->assertSame( 'failed', $result['run']['status'], 'missing plan context fails the run explicitly' );
 	}
 
-	public function test_the_removed_approval_action_parameter_is_refused_at_the_http_seam(): void {
+	public function test_a_terminal_run_refuses_a_resolution_instead_of_echoing_its_state(): void {
+		$run_id = $this->createRun();
+		$this->forceStatus( $run_id, RunStatus::Completed );
+		$step_count = $this->store->getRun( $run_id )->stepCount;
+
+		// A finished run answering a decision with its unchanged state reads as
+		// "your approval landed" when nothing happened. S5's guard covers it.
+		$this->assertMismatch(
+			$this->runner->tick( $run_id, $step_count, array( 'action' => 'approve' ) ),
+			'completed run + approval shape'
+		);
+
+		$this->forceStatus( $run_id, RunStatus::Cancelled );
+		$this->assertMismatch(
+			$this->runner->tick( $run_id, $step_count, array( 'skip' => true ) ),
+			'cancelled run + question shape'
+		);
+
+		// A terminal run WITHOUT a resolution still just reports its state.
+		$state = $this->runner->tick( $run_id, $step_count, null );
+		$this->assertIsArray( $state );
+		$this->assertSame( 'cancelled', $state['run']['status'] );
+	}
+
+	/**
+	 * S7, defence in depth: approving a parked Tier-2 call re-runs it, and the
+	 * plan fence must be re-checked on that path too — the accepted plan can be
+	 * gone by the time the human clicks Approve.
+	 */
+	public function test_approving_a_parked_call_still_passes_the_plan_fence(): void {
+		add_filter(
+			'senroflux_verb_map',
+			static fn ( array $map ): array => array_merge( $map, array( 'agsafe-smoke/blocked' => 2 ) ),
+			20,
+			1
+		);
+
+		$executions          = 0;
+		$ability             = new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/blocked',
+			permission_result: new WP_Error(
+				'approval_required',
+				'needs a human',
+				array(
+					'approval_id' => 'apr_1',
+					'verb'        => 'agsafe-smoke/blocked',
+					'tier'        => 2,
+				)
+			)
+		);
+		$ability->on_execute = static function () use ( &$executions ): void {
+			++$executions;
+		};
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] = $ability;
+
+		$run_id = $this->createRun();
+		// An accepted plan covering the verb, so the call reaches the executor
+		// and parks for approval in the first place.
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'Do the blocked thing',
+				'steps'       => array(
+					array(
+						'text'  => 'Do it',
+						'verbs' => array( 'agsafe-smoke/blocked' ),
+						'tier'  => 2,
+					),
+				),
+				'assumptions' => array(),
+			),
+			'senroflux/propose-plan',
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		$this->gateway->script[] = new ModelTurn(
+			new ModelMessage( array( new MessagePart( new FunctionCall( 'call_1', 'wpab__agsafe-smoke__blocked', array() ) ) ) ),
+			10,
+			5
+		);
+		$parked                  = $this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, null );
+		$this->assertSame( RunStatus::AwaitingApproval->value, $parked['run']['status'] );
+
+		// The human vetoes the plan elsewhere while the approval sits pending.
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => null ) );
+
+		$this->gateway->script[] = new ModelTurn(
+			new ModelMessage( array( new MessagePart( 'Understood.' ) ) ),
+			10,
+			5
+		);
+		$this->runner->tick(
+			$run_id,
+			$this->store->getRun( $run_id )->stepCount,
+			array( 'action' => 'approve' )
+		);
+
+		$this->assertSame( 0, $executions, 'an approval never bypasses the plan fence' );
+
+		$codes = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::ToolResult === $step->kind ) {
+				$codes[] = $step->messageArray['parts'][0]['functionResponse']['response']['error'] ?? null;
+			}
+		}
+		$this->assertContains( 'plan_required', $codes );
+	}
+
+	public function test_the_removed_approval_action_parameter_is_a_php_type_error(): void {
 		// The 0.1 contract carried the decision as a bare string. The PHP API
 		// is typed `?array $resume` (S5), so the old call shape is a TypeError
-		// — a loud, unignorable rejection.
+		// — a loud, unignorable rejection. The HTTP seam's own refusal of the
+		// legacy field is covered by tests/Http/ResumeContractTest.php.
 		$this->expectException( \TypeError::class );
 		senroflux()->tick( 1, 0, 'approve' );
 	}

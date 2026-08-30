@@ -593,6 +593,84 @@ final class AskUserParkTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Two ask-user calls in ONE model message must resolve as two independent
+	 * questions. Recovering the call id by "first ask-user in the newest model
+	 * step" answers the FIRST id twice, so the second question is re-served on
+	 * every tick and the run only stops when max_questions runs out.
+	 */
+	public function test_two_ask_user_calls_in_one_message_resolve_as_two_questions(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Two things first.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_q1',
+					HarnessTools::FUNCTION_NAME,
+					array(
+						'text'      => 'Which color?',
+						'rationale' => 'Need it.',
+					)
+				)
+			),
+			new MessagePart(
+				new FunctionCall(
+					'call_q2',
+					HarnessTools::FUNCTION_NAME,
+					array(
+						'text'      => 'Which size?',
+						'rationale' => 'Need it too.',
+					)
+				)
+			)
+		);
+
+		$first = $this->runner->tick( $run_id, 0, null );
+		$this->assertIsArray( $first );
+		$this->assertSame( RunStatus::AwaitingUser->value, $first['run']['status'] );
+		$this->assertSame( 'Which color?', $first['ui']['question']['text'] ?? '' );
+
+		$second = $this->runner->tick(
+			$run_id,
+			$this->store->getRun( $run_id )->stepCount,
+			array( 'answer' => array( 'text' => 'dark' ) )
+		);
+		$this->assertIsArray( $second );
+		$this->assertSame( RunStatus::AwaitingUser->value, $second['run']['status'], 'the SECOND question parks in turn' );
+		$this->assertSame( 'Which size?', $second['ui']['question']['text'] ?? '', 'not the first question again' );
+
+		$this->gateway->script[] = self::textTurn( 'Thanks!' );
+		$third                   = $this->runner->tick(
+			$run_id,
+			$this->store->getRun( $run_id )->stepCount,
+			array( 'answer' => array( 'text' => 'large' ) )
+		);
+		$this->assertIsArray( $third );
+		$this->assertSame( RunStatus::Completed->value, $third['run']['status'], 'both answered, the run proceeds' );
+
+		// Two question steps, and two answers written against DISTINCT ids.
+		$questions = array();
+		$answers   = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::Question === $step->kind ) {
+				$questions[] = $step->messageArray['text'] ?? '';
+			}
+			if ( StepKind::ToolResult === $step->kind && HarnessTools::TOOL_NAME === $step->toolName ) {
+				$response                                      = $step->messageArray['parts'][0]['functionResponse'] ?? array();
+				$answers[ (string) ( $response['id'] ?? '' ) ] = $response['response']['answer'] ?? null;
+			}
+		}
+
+		$this->assertSame( array( 'Which color?', 'Which size?' ), $questions );
+		$this->assertSame(
+			array(
+				'call_q1' => 'dark',
+				'call_q2' => 'large',
+			),
+			$answers
+		);
+	}
+
 	/** The owner answering their own run records NO answered_by step. */
 	public function test_the_owner_answering_records_no_answered_by(): void {
 		$run_id                  = $this->createRun(); // owned by user 1

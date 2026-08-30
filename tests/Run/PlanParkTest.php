@@ -531,6 +531,12 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame( 'cancelled', $result['run']['status'], 'reaching max_plans on a veto cancels the run' );
 		$this->assertSame( 'plan_rejected', $result['run']['error']['code'] ?? '' );
 		$this->assertNull( $this->store->getRun( $run_id )->acceptedPlanStepId );
+
+		// S12: a cancellation is a terminal transition like any other, so the
+		// harness-built report is present and persisted.
+		$this->assertArrayHasKey( 'report', $result['ui'], 'a terminal transition returns its report' );
+		$this->assertSame( array(), $result['ui']['report']['changes'] ?? null, 'nothing was written before the veto' );
+		$this->assertNotNull( $this->store->getRun( $run_id )->result, 'result_json is persisted' );
 	}
 
 	// ------------------------------------------------------------------

@@ -209,7 +209,9 @@ final class VerificationReportTest extends TestCase {
 		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertIsArray( $result );
-		$this->assertNotSame( 'completed', $result['run']['status'], 'a first finish with an unverified write stays running' );
+		// S12: nudged means KEEP RUNNING — not left in the status the run
+		// started life with.
+		$this->assertSame( 'running', $result['run']['status'], 'a first finish with an unverified write stays running' );
 
 		$run = $this->store->getRun( $run_id );
 		$this->assertNotNull( $run );
