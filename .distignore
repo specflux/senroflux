@@ -1,0 +1,15 @@
+# Development-only files excluded from the WordPress.org build.
+.git
+.github
+.gitignore
+.distignore
+.DS_Store
+.phpunit.result.cache
+composer.json
+composer.lock
+phpcs.xml.dist
+phpstan.neon.dist
+phpstan-bootstrap.php
+phpunit.xml.dist
+tests
+CONTEXT.md
