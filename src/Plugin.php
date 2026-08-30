@@ -389,7 +389,19 @@ final class Plugin {
 			return $this->ungoverned_error();
 		}
 
-		return $this->runner()->tick( $run_id, $expected_step_count, $resume );
+		// S10: a Tier-2 call parked inside this tick renders an approval row
+		// naming the run that drafted the page. That provenance is read from
+		// the RUN ROW here, never from the tool call's arguments — and the
+		// scope is one tick, because several ticks share one PHP process under
+		// PHPUnit, WP-CLI and cron.
+		$run = $this->runner()->store()->getRun( $run_id );
+		\Specflux\SenroFlux\Packs\Pages\PublishSummary::useRunContext( null !== $run ? $run->goal : null );
+
+		try {
+			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
+		} finally {
+			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
+		}
 	}
 
 	/**
