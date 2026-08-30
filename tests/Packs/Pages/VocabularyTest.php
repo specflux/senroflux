@@ -20,6 +20,7 @@ namespace Specflux\SenroFlux\Tests\Packs\Pages;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Pages\PagesPack;
+use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
 
 final class VocabularyTest extends TestCase {
@@ -59,11 +60,81 @@ final class VocabularyTest extends TestCase {
 		$vocabulary = new Vocabulary();
 
 		foreach ( $vocabulary->all() as $pattern ) {
+			// BYTE-exact, not normalised: this runs on WordPress core's real
+			// parser, so there is nothing to forgive.
 			$this->assertSame(
-				$this->normalize( $pattern['markup'] ),
-				$this->normalize( serialize_blocks( parse_blocks( $pattern['markup'] ) ) ),
+				$pattern['markup'],
+				serialize_blocks( parse_blocks( (string) $pattern['markup'] ) ),
 				$pattern['name'] . ' must survive a parse→serialize round-trip'
 			);
+		}
+	}
+
+	public function test_no_pattern_carries_a_colour_attribute(): void {
+		// S11: no colour attributes anywhere in the vocabulary.
+		foreach ( ( new Vocabulary() )->all() as $pattern ) {
+			$markup = (string) $pattern['markup'];
+
+			$this->assertStringNotContainsString( 'backgroundColor', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( 'textColor', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( 'gradient', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( '"color"', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( '-background-color', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( 'has-text-color', $markup, $pattern['name'] );
+		}
+	}
+
+	public function test_no_pattern_carries_an_image_or_a_placeholder(): void {
+		foreach ( ( new Vocabulary() )->all() as $pattern ) {
+			$markup = (string) $pattern['markup'];
+
+			$this->assertStringNotContainsString( 'wp:image', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( '<img', $markup, $pattern['name'] );
+			// A registered pattern a human inserts has to be writable back
+			// through create/update; a `{{placeholder}}` would be refused.
+			$this->assertDoesNotMatchRegularExpression( '/\{\{.*?\}\}/', $markup, $pattern['name'] );
+			$this->assertStringNotContainsString( 'style="..."', $markup, $pattern['name'] );
+		}
+	}
+
+	public function test_every_pattern_names_itself_canonically(): void {
+		foreach ( ( new Vocabulary() )->all() as $pattern ) {
+			$this->assertStringContainsString(
+				'"metadata":{"name":"senroflux/' . $pattern['slug'] . '"}',
+				(string) $pattern['markup'],
+				$pattern['name']
+			);
+		}
+	}
+
+	public function test_every_registered_pattern_writes_back_unchanged(): void {
+		// The round-trip decision, asserted end to end: take the markup the
+		// editor would insert, run it through the write validator, and require
+		// that it both passes and comes back byte for byte.
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+		$hero       = (string) $vocabulary->all()[0]['markup'];
+
+		foreach ( $vocabulary->all() as $pattern ) {
+			if ( 'hero' === $pattern['slug'] ) {
+				continue;
+			}
+
+			$content = $hero . "\n\n" . (string) $pattern['markup'];
+			$result  = $validator->clean( $content );
+
+			$this->assertTrue( $result['ok'], $pattern['name'] . ': ' . ( $result['wp_error'] ? $result['wp_error']->get_error_code() : '' ) );
+			$this->assertSame( $content, $result['content'], $pattern['name'] );
+		}
+	}
+
+	public function test_every_pattern_declares_the_child_it_may_repeat(): void {
+		foreach ( ( new Vocabulary() )->all() as $pattern ) {
+			$this->assertArrayHasKey( 'repeatable', $pattern, $pattern['name'] );
+			$this->assertNotEmpty( $pattern['repeatable'], $pattern['name'] );
+			foreach ( $pattern['repeatable'] as $name ) {
+				$this->assertContains( $name, ( new Vocabulary() )->blockNames(), $pattern['name'] );
+			}
 		}
 	}
 
@@ -97,9 +168,5 @@ final class VocabularyTest extends TestCase {
 			$this->assertArrayHasKey( 'slots', $pattern['constraints'] );
 			$this->assertArrayHasKey( 'stated', $pattern['constraints'] );
 		}
-	}
-
-	private function normalize( string $text ): string {
-		return preg_replace( '/\s+/', ' ', trim( $text ) );
 	}
 }

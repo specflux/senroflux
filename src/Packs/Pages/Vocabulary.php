@@ -15,11 +15,25 @@
  *     in 0.2; documented gap).
  *
  * The registry cannot carry the constraint data (S11), so this class holds the
- * data and `register()` wires it into WordPress. Pattern markups that have a
- * verbatim prototype (hero, feature-grid, cta) are reproduced from
- * stage8-research.md §3.2 — completed only where that source abbreviated them
- * (the group wrapper `<div>` and the closing `<!-- /wp:group -->`). The other
- * four markups are authored to their blockName-tree + slot spec.
+ * data and `register()` wires it into WordPress.
+ *
+ * ROUND-TRIP DECISION. The shipped markup carries REAL default copy, never a
+ * `{{placeholder}}`, and its `metadata.name` is already the canonical
+ * `senroflux/<slug>`. A pattern a human inserts from the editor therefore
+ * survives `create-post` / `update-post` untouched: placeholders would trip the
+ * `unresolved_placeholder` refusal on the very first write-back. The model
+ * never receives markup — it receives `list-patterns`' `constraints.stated`
+ * prose — so nothing is lost by keeping the markup placeholder-free.
+ *
+ * S11 COMPLIANCE. No colour attribute appears anywhere (`backgroundColor`,
+ * `textColor`, `style.color`); spacing is expressed only as the standard
+ * `var:preset|spacing|NN` slugs plus the matching CSS custom properties the
+ * editor itself emits, and typography only as `fontSize` preset slugs.
+ *
+ * `repeatable` names the child block a pattern may repeat. The Validator uses
+ * it to allow variation in exactly that one slot and to hold every OTHER child
+ * to the count the pattern ships — without it, extra headings or paragraphs
+ * ride along inside an otherwise-matching pattern.
  *
  * @package SenroFlux
  */
@@ -43,8 +57,8 @@ final class Vocabulary {
 
 	/**
 	 * The page-shape rules (S11), consumed by the Validator and the layout skill.
+	 * "Hero first" needs no constant — it is a position, not a bound.
 	 */
-	public const RULES_HERO_FIRST   = 'hero-first';
 	public const RULES_MAX_CTA      = 1;
 	public const RULES_MIN_PATTERNS = 2;
 	public const RULES_MAX_PATTERNS = 8;
@@ -78,8 +92,10 @@ final class Vocabulary {
 	/**
 	 * All seven pattern definitions, in authoring order.
 	 *
-	 * Each definition: { slug, name, title, description, markup, constraints }.
-	 * `constraints`: { slots: {<slot>:{min,max}}, stated: list<string> }.
+	 * Each definition: { slug, name, title, description, markup, repeatable,
+	 * constraints }. `repeatable`: list<string> of the child block names this
+	 * pattern may repeat. `constraints`: { slots: {<slot>:{min,max}}, stated:
+	 * list<string> }.
 	 *
 	 * @return list<array<string,mixed>>
 	 */
@@ -156,7 +172,7 @@ final class Vocabulary {
 
 	/**
 	 * hero — group[align=full, layout=constrained] › heading(h1) › paragraph ›
-	 * buttons › button. Markup verbatim from stage8-research.md §3.2.
+	 * buttons › button.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -167,14 +183,15 @@ final class Vocabulary {
 			'title'       => 'Hero',
 			'description' => __( 'A full-width hero: one headline, one subheadline and up to two calls to action.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/hero"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60"}}},"backgroundColor":"base-2","layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull has-base-2-background-color has-background" style="...">
-<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">{{headline}}</h1><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">{{subheadline}}</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="{{cta_url}}">{{cta_label}}</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
+<!-- wp:group {"metadata":{"name":"senroflux/hero"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--60);padding-bottom:var(--wp--preset--spacing--60)">
+<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">A headline that states the promise</h1><!-- /wp:heading -->
+<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">One supporting sentence saying who this is for and what they get.</p><!-- /wp:paragraph -->
+<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
 					'buttons' => array(
@@ -192,7 +209,7 @@ HTML
 	}
 
 	/**
-	 * text-section — group › heading(h2) › paragraph*. Markup authored to spec.
+	 * text-section — group › heading(h2) › paragraph*.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -203,14 +220,15 @@ HTML
 			'title'       => 'Text section',
 			'description' => __( 'A plain prose section: an H2 heading followed by one to four paragraphs.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/text-section"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="...">
-<!-- wp:heading --><h2 class="wp-block-heading">{{section_title}}</h2><!-- /wp:heading -->
-<!-- wp:paragraph --><p>{{body}}</p><!-- /wp:paragraph -->
-<!-- wp:paragraph --><p>{{body}}</p><!-- /wp:paragraph -->
+<!-- wp:group {"metadata":{"name":"senroflux/text-section"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
+<!-- wp:paragraph --><p>One short paragraph that makes a single concrete point.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>A second paragraph, only when it adds something new.</p><!-- /wp:paragraph -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/paragraph' ),
 			'constraints' => array(
 				'slots'  => array(
 					'paragraphs' => array(
@@ -228,8 +246,7 @@ HTML
 
 	/**
 	 * feature-grid — group › heading(h2) › columns › column* › (heading(h3) ›
-	 * paragraph). Markup from stage8-research.md §3.2 (columns 2–3 expanded;
-	 * the source abbreviated them with `...`).
+	 * paragraph).
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -240,13 +257,14 @@ HTML
 			'title'       => 'Feature grid',
 			'description' => __( 'A two-to-three-column feature grid: an H2 heading and one H3 + paragraph per column.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/feature-grid"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="...">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">{{section_title}}</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">{{item_title}}</h3><!-- /wp:heading --><!-- wp:paragraph --><p>{{item_body}}</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">{{item_title_2}}</h3><!-- /wp:heading --><!-- wp:paragraph --><p>{{item_body_2}}</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">{{item_title_3}}</h3><!-- /wp:heading --><!-- wp:paragraph --><p>{{item_body_3}}</p><!-- /wp:paragraph --></div><!-- /wp:column --></div><!-- /wp:columns -->
+<!-- wp:group {"metadata":{"name":"senroflux/feature-grid"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">What you get</h2><!-- /wp:heading -->
+<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">First feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this feature does for the reader.</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Second feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this feature does for the reader.</p><!-- /wp:paragraph --></div><!-- /wp:column --></div><!-- /wp:columns -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/column' ),
 			'constraints' => array(
 				'slots'  => array(
 					'columns' => array(
@@ -265,7 +283,8 @@ HTML
 
 	/**
 	 * pricing-table — group › heading(h2) › columns › column* › (heading(h3) ›
-	 * paragraph › list › buttons › button). Markup authored to spec.
+	 * paragraph › list › buttons › button). `list_items` is counted PER COLUMN,
+	 * not across the table.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -276,13 +295,14 @@ HTML
 			'title'       => 'Pricing table',
 			'description' => __( 'A pricing table: an H2 heading and one-to-three plan columns, each with a plan, price, feature list and a call to action.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/pricing-table"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="...">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">{{section_title}}</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">{{plan_name}}</h3><!-- /wp:heading --><!-- wp:paragraph --><p>{{price}}</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>{{feature}}</li><li>{{feature}}</li><li>{{feature}}</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="{{cta_url}}">{{cta_label}}</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">{{plan_name}}</h3><!-- /wp:heading --><!-- wp:paragraph --><p>{{price}}</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>{{feature}}</li><li>{{feature}}</li><li>{{feature}}</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="{{cta_url}}">{{cta_label}}</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --></div><!-- /wp:columns -->
+<!-- wp:group {"metadata":{"name":"senroflux/pricing-table"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Pricing</h2><!-- /wp:heading -->
+<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Starter</h3><!-- /wp:heading --><!-- wp:paragraph --><p>$&mdash;/month (price TBC)</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>First thing this plan includes</li><li>Second thing this plan includes</li><li>Third thing this plan includes</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Choose plan</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Standard</h3><!-- /wp:heading --><!-- wp:paragraph --><p>$&mdash;/month (price TBC)</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>First thing this plan includes</li><li>Second thing this plan includes</li><li>Third thing this plan includes</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Choose plan</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --></div><!-- /wp:columns -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/column' ),
 			'constraints' => array(
 				'slots'  => array(
 					'columns'    => array(
@@ -305,8 +325,8 @@ HTML
 	}
 
 	/**
-	 * faq — group › heading(h2) › details* › (summary › paragraph). Markup
-	 * authored to spec.
+	 * faq — group › heading(h2) › details* › (summary › paragraph); the
+	 * `<summary>` is inner content of the details block, not a block.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -317,14 +337,15 @@ HTML
 			'title'       => 'FAQ',
 			'description' => __( 'An FAQ: an H2 heading and two-to-eight collapsible details blocks.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/faq"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="...">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">{{section_title}}</h2><!-- /wp:heading -->
-<!-- wp:details --><details class="wp-block-details"><summary>{{question}}</summary><!-- wp:paragraph --><p>{{answer}}</p><!-- /wp:paragraph --></details><!-- /wp:details -->
-<!-- wp:details --><details class="wp-block-details"><summary>{{question}}</summary><!-- wp:paragraph --><p>{{answer}}</p><!-- /wp:paragraph --></details><!-- /wp:details -->
+<!-- wp:group {"metadata":{"name":"senroflux/faq"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Questions people ask</h2><!-- /wp:heading -->
+<!-- wp:details --><details class="wp-block-details"><summary>The first question a reader actually asks</summary><!-- wp:paragraph --><p>A direct answer in one or two short sentences.</p><!-- /wp:paragraph --></details><!-- /wp:details -->
+<!-- wp:details --><details class="wp-block-details"><summary>The second question a reader actually asks</summary><!-- wp:paragraph --><p>A direct answer in one or two short sentences.</p><!-- /wp:paragraph --></details><!-- /wp:details -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/details' ),
 			'constraints' => array(
 				'slots'  => array(
 					'details' => array(
@@ -341,8 +362,8 @@ HTML
 	}
 
 	/**
-	 * testimonials — group › heading(h2) › quote* (with cite). Markup authored
-	 * to spec (the cite is inner content of the quote block).
+	 * testimonials — group › heading(h2) › quote* (with cite); the `<cite>` is
+	 * inner content of the quote block.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -353,13 +374,14 @@ HTML
 			'title'       => 'Testimonials',
 			'description' => __( 'A social-proof section: an H2 heading and one-to-three quotes with attribution.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/testimonials"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="...">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">{{section_title}}</h2><!-- /wp:heading -->
-<!-- wp:quote --><blockquote class="wp-block-quote"><!-- wp:paragraph --><p>{{quote}}</p><!-- /wp:paragraph --><cite>{{attribution}}</cite></blockquote><!-- /wp:quote -->
+<!-- wp:group {"metadata":{"name":"senroflux/testimonials"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">What customers say</h2><!-- /wp:heading -->
+<!-- wp:quote --><blockquote class="wp-block-quote"><!-- wp:paragraph --><p>A short outcome in the customer&#8217;s own words.</p><!-- /wp:paragraph --><cite>Customer name, role</cite></blockquote><!-- /wp:quote -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/quote' ),
 			'constraints' => array(
 				'slots'  => array(
 					'quotes' => array(
@@ -377,8 +399,6 @@ HTML
 
 	/**
 	 * cta — group[align=full] › heading(h2) › paragraph › buttons › button.
-	 * Markup verbatim from stage8-research.md §3.2, completed with the group
-	 * wrapper `<div>` and the closing `<!-- /wp:group -->` the source trimmed.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -389,14 +409,15 @@ HTML
 			'title'       => 'Call to action',
 			'description' => __( 'A full-width closing call to action: an H2 heading, one supporting line and one button.', 'senroflux' ),
 			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"sf/cta"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"backgroundColor":"contrast","textColor":"base","layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull has-contrast-background-color has-background has-base-color has-text-color" style="...">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">{{headline}}</h2><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center">{{body}}</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="{{cta_url}}">{{cta_label}}</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
+<!-- wp:group {"metadata":{"name":"senroflux/cta"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
+<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Start today</h2><!-- /wp:heading -->
+<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center">One line of supporting benefit before the button.</p><!-- /wp:paragraph -->
+<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
 </div><!-- /wp:group -->
 HTML
 			,
+			'repeatable'  => array( 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
 					'buttons' => array(
