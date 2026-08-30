@@ -34,6 +34,10 @@ if ( ! class_exists( 'WP_Error', false ) ) {
 	require_once __DIR__ . '/stubs/wp-error.php';
 }
 require_once __DIR__ . '/stubs/abilities.php';
+// Agent Safety host surface (S14): the agent_safety() locator, its grants
+// service, and RequestContext's correlation scope. Inert until a test opts in.
+require_once __DIR__ . '/stubs/agent-safety.php';
+require_once __DIR__ . '/stubs/agent-safety-context.php';
 // Runner test doubles (FakeGateway, RecordingBridge) — class_exists-guarded.
 require_once __DIR__ . '/stubs/run-doubles.php';
 // Admin-screen shims (S13): nonce/fields/enqueue for the Runs screen handlers.

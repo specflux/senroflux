@@ -337,6 +337,31 @@ abstract class Pack {
 	}
 
 	/**
+	 * S14: the AGENT SAFETY verb behind one pack verb — the RESOLVED ability id
+	 * the gate classifies and a pre-approval grant must name. Null when no role
+	 * declares that verb (fail closed: the harness issues no grant, so the call
+	 * parks for a human).
+	 *
+	 * The inverse of {@see roleVerbs()}, and the only place that knows a grant
+	 * on `pages/publish` has to be issued against `senroflux/update-post`.
+	 * Several pack verbs legitimately collapse onto one ability — the caller
+	 * aggregates their counts.
+	 *
+	 * @param string $pack_verb The pack verb (as it appears in a plan step).
+	 */
+	public function gateVerbFor( string $pack_verb ): ?string {
+		$resolved = $this->resolveAbilities();
+
+		foreach ( $this->roleVerbs() as $role => $verbs ) {
+			if ( in_array( $pack_verb, $verbs, true ) && isset( $resolved[ $role ] ) ) {
+				return $resolved[ $role ];
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * The ability namespaces this pack asks Agent Safety to govern, contributed
 	 * to `agent_safety_governed_namespaces`. Only the POLYFILL namespace: a
 	 * role that resolved to `core/*` is already governed unconditionally by

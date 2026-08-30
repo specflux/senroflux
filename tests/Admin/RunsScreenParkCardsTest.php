@@ -163,6 +163,81 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$this->assertStringContainsString( 'value="veto"', $html );
 	}
 
+	/**
+	 * S13/S15: the pre-approve radio is an AS-12 affordance. With the feature
+	 * off — the default — the human is never offered a decision the Runner
+	 * would answer with `preapproval_disabled`.
+	 */
+	public function test_plan_card_hides_the_preapprove_radio_by_default(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingPlan,
+			StepKind::Plan,
+			array(
+				'steps' => array(
+					array(
+						'text' => 'Publish it',
+						'tier' => 2,
+					),
+				),
+			)
+		);
+
+		$this->assertStringContainsString( 'value="accept"', $html );
+		$this->assertStringContainsString( 'value="veto"', $html );
+		$this->assertStringNotContainsString( 'value="accept_preapprove"', $html );
+	}
+
+	public function test_plan_card_offers_the_preapprove_radio_once_grants_are_on(): void {
+		add_filter( 'senroflux_enable_preapproval', static fn (): bool => true, 10, 1 );
+		senroflux_test_grants( true );
+
+		try {
+			$html = $this->renderPark(
+				RunStatus::AwaitingPlan,
+				StepKind::Plan,
+				array(
+					'steps' => array(
+						array(
+							'text' => 'Publish it',
+							'tier' => 2,
+						),
+					),
+				)
+			);
+		} finally {
+			senroflux_test_no_agent_safety();
+		}
+
+		$this->assertStringContainsString( 'value="accept_preapprove"', $html );
+		// S15: the choice carries its one-line warning.
+		$this->assertStringContainsString( 'without asking again', $html );
+	}
+
+	/** The SenroFlux filter alone is not enough: Agent Safety must have AS-12 switched on too. */
+	public function test_plan_card_hides_the_preapprove_radio_while_agent_safety_grants_are_off(): void {
+		add_filter( 'senroflux_enable_preapproval', static fn (): bool => true, 10, 1 );
+		senroflux_test_grants( false );
+
+		try {
+			$html = $this->renderPark(
+				RunStatus::AwaitingPlan,
+				StepKind::Plan,
+				array(
+					'steps' => array(
+						array(
+							'text' => 'Publish it',
+							'tier' => 2,
+						),
+					),
+				)
+			);
+		} finally {
+			senroflux_test_no_agent_safety();
+		}
+
+		$this->assertStringNotContainsString( 'value="accept_preapprove"', $html );
+	}
+
 	public function test_plan_card_escapes_model_authored_step_text(): void {
 		$html = $this->renderPark(
 			RunStatus::AwaitingPlan,

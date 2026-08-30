@@ -185,6 +185,11 @@ final class Plugin {
 		);
 		\Specflux\SenroFlux\Packs\Pages\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
+		// S14: object binding for pre-approval grants. Registered
+		// unconditionally and answering FALSE until a tick opens a run context
+		// — a missing hook would mean "no grant applies", never "every grant
+		// applies", so the harness always speaks for itself.
+		\Specflux\SenroFlux\Run\GrantEligibility::boot();
 		add_action(
 			'init',
 			static function () use ( $pages_pack ): void {
@@ -441,6 +446,9 @@ final class Plugin {
 
 		// S12: cancel is a terminal transition — build + persist a partial
 		// report. The Runner never sees the cancel, so call into it directly.
+		// S14: and for the same reason, this is where a cancelled run's
+		// pre-approval grants are withdrawn.
+		$this->runner()->revokeGrants( $run_id );
 		$this->runner()->report( $run_id );
 
 		return $this->get( $run_id );
@@ -629,6 +637,16 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->objectIdKey( $verb ) : 'id';
+			},
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			// S14: a grant is issued against the verb AGENT SAFETY sees — the
+			// resolved ability id — never the pack verb a plan step names.
+			// Only the pack can map one to the other; a direct-allow run has
+			// no pack and its verbs already are ability ids.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $pack_verb ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->gateVerbFor( $pack_verb ) : $pack_verb;
 			}
 		);
 

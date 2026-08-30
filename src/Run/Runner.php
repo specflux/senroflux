@@ -10,6 +10,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Run;
 
 use Specflux\SenroFlux\Approval\ApprovalBridge;
+use Specflux\SenroFlux\Approval\GrantBridge;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
@@ -65,6 +66,10 @@ final class Runner {
 		private readonly mixed $pack_resolver = null,
 		/** @var callable(Run,string):string|null Object-id key resolver (S12): which input/output key carries a verb's object id; absent = 'id'. */
 		private readonly mixed $object_id_key_resolver = null,
+		/** S7/S14: the pre-approval seam. Feature-detects Agent Safety's grants service; absent = no grant ever issued and every Tier-2 call parks. */
+		private readonly GrantBridge $grants = new GrantBridge(),
+		/** @var callable(Run,string):(string|null)|null Gate-verb resolver (S14): pack verb => the AGENT SAFETY verb (the resolved ability id) a grant must name; absent = the pack verb IS the ability id (direct-allow, S9). */
+		private readonly mixed $grant_verb_resolver = null,
 	) {
 	}
 
@@ -116,6 +121,70 @@ final class Runner {
 			return new WP_Error( 'senroflux_conflict', __( 'A tick for this run is already in flight.', 'senroflux' ), array( 'status' => 409 ) );
 		}
 		set_transient( $lock_key, 1, 30 );
+
+		// S14: everything this tick does — every audit row, approval and grant
+		// match — runs under ONE correlation id derived from the run row. The
+		// body is entered exactly once, inside the scope; `$entered` tells a
+		// throw from Agent Safety's precondition (a different id already
+		// memoized in this request) apart from a throw out of the body itself,
+		// which must keep propagating.
+		$correlation = $this->grants->correlationFor( $run_id );
+		$entered     = false;
+
+		try {
+			GrantEligibility::useRun(
+				$correlation,
+				function () use ( $run_id ): array {
+					$fresh = $this->store->getRun( $run_id );
+
+					return ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
+				},
+				function ( string $ability, array $args ) use ( $run_id ): string {
+					$fresh = $this->store->getRun( $run_id );
+					if ( null === $fresh ) {
+						return 'id';
+					}
+
+					return $this->objectIdKeyFor( $fresh, $this->verbFor( $fresh, $ability, $args ) );
+				}
+			);
+
+			return $this->grants->withCorrelation(
+				$correlation,
+				function () use ( $run, $resume, &$entered ): array|WP_Error {
+					$entered = true;
+
+					return $this->tickBody( $run, $resume );
+				}
+			);
+		} catch ( \Throwable $error ) {
+			if ( $entered ) {
+				throw $error;
+			}
+
+			// S14: "a notice is not a stop" — a tick that cannot own its
+			// correlation id would run ungoverned under someone else's scope,
+			// so the run fails and the reason is recorded.
+			return $this->failCorrelation( $run );
+		} finally {
+			GrantEligibility::forgetRun();
+			$this->releaseLock( $run_id ); // Idempotent safety net.
+		}
+	}
+
+	/**
+	 * The tick body: everything between the lock and the correlation scope.
+	 *
+	 * Split out of {@see tick()} only so it can be handed to
+	 * {@see GrantBridge::withCorrelation()} as a callable; the protocol is
+	 * unchanged.
+	 *
+	 * @param Run                      $run    Locked snapshot.
+	 * @param array<string,mixed>|null $resume Park resolution (S5).
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private function tickBody( Run $run, ?array $resume ): array|WP_Error {
+		$run_id = $run->id;
 
 		try {
 			// S5: a park resolution only makes sense on a parked run — a
@@ -746,8 +815,26 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+		$this->revokeGrants( $run->id );
 
 		return $this->report( $run->id );
+	}
+
+	/**
+	 * S14: the tick could not take ownership of its correlation id, because a
+	 * different one was already memoized in this request. Fail the run rather
+	 * than proceed under a scope whose grants are not this run's.
+	 *
+	 * @return array<string,mixed> RunState carrying the partial report.
+	 */
+	private function failCorrelation( Run $run ): array {
+		$report = $this->failError(
+			$run,
+			'correlation_conflict',
+			'Another correlation id is already in effect for this request.'
+		);
+
+		return $this->state( $this->refresh( $run ), array(), array( 'report' => $report ) );
 	}
 
 	/**
@@ -767,6 +854,7 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+		$this->revokeGrants( $run->id );
 
 		return $this->report( $run->id );
 	}
@@ -784,8 +872,23 @@ final class Runner {
 				'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 			)
 		);
+		$this->revokeGrants( $run->id );
 
 		return $this->report( $run->id );
+	}
+
+	/**
+	 * S7/S14: withdraw this run's pre-approval grants. Called on EVERY terminal
+	 * transition — completed, failed, cancelled — because a budget the human
+	 * granted for one run must not outlive it, TTL or no TTL. Idempotent and
+	 * safe when grants were never issued (or the feature is off).
+	 *
+	 * Public so {@see \Specflux\SenroFlux\Plugin::cancel()} — the one terminal
+	 * transition that never passes through the loop — can call it, exactly as
+	 * it calls {@see report()}.
+	 */
+	public function revokeGrants( int $run_id ): void {
+		$this->grants->revokeAll( $this->grants->correlationFor( $run_id ) );
 	}
 
 	// ------------------------------------------------------------------
@@ -1778,7 +1881,6 @@ final class Runner {
 					array( 'status' => 400 )
 				);
 			}
-			// Stage 11 wires grants here (per distinct Tier-2 verb in the plan).
 		}
 
 		// S7 acting-user rule (as S6) — only once we know the action proceeds.
@@ -1812,6 +1914,7 @@ final class Runner {
 						'finished_at' => gmdate( 'Y-m-d H:i:s' ),
 					)
 				);
+				$this->revokeGrants( $run->id );
 
 				// S12: EVERY terminal transition builds and returns the report,
 				// cancellation included — a run that ends without one leaves the
@@ -1845,7 +1948,113 @@ final class Runner {
 			)
 		);
 
+		if ( 'accept_preapprove' === $action ) {
+			// AFTER the acceptance is persisted: a grant must never outlive an
+			// accept that did not land.
+			$this->issueGrants( $run, $context['payload'], (int) $context['step_id'] );
+		}
+
 		return null;
+	}
+
+	/**
+	 * S7/S14: turn one accept-with-pre-approval into grants — one per distinct
+	 * AGENT SAFETY verb the plan's Tier-2 steps reach.
+	 *
+	 * SUBJECT is the identity token Agent Safety will present at the gate for
+	 * THIS request ({@see GrantBridge::subject()}), i.e. the human who is
+	 * accepting the plan — not the run's owner and not an object id. That is
+	 * the only thing the pipeline matches a grant's subject against, and it is
+	 * also the stricter reading: a plan accepted by one admin cannot be spent
+	 * by another admin's session. When no token can be named, nothing is
+	 * issued and every Tier-2 call parks as before.
+	 *
+	 * COUNT is the number of plan steps that reach the verb — counted once per
+	 * step even when a step names several pack verbs that collapse onto the
+	 * same ability, which is the fail-closed reading of "counts derived from
+	 * the plan steps" (§0.2). A step that turns out to need two publishes
+	 * parks for the second; a grant is never a blank cheque.
+	 *
+	 * @param array<string,mixed> $payload      The accepted plan payload.
+	 * @param int                 $plan_step_id The accepted plan step's seq.
+	 */
+	private function issueGrants( Run $run, array $payload, int $plan_step_id ): void {
+		$counts = $this->grantCounts( $run, $payload );
+		if ( array() === $counts ) {
+			return;
+		}
+
+		$subject    = $this->grants->subject();
+		$granted_by = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+
+		foreach ( $counts as $verb => $count ) {
+			$this->grants->issue(
+				(string) $verb,
+				$count,
+				$subject,
+				$this->grants->correlationFor( $run->id ),
+				$granted_by > 0 ? $granted_by : null,
+				(string) $plan_step_id
+			);
+		}
+	}
+
+	/**
+	 * Agent Safety verb => how many calls the accepted plan asks for.
+	 *
+	 * The per-step `tier` annotation on the payload is a MAX over that step's
+	 * verbs, so it cannot answer "is THIS verb irreversible" — the same
+	 * classifier that produced the annotation is asked again, per verb.
+	 *
+	 * @param array<string,mixed> $payload The accepted plan payload.
+	 * @return array<string,int>
+	 */
+	private function grantCounts( Run $run, array $payload ): array {
+		$map    = $this->packVerbMap( $run );
+		$counts = array();
+
+		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
+			if ( ! is_array( $step ) ) {
+				continue;
+			}
+
+			$seen = array();
+			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
+				if ( ! is_string( $verb ) || '' === $verb ) {
+					continue;
+				}
+				if ( VerbTier::tierFor( $verb, $map, $run->id ) < VerbTier::TIER_2 ) {
+					continue;
+				}
+
+				$gate_verb = $this->gateVerbFor( $run, $verb );
+				if ( null === $gate_verb || isset( $seen[ $gate_verb ] ) ) {
+					continue;
+				}
+
+				$seen[ $gate_verb ]   = true;
+				$counts[ $gate_verb ] = ( $counts[ $gate_verb ] ?? 0 ) + 1;
+			}
+		}
+
+		return $counts;
+	}
+
+	/**
+	 * The Agent Safety verb behind one PACK verb — the resolved ability id the
+	 * gate will classify, never the `pages/*` name (S14). Null when the pack
+	 * claims no ability for it: fail closed, no grant, the call parks.
+	 *
+	 * A direct-allow run has no pack, so its verbs already ARE ability ids.
+	 */
+	private function gateVerbFor( Run $run, string $pack_verb ): ?string {
+		if ( ! is_callable( $this->grant_verb_resolver ) ) {
+			return $pack_verb;
+		}
+
+		$gate_verb = ( $this->grant_verb_resolver )( $run, $pack_verb );
+
+		return ( is_string( $gate_verb ) && '' !== $gate_verb ) ? $gate_verb : null;
 	}
 
 	/**
@@ -2263,15 +2472,19 @@ final class Runner {
 
 	/**
 	 * Is pre-approval offerable? Only when the `senroflux_enable_preapproval`
-	 * filter is true AND the Agent Safety grants service exists (S14). Stage 4
-	 * wires neither, so this is false and an accept_preapprove resume 400s.
+	 * filter is true AND Agent Safety's grants service is both present and
+	 * switched on (S14). The spec's condition is "the service exists"; asking
+	 * it whether `agent_safety_enable_grants` is on as well is the stricter
+	 * reading (§0.2) and the honest one — with the feature off every issue()
+	 * is a silent no-op, so offering the choice would tell a human they
+	 * pre-approved something when nothing was recorded.
 	 */
 	private function preapprovalEnabled(): bool {
 		if ( ! (bool) apply_filters( 'senroflux_enable_preapproval', false ) ) {
 			return false;
 		}
 
-		return function_exists( 'agent_safety' ) && method_exists( agent_safety(), 'grants' );
+		return $this->grants->enabled();
 	}
 
 	// ------------------------------------------------------------------

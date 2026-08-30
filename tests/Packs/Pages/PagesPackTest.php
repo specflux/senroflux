@@ -174,6 +174,23 @@ final class PagesPackTest extends TestCase {
 		}
 	}
 
+	/**
+	 * S14: a pre-approval grant is issued against the verb AGENT SAFETY sees —
+	 * the resolved ability id — so both Tier-2 pack verbs land on the ONE
+	 * ability that carries them, and a verb no role declares yields null (fail
+	 * closed: no grant, the call parks).
+	 */
+	public function test_gate_verb_maps_a_pack_verb_onto_its_resolved_ability(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/publish' ) );
+		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/update-live' ) );
+		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/update-draft' ) );
+		$this->assertSame( 'senroflux/create-post', $pack->gateVerbFor( 'pages/create-draft' ) );
+		$this->assertSame( 'senroflux/read-content', $pack->gateVerbFor( 'pages/read' ) );
+		$this->assertNull( $pack->gateVerbFor( 'pages/not-a-verb' ) );
+	}
+
 	public function test_pack_governs_the_senroflux_namespace(): void {
 		$this->assertSame( array( 'senroflux/' ), ( new PagesPack() )->governedNamespaces() );
 	}

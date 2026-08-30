@@ -26,6 +26,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Admin;
 
 use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Approval\GrantBridge;
 use Specflux\SenroFlux\Http\ConsumerPolicy;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Packs\PackRegistry;
@@ -1352,13 +1353,22 @@ class RunsScreen {
 		return false;
 	}
 
-	/** Is pre-approval offerable on this screen? Mirrors Runner::preapprovalEnabled (S14). */
+	/**
+	 * Is pre-approval offerable on this screen (S13/S15)? The Accept-and-
+	 * pre-approve radio is rendered only when this is true, so the human is
+	 * never offered a decision the Runner would answer with
+	 * `preapproval_disabled`.
+	 *
+	 * Mirrors {@see \Specflux\SenroFlux\Run\Runner::preapprovalEnabled()} —
+	 * both ask the SAME two questions through the same bridge, so the card and
+	 * the resume handler can never disagree.
+	 */
 	private function preapprovalAvailable(): bool {
 		if ( ! (bool) apply_filters( 'senroflux_enable_preapproval', false ) ) {
 			return false;
 		}
 
-		return function_exists( 'agent_safety' ) && method_exists( agent_safety(), 'grants' );
+		return ( new GrantBridge() )->enabled();
 	}
 
 	/** A POST value, unslashed + trimmed (textarea-safe), or ''. */
