@@ -49,7 +49,7 @@ final class SkillSet {
 			new Skill(
 				'harness/workflow',
 				'Workflow',
-				'Work in four phases: clarify, plan, act, verify. Clarify with `senroflux/ask-user`: one question per call, only for things you cannot look up with a read tool; stop asking when the answer would not change what you build. Before your first write, call `senroflux/propose-plan` listing every verb each step needs; writes outside an accepted plan are refused. After writing, re-read every object you changed before you finish. Finish with a short plain-language summary that names objects by title; do not paste URLs.',
+				'Work in four phases: clarify, plan, act, verify. Clarify with `senroflux/ask-user`: one question per call, only for things you cannot look up with a read tool. A goal that names only a subject still leaves real choices open — who it is for, which parts to include, what it should say — so ask about those one at a time before you plan; stop asking when the answer would not change what you build. Before your first write, call `senroflux/propose-plan`; every step must list the verbs it needs, spelled exactly as the guidance for this site gives them. Writes outside an accepted plan are refused. After writing, re-read every object you changed before you finish. Finish with a short plain-language summary that names objects by title; do not paste URLs.',
 				true
 			),
 			new Skill(
