@@ -1,4 +1,18 @@
-/* SenroFlux Runs screen (S10): badges + step timeline. Minimal by design. */
+/* SenroFlux Runs screen (S10/S13/S15): badges, park cards, new-run form.
+ * Minimal by design; the WP admin already supplies base form/button styling. */
+
+/* Visually-hidden but available to assistive tech (aria-live region + labels). */
+.senroflux-sr-only {
+	position: absolute !important;
+	width: 1px;
+	height: 1px;
+	padding: 0;
+	margin: -1px;
+	overflow: hidden;
+	clip: rect( 0, 0, 0, 0 );
+	white-space: nowrap;
+	border: 0;
+}
 
 .senroflux-badge {
 	display: inline-block;
@@ -14,7 +28,13 @@
 	color: #2271b1;
 }
 
-.senroflux-badge-awaiting_approval {
+.senroflux-badge-awaiting_approval,
+.senroflux-badge-awaiting_plan {
+	background: #fcf9e8;
+	color: #996800;
+}
+
+.senroflux-badge-awaiting_user {
 	background: #fcf9e8;
 	color: #996800;
 }
@@ -34,6 +54,17 @@
 	color: #50575e;
 }
 
+.senroflux-badge-verified {
+	background: #edfaef;
+	color: #00a32a;
+}
+
+.senroflux-badge-unverified {
+	background: #fcf0f1;
+	color: #d63638;
+}
+
+/* Steps timeline (existing). */
 .senroflux-steps {
 	max-width: 900px;
 }
@@ -46,7 +77,9 @@
 }
 
 .senroflux-step-approval,
-.senroflux-step-tool_result {
+.senroflux-step-tool_result,
+.senroflux-step-question,
+.senroflux-step-plan {
 	border-left-color: #996800;
 }
 
@@ -59,4 +92,129 @@
 	max-height: 320px;
 	background: #f6f7f7;
 	padding: 8px;
+}
+
+/* New-run form. */
+.senroflux-new-run-form {
+	max-width: 720px;
+	margin-bottom: 24px;
+	padding: 16px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+}
+
+.senroflux-new-run-form label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.senroflux-new-run-form label[for],
+.senroflux-advanced label {
+	display: block;
+}
+
+.senroflux-new-run-form textarea,
+.senroflux-new-run-form select,
+.senroflux-new-run-form input[type="number"] {
+	width: 100%;
+}
+
+.senroflux-advanced {
+	margin: 8px 0 16px;
+}
+
+.senroflux-advanced summary {
+	cursor: pointer;
+	font-weight: 600;
+}
+
+.senroflux-ceiling {
+	max-width: 220px;
+}
+
+/* Park cards. */
+.senroflux-park-card {
+	max-width: 720px;
+	margin: 16px 0;
+	padding: 16px 20px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-left: 4px solid #996800;
+}
+
+.senroflux-park-card-heading {
+	margin-top: 0;
+}
+
+.senroflux-park-card fieldset {
+	border: 0;
+	padding: 0;
+	margin: 0 0 8px;
+}
+
+.senroflux-park-card legend {
+	font-weight: 700;
+	padding: 0;
+	margin-bottom: 4px;
+}
+
+.senroflux-rationale {
+	color: #50575e;
+}
+
+.senroflux-choice {
+	display: block;
+	margin: 4px 0;
+}
+
+.senroflux-other-wrap textarea {
+	display: block;
+	width: 100%;
+	margin-top: 4px;
+}
+
+.senroflux-plan-steps li {
+	margin: 4px 0;
+}
+
+.senroflux-plan-verbs {
+	color: #50575e;
+}
+
+.senroflux-plan-approval {
+	color: #996800;
+	font-weight: 600;
+}
+
+.senroflux-plan-decision {
+	margin-bottom: 8px;
+}
+
+.senroflux-plan-decision .description {
+	color: #50575e;
+}
+
+.senroflux-args {
+	overflow: auto;
+	max-height: 240px;
+	background: #f6f7f7;
+	padding: 8px;
+}
+
+.senroflux-card-actions {
+	margin: 12px 0 0;
+}
+
+.senroflux-refresh {
+	margin: 12px 0;
+}
+
+.senroflux-report-summary {
+	max-width: 720px;
+}
+
+.senroflux-report th,
+.senroflux-report td {
+	vertical-align: top;
 }

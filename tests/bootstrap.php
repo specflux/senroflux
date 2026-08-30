@@ -36,6 +36,8 @@ if ( ! class_exists( 'WP_Error', false ) ) {
 require_once __DIR__ . '/stubs/abilities.php';
 // Runner test doubles (FakeGateway, RecordingBridge) — class_exists-guarded.
 require_once __DIR__ . '/stubs/run-doubles.php';
+// Admin-screen shims (S13): nonce/fields/enqueue for the Runs screen handlers.
+require_once __DIR__ . '/stubs/admin.php';
 
 // The global senroflux() locator (function_exists-guarded, same as main).
 require_once dirname( __DIR__ ) . '/src/api.php';

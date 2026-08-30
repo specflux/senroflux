@@ -111,6 +111,31 @@ final class Plugin {
 			10,
 			1
 		);
+		// The AS pack resolves the ability allow-list, which touches the
+		// Abilities registry — that must not happen before `init`, so the
+		// registration is deferred with the pack captured by value.
+		add_action(
+			'init',
+			static function () use ( $pages_pack ): void {
+				$as_pack = $pages_pack->agentSafetyPack();
+				if ( null === $as_pack ) {
+					return;
+				}
+				add_filter(
+					'agent_safety_pack_registry',
+					static function ( $registry ) use ( $as_pack ) {
+						if ( is_object( $registry ) && method_exists( $registry, 'register' ) ) {
+							$registry->register( $as_pack );
+						}
+
+						return $registry;
+					},
+					10,
+					1
+				);
+			},
+			5
+		);
 		\Specflux\SenroFlux\Packs\Pages\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
 		add_action(
@@ -336,7 +361,7 @@ final class Plugin {
 		if ( null === $run ) {
 			return new WP_Error( 'senroflux_not_found', __( 'Run not found.', 'senroflux' ), array( 'status' => 404 ) );
 		}
-		if ( (int) get_current_user_id() !== $run->userId ) {
+		if ( ! $this->maySee( $run ) ) {
 			return new WP_Error( 'senroflux_forbidden', __( 'This run belongs to another user.', 'senroflux' ), array( 'status' => 403 ) );
 		}
 		if ( $run->status->isTerminal() ) {
@@ -374,7 +399,7 @@ final class Plugin {
 		if ( null === $run ) {
 			return new WP_Error( 'senroflux_not_found', __( 'Run not found.', 'senroflux' ), array( 'status' => 404 ) );
 		}
-		if ( (int) get_current_user_id() !== $run->userId ) {
+		if ( ! $this->maySee( $run ) ) {
 			return new WP_Error( 'senroflux_forbidden', __( 'This run belongs to another user.', 'senroflux' ), array( 'status' => 403 ) );
 		}
 
@@ -459,6 +484,21 @@ final class Plugin {
 		global $wpdb;
 
 		return $this->available() && isset( $wpdb ) && class_exists( Runner::class );
+	}
+
+	/**
+	 * May the current user SEE (and cancel) this run? S13: the run's owner,
+	 * or a holder of the Runs-screen capability — the screen must render and
+	 * act on delegated runs without impersonating the owner.
+	 */
+	private function maySee( \Specflux\SenroFlux\Run\Run $run ): bool {
+		if ( (int) get_current_user_id() === $run->userId ) {
+			return true;
+		}
+
+		$capability = apply_filters( 'senroflux_runs_capability', 'manage_options' );
+
+		return function_exists( 'current_user_can' ) && current_user_can( (string) $capability );
 	}
 
 	/**
