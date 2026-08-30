@@ -57,7 +57,7 @@ final class InstructionRendererTest extends TestCase {
 		$text = InstructionRenderer::render( SkillSet::harnessSkills(), new Tail( 2, 1, 5, 3, 1000 ) );
 
 		$this->assertStringEndsWith(
-			"\n\n---\n\nBudget: 2 questions, 1 plans, 3 tool calls and 5 steps remain.",
+			"\n\n---\n\nBudget: 2 questions, 1 plans, 3 tool calls, 5 steps and 1000 tokens remain.",
 			$text
 		);
 		$this->assertStringNotContainsString( "\n\n\n", $text, 'no blank lines between sections' );
@@ -77,7 +77,7 @@ final class InstructionRendererTest extends TestCase {
 
 		$text = InstructionRenderer::render( SkillSet::harnessSkills(), $tail );
 
-		$this->assertStringContainsString( 'Budget: 0 questions, 1 plans, 3 tool calls and 5 steps remain.', $text );
+		$this->assertStringContainsString( 'Budget: 0 questions, 1 plans, 3 tool calls, 5 steps and 1000 tokens remain.', $text );
 		$this->assertStringContainsString( 'No questions remain: state your assumptions in the plan.', $text );
 		$this->assertStringContainsString( 'Your last write was refused: `plan_required` — propose a plan first.', $text );
 		$this->assertStringContainsString( 'Before finishing, re-read: First object, Second object.', $text );

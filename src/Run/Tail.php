@@ -50,12 +50,15 @@ final class Tail {
 	public function render(): string {
 		$lines = array();
 
+		// S8 lists the token budget among the numbers the tail carries: a model
+		// that cannot see it cannot decide to wrap up before it is cut off.
 		$lines[] = sprintf(
-			'Budget: %1$d questions, %2$d plans, %3$d tool calls and %4$d steps remain.',
+			'Budget: %1$d questions, %2$d plans, %3$d tool calls, %4$d steps and %5$d tokens remain.',
 			$this->remaining_questions,
 			$this->remaining_plans,
 			$this->remaining_tool_calls,
-			$this->remaining_steps
+			$this->remaining_steps,
+			$this->remaining_tokens
 		);
 
 		if ( $this->remaining_questions <= 0 ) {
