@@ -211,10 +211,16 @@ final class Abilities {
 				'permission_callback' => static function ( $input = array() ) {
 					return self::mayCreate( is_array( $input ) ? $input : array() );
 				},
+				// NOT destructive. `create-post` only ever makes a NEW draft
+				// (`status_not_allowed` refuses anything else), so it destroys
+				// nothing. The hint is safety-critical, not decorative: Agent
+				// Safety's VerdictPipeline::elevateForDestructiveHint() treats
+				// `destructive => true` as an irreversible classification and
+				// parked every Tier-1 draft creation for approval (live run 43).
 				'meta'                => self::meta(
 					array(
 						'readonly'    => false,
-						'destructive' => true,
+						'destructive' => false,
 						'idempotent'  => false,
 					)
 				),

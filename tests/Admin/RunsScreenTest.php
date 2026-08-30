@@ -190,7 +190,7 @@ final class RunsScreenTest extends TestCase {
 		$this->assertNull( $screen->redirectedError );
 		$this->assertStringContainsString( 'run_id=1', $screen->redirectedTo );
 
-		// The budget clamp is lower-only: max_steps=10 is below the default 20.
+		// The budget clamp is lower-only: max_steps=10 is below the shipped default.
 		$store = new WpdbRunStore( $GLOBALS['wpdb'] );
 		$run   = $store->getRun( 1 );
 		$this->assertNotNull( $run );

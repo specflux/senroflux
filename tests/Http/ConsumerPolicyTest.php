@@ -53,7 +53,7 @@ final class ConsumerPolicyTest extends TestCase {
 		$this->assertSame(
 			array(
 				'max_steps'      => 3,
-				'max_tool_calls' => 12,
+				'max_tool_calls' => 30,
 				'max_tokens'     => 10000,
 				'max_questions'  => 5,
 				'max_plans'      => 3,

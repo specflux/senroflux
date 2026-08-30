@@ -21,9 +21,9 @@ final class BudgetTest extends TestCase {
 	public function test_defaults_carry_the_shipped_ceilings(): void {
 		$this->assertSame(
 			array(
-				'max_steps'      => 20,
-				'max_tool_calls' => 12,
-				'max_tokens'     => 60000,
+				'max_steps'      => 40,
+				'max_tool_calls' => 30,
+				'max_tokens'     => 150000,
 				'max_questions'  => 5,
 				'max_plans'      => 3,
 			),
@@ -49,7 +49,7 @@ final class BudgetTest extends TestCase {
 
 		$this->assertSame( 3, $defaults['max_steps'], 'a site may lower a ceiling…' );
 		$this->assertSame( 1, $defaults['max_questions'], '…including the 0.2 park ceilings…' );
-		$this->assertSame( 12, $defaults['max_tool_calls'], '…while the untouched keys keep their values' );
+		$this->assertSame( 30, $defaults['max_tool_calls'], '…while the untouched keys keep their values' );
 	}
 
 	public function test_sanitize_drops_unknown_keys_and_non_positive_caps(): void {
@@ -66,9 +66,9 @@ final class BudgetTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'max_steps'      => 20,
+				'max_steps'      => 40,
 				'max_tool_calls' => 7,
-				'max_tokens'     => 60000,
+				'max_tokens'     => 150000,
 				'max_questions'  => 2,
 				'max_plans'      => 2,
 			),

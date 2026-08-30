@@ -1157,8 +1157,16 @@ class RunsScreen {
 		echo '</p>';
 
 		if ( array() !== $args ) {
-			echo '<p><strong>' . esc_html__( 'Arguments', 'senroflux' ) . ':</strong></p>';
-			echo '<pre class="senroflux-args">';
+			// S15 a11y: `.senroflux-args` scrolls once the payload is taller
+			// than its max-height, and a scrollable box that nothing can focus
+			// is unreachable by keyboard (axe SERIOUS
+			// `scrollable-region-focusable`, seen live on a tall publish
+			// payload). `tabindex="0"` makes it reachable; a focusable region
+			// also needs a NAME, so it carries the "Arguments" label it already
+			// renders, through a role that accepts one.
+			$args_label_id = 'senroflux-args-label-' . (int) $run['id'];
+			echo '<p><strong id="' . esc_attr( $args_label_id ) . '">' . esc_html__( 'Arguments', 'senroflux' ) . ':</strong></p>';
+			echo '<pre class="senroflux-args" tabindex="0" role="region" aria-labelledby="' . esc_attr( $args_label_id ) . '">';
 			// CONTENT BOUNDARY — args are tool payload data, rendered verbatim.
 			echo esc_html( (string) wp_json_encode( $args, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
 			echo '</pre>';

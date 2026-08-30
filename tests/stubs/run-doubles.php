@@ -35,8 +35,12 @@ if ( ! class_exists( FakeGateway::class ) ) {
 		/** @var list<\Specflux\SenroFlux\Tools\ToolRegistry> The tool surface each generateTurn() received. */
 		public array $toolsLog = array();
 
+		/** @var list<list<mixed>> The message history each generateTurn() received, verbatim. */
+		public array $histories = array();
+
 		public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): ModelTurn|WP_Error {
 			$this->calls[]              = array( 'history_count' => count( $history ) );
+			$this->histories[]          = array_values( $history );
 			$this->systemInstructions[] = $system_instruction;
 			$this->toolsLog[]           = $tools;
 

@@ -167,6 +167,60 @@ final class RunnerTest extends TestCase {
 		$this->assertSame( 'Clear the cache', $result['new_steps'][0]['message']['parts'][0]['text'] ?? '' );
 	}
 
+	/**
+	 * SF-BUG-1, found by the live proof bar (run 43).
+	 *
+	 * `Plugin::start()` appends an `allow_from_pack` system note whenever a
+	 * pack derived the allow-list AND the caller also passed one — which the
+	 * Runs screen ALWAYS does, because ConsumerPolicy refuses an empty allow.
+	 * A seed guard of "the steps table is empty" therefore skipped the goal on
+	 * every screen-started pack run, and the first model call went out with an
+	 * empty history (`model_error "Cannot create a message from an empty
+	 * array."`). The guard is "no `user` step".
+	 */
+	public function test_first_tick_seeds_goal_when_start_wrote_a_system_note_first(): void {
+		$run_id = $this->createRun();
+		$this->store->appendSystemNote(
+			$run_id,
+			array(
+				'note'          => 'allow_from_pack',
+				'pack'          => 'pages',
+				'ignored_allow' => array( 'senroflux/*' ),
+			)
+		);
+
+		$this->gateway->script[] = self::textTurn( 'All done.' );
+
+		$run    = $this->store->getRun( $run_id );
+		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( 'Clear the cache', $result['new_steps'][0]['message']['parts'][0]['text'] ?? '' );
+
+		// The thing that actually broke: the first prompt carried the goal.
+		$this->assertCount( 1, $this->gateway->calls );
+		$this->assertSame( 1, $this->gateway->calls[0]['history_count'], 'the first model call must not be sent with an empty history' );
+	}
+
+	/** A user step already present is never seeded twice. */
+	public function test_goal_is_not_re_seeded_when_a_user_step_exists(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'First.' );
+		$this->runner->tick( $run_id, 0, null );
+
+		$this->store->updateRun( $run_id, array( 'status' => \Specflux\SenroFlux\Run\RunStatus::Running->value ) );
+		$this->gateway->script[] = self::textTurn( 'Second.' );
+		$run                     = $this->store->getRun( $run_id );
+		$this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$users = array_filter(
+			$this->store->getSteps( $run_id ),
+			static fn ( $step ): bool => StepKind::User === $step->kind
+		);
+		$this->assertCount( 1, $users );
+	}
+
 	public function test_crash_resume_executes_unconsumed_calls_without_a_new_model_turn(): void {
 		// Simulate a crash after the model step: user + model(with call), no result.
 		$run_id = $this->createRun();
@@ -280,13 +334,15 @@ final class RunnerTest extends TestCase {
 
 	public function test_budget_exhaustion_fails_the_run_with_budget_exceeded(): void {
 		$run_id = $this->createRun();
-		// max_steps defaults to 20; drive step_count right up to it.
-		for ( $i = 0; $i < 20; ++$i ) {
+		// Drive step_count right up to the shipped max_steps, whatever it is:
+		// this test is about the ceiling being ENFORCED, not about its value.
+		$max_steps = Budget::defaults()['max_steps'];
+		for ( $i = 0; $i < $max_steps; ++$i ) {
 			$this->store->appendStep( $run_id, StepKind::System, null );
 		}
 		$this->gateway->script[] = self::textTurn( 'never reached' );
 
-		$result = $this->runner->tick( $run_id, 20, null );
+		$result = $this->runner->tick( $run_id, $max_steps, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'failed', $result['run']['status'] );

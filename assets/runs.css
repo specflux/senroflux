@@ -209,6 +209,13 @@
 	padding: 8px;
 }
 
+/* The args box is keyboard-focusable (it scrolls), so the focus ring has to
+   be visible on it. */
+.senroflux-args:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 1px;
+}
+
 .senroflux-card-actions {
 	margin: 12px 0 0;
 }

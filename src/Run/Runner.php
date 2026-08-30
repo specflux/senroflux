@@ -284,8 +284,17 @@ final class Runner {
 					}
 					return $this->state( $this->refresh( $run ), array(), array() );
 				}
-			} elseif ( array() === $this->store->getSteps( $run_id ) ) {
+			} elseif ( ! $this->hasUserStep( $run_id ) ) {
 				// Fresh run: seed the goal as the first user step.
+				//
+				// The guard is "no `user` step", NOT "no steps at all": start()
+				// writes bookkeeping `system` notes before the first tick (S9's
+				// `allow_from_pack` note fires whenever a pack derived the
+				// allow-list AND the caller passed one — which the Runs screen
+				// always does, because ConsumerPolicy refuses an empty allow).
+				// Those notes are not conversation history, so an "any step"
+				// guard skipped the seed and sent the first model call out with
+				// an EMPTY history (`model_error`, live run 43).
 				$new_steps[] = $this->appendStep(
 					$run_id,
 					StepKind::User,
@@ -923,6 +932,22 @@ final class Runner {
 
 	private function refresh( Run $run ): Run {
 		return $this->store->getRun( $run->id ) ?? $run;
+	}
+
+	/**
+	 * Has the goal already been seeded as a `user` step?
+	 *
+	 * Bookkeeping `system` steps written by start() do not count: they carry no
+	 * conversation history, so a run that has only those still needs its goal.
+	 */
+	private function hasUserStep( int $run_id ): bool {
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::User === $step->kind ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	private function addTokens( int $run_id, int $tokens_in, int $tokens_out ): void {

@@ -64,10 +64,10 @@ One goal, pursued on behalf of one logged-in user, across many model turns and t
    Whichever park is active, the tick response carries exactly one `ui` key —
    `ui.approval`, `ui.question`, or `ui.plan` — until the run finishes, when it carries
    `ui.report` instead.
-4. Budget ceilings — `max_steps`, `max_tool_calls`, `max_tokens`, `max_questions`, `max_plans`
-   (filterable via `senroflux_default_budget`) — bound every run; exceeding steps/tool
-   calls/tokens fails the run with `budget_exceeded`. Running out of questions or plans is not
-   a failure: `senroflux/ask-user` is withdrawn from the model's tool declarations at 0
+4. Budget ceilings — `max_steps` (40), `max_tool_calls` (30), `max_tokens` (150000),
+   `max_questions` (5), `max_plans` (3), filterable via `senroflux_default_budget` — bound
+   every run; exceeding steps/tool calls/tokens fails the run with `budget_exceeded`.
+   Running out of questions or plans is not a failure: `senroflux/ask-user` is withdrawn from the model's tool declarations at 0
    remaining questions, and a run whose last plan was vetoed at `max_plans` cancels with
    `plan_rejected`.
 
@@ -112,7 +112,7 @@ accepts `allow`: the tool surface for HTTP-started runs comes entirely from the
 
 | Filter | Purpose |
 |---|---|
-| `senroflux_default_budget` | Default per-run ceilings (`max_steps`, `max_tool_calls`, `max_tokens`, `max_questions`, `max_plans`). |
+| `senroflux_default_budget` | Default per-run ceilings: `max_steps` 40, `max_tool_calls` 30, `max_tokens` 150000, `max_questions` 5, `max_plans` 3. A consumer may only lower them. |
 | `senroflux_http_consumers` | Registers consumers that may start runs over admin-ajax/REST: `[ 'my-plugin' => [ 'allow' => [...], 'budget' => [...] ] ]`. The request never supplies `allow`; its `budget` can only lower the registered ceiling. Unregistered consumers get 403. |
 | `senroflux_run_skills` | `(list<Skill> $skills, ?Pack $pack, string $consumer, string $goal)` — add, remove or reorder the skills rendered into a run's system instruction. Required skills cannot be dropped. |
 | `senroflux_system_instruction` | Post-process the fully rendered system-instruction string before it is sent to the model. |

@@ -274,6 +274,42 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$this->assertStringContainsString( 'About us', $html );
 	}
 
+	/**
+	 * The args box scrolls (`overflow: auto; max-height: 240px`), so a tall
+	 * publish payload made it a scrollable region nothing could focus — axe
+	 * SERIOUS `scrollable-region-focusable` on the live approval card. It must
+	 * be keyboard-reachable AND named.
+	 */
+	public function test_the_scrollable_arguments_box_is_focusable_and_named(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingApproval,
+			StepKind::Approval,
+			array(
+				'verb' => 'pages/publish',
+				'tier' => 2,
+				'args' => array( 'content' => str_repeat( "line\n", 200 ) ),
+			)
+		);
+
+		$this->assertMatchesRegularExpression(
+			'/<pre class="senroflux-args"[^>]*\btabindex="0"/',
+			$html,
+			'the scrollable args region must be keyboard-focusable'
+		);
+		$this->assertMatchesRegularExpression(
+			'/<pre class="senroflux-args"[^>]*\baria-labelledby="(senroflux-args-label-\d+)"/',
+			$html,
+			'a focusable region needs an accessible name'
+		);
+
+		// …and the name it points at is actually in the document.
+		$this->assertSame(
+			1,
+			preg_match( '/<pre class="senroflux-args"[^>]*\baria-labelledby="([^"]+)"/', $html, $m )
+		);
+		$this->assertStringContainsString( 'id="' . $m[1] . '"', $html );
+	}
+
 	public function test_approval_card_escapes_the_argument_payload(): void {
 		$html = $this->renderPark(
 			RunStatus::AwaitingApproval,

@@ -588,4 +588,33 @@ final class AbilitiesTest extends TestCase {
 		$this->assertArrayHasKey( 'name', $result['patterns'][0] );
 		$this->assertArrayHasKey( 'constraints', $result['patterns'][0] );
 	}
+
+	// --- annotation hints (SF-BUG-2) ---------------------------------------
+
+	/**
+	 * The `destructive` annotation is safety-critical, not documentation:
+	 * Agent Safety reads it as `true === ($annotations['destructive'] ?? null)`
+	 * (plugin/src/Verdict/Hints.php) and
+	 * `VerdictPipeline::elevateForDestructiveHint()` then treats the call as
+	 * irreversible — which parked every Tier-1 draft creation for a human
+	 * approval on live run 43. Creating a draft destroys nothing.
+	 */
+	public function test_create_post_carries_no_destructive_hint(): void {
+		$annotations = $this->ability( 'senroflux/create-post' )->get_meta()['annotations'] ?? array();
+
+		$this->assertIsArray( $annotations );
+		$this->assertNotSame(
+			true,
+			$annotations['destructive'] ?? null,
+			'create-post is draft-only; a destructive hint elevates it to Tier 2 in Agent Safety'
+		);
+	}
+
+	/** …and the hint stays where it IS true: update-post can publish. */
+	public function test_update_post_keeps_its_destructive_hint(): void {
+		$annotations = $this->ability( 'senroflux/update-post' )->get_meta()['annotations'] ?? array();
+
+		$this->assertIsArray( $annotations );
+		$this->assertTrue( $annotations['destructive'] ?? null );
+	}
 }
