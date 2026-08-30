@@ -55,9 +55,18 @@ final class PlanTools {
 	public const ERROR_INVALID_PLAN = 'invalid_plan';
 
 	/**
+	 * A plan naming a verb the run cannot produce. Distinct from the generic
+	 * invalid_plan on purpose: the model can only fix a hallucinated verb if it
+	 * is told THAT is what was wrong, and a plan whose verbs mean nothing to
+	 * the fence would otherwise be accepted by a human and then refuse every
+	 * call it authorises.
+	 */
+	public const ERROR_UNKNOWN_VERB = 'unknown_verb';
+
+	/**
 	 * 0.2 S7 says nothing about what happens if the model calls propose-plan at
 	 * zero remaining (the tool is withdrawn). Fail closed: it is refused with
-	 * this code and still counts as a tool call. (See NOTES.md.)
+	 * this code and still counts as a tool call.
 	 */
 	public const ERROR_PLANS_EXHAUSTED = 'plans_exhausted';
 
@@ -172,19 +181,33 @@ final class PlanTools {
 	 *
 	 * On success returns the VALIDATED payload (defaults applied: assumptions
 	 * defaults to []; each step gains an int `tier`). On failure returns a
-	 * WP_Error with code {@see self::ERROR_INVALID_PLAN} — the Runner turns
-	 * that into a tool_result error the model sees.
+	 * WP_Error with code {@see self::ERROR_INVALID_PLAN} or
+	 * {@see self::ERROR_UNKNOWN_VERB} — the Runner turns that into a
+	 * tool_result error the model sees.
 	 *
-	 * The tier annotation uses {@see VerbTier::tierFor()} against the
-	 * `senroflux_verb_map` filter; when `$run_id` is given it is threaded to the
-	 * filter so stage 6 can resolve the pack's per-run verb map (stage 4 relies
-	 * on the site-wide default and the Runner resolves call tiers the same way).
+	 * The tier annotation uses {@see VerbTier::tierFor()} against the run's OWN
+	 * verb map when one is given, which is what keeps the plan card's tiers and
+	 * the fence's tiers the same number: a pack run whose plan was annotated
+	 * from the site-wide filter would show a human tier 2 for a call the fence
+	 * treats as tier 0, or the reverse.
 	 *
-	 * @param mixed    $args   The function call's args (arbitrary, from the model).
-	 * @param int|null $run_id Optional run id, threaded to the verb-map filter.
+	 * @param mixed             $args                The function call's args (arbitrary, from the model).
+	 * @param int|null          $run_id              Optional run id, threaded to the verb-map filter.
+	 * @param array<string,int>|null $verb_map       The run's verb => tier map; null = the site-wide filter.
+	 * @param list<string>|null $known_verbs         The verbs this run can produce (pack verbs, or
+	 *                                               ability names for a direct-allow run). Null skips
+	 *                                               the check; an EMPTY list means nothing is known.
+	 * @param int|null          $remaining_questions The run's remaining question budget; at 0 the
+	 *                                               plan must state its assumptions (S7). Null = unknown.
 	 * @return array<string,mixed>|WP_Error Validated payload or an error.
 	 */
-	public static function validateProposePlan( mixed $args, ?int $run_id = null ): array|WP_Error {
+	public static function validateProposePlan(
+		mixed $args,
+		?int $run_id = null,
+		?array $verb_map = null,
+		?array $known_verbs = null,
+		?int $remaining_questions = null
+	): array|WP_Error {
 		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
 			self::ERROR_INVALID_PLAN,
 			/* translators: %s names the offending field. */
@@ -246,16 +269,30 @@ final class PlanTools {
 				if ( ! is_string( $verb ) || '' === trim( $verb ) ) {
 					return $invalid( __( 'every "verbs" entry must be a non-empty string.', 'senroflux' ) );
 				}
+				// S7: verbs are validated against the run's verb vocabulary. A
+				// plan naming a verb the run cannot produce is not a plan — the
+				// fence would refuse every call it claims to authorise.
+				if ( null !== $known_verbs && ! in_array( $verb, $known_verbs, true ) ) {
+					return new WP_Error(
+						self::ERROR_UNKNOWN_VERB,
+						sprintf(
+							/* translators: %s is the verb the plan named. */
+							__( 'Unknown verb in propose-plan: %s', 'senroflux' ),
+							$verb
+						)
+					);
+				}
 				$normalized_verbs[] = $verb;
 			}
 			if ( array() === $normalized_verbs ) {
 				return $invalid( __( 'every step needs at least one verb.', 'senroflux' ) );
 			}
 
-			// S7: annotate the step with the highest tier among its verbs.
+			// S7: annotate the step with the highest tier among its verbs,
+			// through the RUN's map so the card and the fence agree.
 			$tier = 0;
 			foreach ( $normalized_verbs as $verb ) {
-				$tier = max( $tier, VerbTier::tierFor( $verb, null, $run_id ) );
+				$tier = max( $tier, VerbTier::tierFor( $verb, $verb_map, $run_id ) );
 			}
 
 			$normalized_steps[] = array(
@@ -263,6 +300,13 @@ final class PlanTools {
 				'verbs' => $normalized_verbs,
 				'tier'  => $tier,
 			);
+		}
+
+		// S7: a plan with no steps authorises nothing and cannot be acted on;
+		// accepting one would set accepted_plan_step_id to an empty verb set,
+		// which reads as "a plan exists" while refusing every write.
+		if ( array() === $normalized_steps ) {
+			return $invalid( __( '"steps" must contain at least one step.', 'senroflux' ) );
 		}
 
 		if ( count( $normalized_steps ) > self::MAX_STEPS ) {
@@ -296,6 +340,13 @@ final class PlanTools {
 					self::MAX_ASSUMPTIONS
 				)
 			);
+		}
+
+		// S7: with no questions left the model may not simply proceed on
+		// unstated guesses — the assumptions ARE the record of what it decided
+		// on its own, and the human accepting the plan is accepting them.
+		if ( null !== $remaining_questions && 0 >= $remaining_questions && array() === $normalized_assumptions ) {
+			return $invalid( __( 'no questions remain, so the plan must state its assumptions.', 'senroflux' ) );
 		}
 
 		return array(

@@ -942,6 +942,125 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame( 'ok', $draft['status'] );
 	}
 
+	// ------------------------------------------------------------------
+	// (l) what a plan must actually say before a human can accept it
+	// ------------------------------------------------------------------
+
+	/** The first tool_result error code among a tick's new steps. */
+	private function planErrorCode( array $result ): ?string {
+		foreach ( $result['new_steps'] as $step ) {
+			$code = $step['message']['parts'][0]['functionResponse']['response']['error'] ?? null;
+			if ( is_string( $code ) ) {
+				return $code;
+			}
+		}
+
+		return null;
+	}
+
+	public function test_a_plan_with_no_steps_is_invalid(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'        => 'Publish the page',
+				'steps'       => array(),
+				'assumptions' => array( 'None.' ),
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Understood.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'invalid_plan', $this->planErrorCode( $result ), 'a plan that authorises nothing is not a plan' );
+		$this->assertCount( 0, $this->planSteps( $run_id ), 'nothing was parked' );
+	}
+
+	public function test_a_plan_naming_a_verb_the_run_cannot_produce_is_refused(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Publish the page',
+				'steps' => array(
+					array(
+						'text'  => 'Delete everything',
+						'verbs' => array( 'agsafe-smoke/obliterate' ),
+					),
+				),
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Understood.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'unknown_verb', $this->planErrorCode( $result ) );
+		$this->assertCount( 0, $this->planSteps( $run_id ) );
+	}
+
+	public function test_assumptions_are_required_once_no_questions_remain(): void {
+		$run_id = $this->createRun( array( 'max_questions' => 1 ) );
+		// The run has already spent its one question, so remaining is 0.
+		$this->store->appendStep(
+			$run_id,
+			StepKind::Question,
+			array(
+				'text'      => 'Which color?',
+				'rationale' => 'Need it.',
+			),
+			'senroflux/ask-user',
+			null,
+			'parked'
+		);
+
+		$without                 = self::validPlanArgs();
+		$without['assumptions']  = array();
+		$this->gateway->script[] = self::planTurn( 'call_p', $without );
+		$this->gateway->script[] = self::planTurn( 'call_p2', self::validPlanArgs() );
+
+		$result = $this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'invalid_plan', $this->planErrorCode( $result ) );
+
+		// The retry that DOES state its assumptions parks normally.
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+		$this->assertCount( 1, $this->planSteps( $run_id ) );
+	}
+
+	public function test_plan_step_tiers_come_from_the_runs_own_verb_map(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Edit the draft',
+						'verbs' => array( 'pages/update-draft' ),
+					),
+					array(
+						'text'  => 'Publish it',
+						'verbs' => array( 'pages/read', 'pages/publish' ),
+					),
+				),
+			)
+		);
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$steps = $result['ui']['plan']['steps'] ?? array();
+		// The site-wide filter knows no `pages/*` verb, so annotating through it
+		// would fail closed to tier 2 for BOTH steps and tell the human a draft
+		// edit is irreversible.
+		$this->assertSame( 1, $steps[0]['tier'] ?? null, 'pages/update-draft is tier 1 in the pack map' );
+		$this->assertSame( 2, $steps[1]['tier'] ?? null, 'the highest tier among a step\'s verbs wins' );
+	}
+
 	public function test_a_run_without_a_pack_keeps_ability_names_as_verbs(): void {
 		// No verb resolver at all: $this->runner is the direct-allow wiring, and
 		// the stage-4 filter map keys on ability names (S9).

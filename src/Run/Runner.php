@@ -473,7 +473,7 @@ final class Runner {
 
 				// S7: same interception for the plan tool.
 				if ( PlanTools::functionName() === $call['name'] ) {
-					$harness = $this->runProposePlan( $run, $call, $new_steps );
+					$harness = $this->runProposePlan( $run, $registry, $call, $new_steps );
 					if ( isset( $harness['park'] ) ) {
 						return $harness['park']; // Park ends the tick.
 					}
@@ -1666,11 +1666,12 @@ final class Runner {
 	 * when it parked (ends the tick); otherwise it has appended an error
 	 * tool_result (invalid payload / plans exhausted) and returns array().
 	 *
+	 * @param ToolRegistry                            $registry  The run's tool surface.
 	 * @param array{id:string,name:string,args:mixed} $call Call shape.
 	 * @param list<array<string,mixed>>               $new_steps Accumulator.
 	 * @return array<string,mixed>
 	 */
-	private function runProposePlan( Run $run, array $call, array &$new_steps ): array {
+	private function runProposePlan( Run $run, ToolRegistry $registry, array $call, array &$new_steps ): array {
 		if ( 0 >= $this->remainingPlans( $run ) ) {
 			// Withdrawn, yet still called: fail closed, count as a tool call.
 			$new_steps[] = $this->appendPlanError( $run->id, $call, PlanTools::ERROR_PLANS_EXHAUSTED );
@@ -1678,9 +1679,23 @@ final class Runner {
 			return array();
 		}
 
-		$payload = PlanTools::validateProposePlan( $call['args'] ?? null, $run->id );
+		$payload = PlanTools::validateProposePlan(
+			$call['args'] ?? null,
+			$run->id,
+			// S7: the plan is annotated and verb-checked against the RUN's own
+			// vocabulary — the same map the fence uses, so the tier a human
+			// accepts is the tier the fence enforces.
+			$this->packVerbMap( $run ),
+			$this->knownVerbs( $run, $registry ),
+			$this->remainingQuestions( $run )
+		);
 		if ( is_wp_error( $payload ) ) {
-			$new_steps[] = $this->appendPlanError( $run->id, $call, PlanTools::ERROR_INVALID_PLAN );
+			$code        = (string) $payload->get_error_code();
+			$new_steps[] = $this->appendPlanError(
+				$run->id,
+				$call,
+				PlanTools::ERROR_UNKNOWN_VERB === $code ? $code : PlanTools::ERROR_INVALID_PLAN
+			);
 
 			return array();
 		}
@@ -2057,6 +2072,21 @@ final class Runner {
 		$verb      = ( $this->verb_resolver )( $run, $ability, $call_args );
 
 		return is_string( $verb ) && '' !== $verb ? $verb : $ability;
+	}
+
+	/**
+	 * The verbs this run can actually produce — what a plan's `verbs` are
+	 * validated against (S7).
+	 *
+	 * A pack run's vocabulary is its verb map's keys; a direct-allow run has no
+	 * pack, so the ability names on its tool surface ARE its verbs (S9).
+	 *
+	 * @return list<string>
+	 */
+	private function knownVerbs( Run $run, ToolRegistry $registry ): array {
+		$map = $this->packVerbMap( $run );
+
+		return null !== $map ? array_keys( $map ) : $registry->names();
 	}
 
 	/**
