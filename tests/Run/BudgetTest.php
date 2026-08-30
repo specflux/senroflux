@@ -21,9 +21,9 @@ final class BudgetTest extends TestCase {
 	public function test_defaults_carry_the_shipped_ceilings(): void {
 		$this->assertSame(
 			array(
-				'max_steps'      => 40,
+				'max_steps'      => 60,
 				'max_tool_calls' => 30,
-				'max_tokens'     => 150000,
+				'max_tokens'     => 250000,
 				'max_questions'  => 5,
 				'max_plans'      => 3,
 			),
@@ -66,9 +66,9 @@ final class BudgetTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'max_steps'      => 40,
+				'max_steps'      => 60,
 				'max_tool_calls' => 7,
-				'max_tokens'     => 150000,
+				'max_tokens'     => 250000,
 				'max_questions'  => 2,
 				'max_plans'      => 2,
 			),

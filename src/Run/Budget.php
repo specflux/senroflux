@@ -55,23 +55,32 @@ final class Budget {
 	 * The hard-coded table the `senroflux_default_budget` filter starts from.
 	 * The one place these numbers appear.
 	 *
-	 * Sized from live pages-pack runs (0.2 stage 10). One "design and publish a
-	 * page" run — two or three clarifying questions, a plan, list-patterns, a
-	 * draft, a publish and the verification re-read — spent 31 steps, 11 tool
-	 * results and ~49k tokens (`dev/smoke/shots/pages/run-43.json`), against
-	 * shipped ceilings of 20 / 12 / 60000. A consumer may only LOWER a budget
-	 * (S13 `clamp()`), so ceilings below what the shipped pack's own use case
-	 * costs are not "safe defaults" — they are a stock install that always dies
-	 * `budget_exceeded`. The ceilings still bound a runaway loop; they are now
-	 * above one real run's cost with room for the retries a model actually makes.
+	 * Sized from live pages-pack runs (0.2 stage 10). A consumer may only LOWER
+	 * a budget (S13 `clamp()`), so a ceiling below what the shipped pack's own
+	 * use case costs is not a "safe default" — it is a stock install that always
+	 * dies `budget_exceeded`.
+	 *
+	 * Three live "design and publish a page" runs, measured end to end:
+	 *   run 43 — clean path: 31 steps, 11 tool results, 48.8k tokens.
+	 *   run 44 — model retried invalid block markup: died at 40 steps mid-repair.
+	 *   run 45 — published AND verified, then died at 40 steps with nothing left
+	 *            to write the report with. 90k tokens.
+	 * A real model spends steps on refused writes (`invalid_markup`,
+	 * `page_shape`, `not_in_plan`), and those retries are the normal case, not
+	 * the pathological one. 40 was still under the observed worst case, so the
+	 * step ceiling is 60: above every run seen so far with room for a retry
+	 * loop, and still a hard bound on a runaway. `max_tokens` is a backstop for
+	 * a long-context loop rather than the binding limit — 90k over 40 steps
+	 * scales to roughly 150k over 60, so 250000 leaves it non-binding while
+	 * still capping the damage.
 	 *
 	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
 	 */
 	private static function shipped(): array {
 		return array(
-			self::MAX_STEPS      => 40,
+			self::MAX_STEPS      => 60,
 			self::MAX_TOOL_CALLS => 30,
-			self::MAX_TOKENS     => 150000,
+			self::MAX_TOKENS     => 250000,
 			self::MAX_QUESTIONS  => 5,
 			self::MAX_PLANS      => 3,
 		);

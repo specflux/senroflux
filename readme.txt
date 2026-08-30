@@ -87,9 +87,10 @@ provider's terms if you have connected a different one.
 * Schema v2: run status/step-kind enums, `resume` object replaces the
   0.1 `approval_action` parameter (breaking), `max_questions`/`max_plans`
   budget keys.
-* Default budget ceilings raised to `max_steps` 40, `max_tool_calls` 30 and
-  `max_tokens` 150000 — one pages run costs about 31 steps, 11 tool calls
-  and 49k tokens, and a consumer may only lower a ceiling.
+* Default budget ceilings raised to `max_steps` 60, `max_tool_calls` 30 and
+  `max_tokens` 250000 — a live pages run costs 31-45 steps and up to 90k
+  tokens once the model retries a refused write, and a consumer may only
+  lower a ceiling.
 * Question parks (`senroflux/ask-user`) and plan parks
   (`senroflux/propose-plan`) with an accept/veto fence around Tier ≥ 1
   writes.
