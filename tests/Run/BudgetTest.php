@@ -108,6 +108,33 @@ final class BudgetTest extends TestCase {
 		);
 	}
 
+	public function test_sanitize_falls_back_to_the_filtered_defaults_not_the_shipped_ones(): void {
+		add_filter(
+			'senroflux_default_budget',
+			static fn ( array $defaults ): array => array_merge(
+				$defaults,
+				array(
+					'max_tokens'    => 1234,
+					'max_questions' => 2,
+				)
+			),
+			10,
+			1
+		);
+
+		// A partial override must inherit the SITE's defaults for every key it
+		// does not name — re-hardcoding the shipped table here would silently
+		// discard `senroflux_default_budget`.
+		$budget = Budget::sanitize( array( 'max_steps' => 7 ) );
+
+		$this->assertSame( 7, $budget['max_steps'], 'the caller override wins' );
+		$this->assertSame( 1234, $budget['max_tokens'], 'an unnamed key comes from the filtered defaults' );
+		$this->assertSame( 2, $budget['max_questions'], 'an unnamed key comes from the filtered defaults' );
+
+		// A non-array input is the same question with no overrides at all.
+		$this->assertSame( Budget::defaults(), Budget::sanitize( null ) );
+	}
+
 	public function test_park_ceilings_are_lower_only_like_every_other_cap(): void {
 		// The stage-1 check: max_questions/max_plans obey the same
 		// lower-only rule the HTTP budget has always obeyed.
