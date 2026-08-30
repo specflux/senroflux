@@ -3,19 +3,15 @@
  * Test-only stand-ins for the Gutenberg / WP post surface the pages-pack tests
  * call (stage 8). TARGET REPO PATH: tests/stubs/blocks.php
  *
+ * NOT a hand-rolled parser: `parse_blocks()` / `serialize_blocks()` are
+ * WordPress core's own implementations, vendored in `wp-block-parser.php` and
+ * re-declared here byte-for-byte from `wp-includes/blocks.php`. The pages
+ * pack's write contract is
+ * `serialize_blocks( parse_blocks( $content ) ) === $content` plus a walk over
+ * `innerBlocks` / `innerHTML`; a simplified stub would make those assertions
+ * true by construction, so only the real parser is used.
+ *
  * LIMITS (documented):
- *   - `parse_blocks` is a PURE-PHP parser good enough for the seven pattern
- *     markups and their children. It produces `[{blockName, attrs, innerHTML,
- *     innerBlocks}]`, where `innerHTML` preserves the block's FULL inner content
- *     (including nested block comments) and `innerBlocks` is the parsed
- *     children (for structural walking). It does NOT handle freeform text that
- *     should be attributed to a block — our patterns have none.
- *   - `serialize_blocks` re-emits `open + innerHTML + close`, so
- *     `serialize_blocks(parse_blocks($content))` round-trips `$content` exactly
- *     for the compact pattern markups (the same property the Validator's step-1
- *     normalised compare relies on). Attribute JSON is re-encoded compactly
- *     with `JSON_UNESCAPED_SLASHES`, so an inline space in the attrs JSON is a
- *     deliberate normalisation mismatch (used by the invalid_markup test).
  *   - The post shims are an in-memory store keyed by id; `wp_insert_post`
  *     assigns sequential ids; URLs are deterministic.
  *
@@ -73,133 +69,103 @@ if ( ! function_exists( 'wp_register_ability' ) ) {
 	}
 }
 
-// --- Gutenberg block parser / serializer shims ----------------------------
+// --- Gutenberg block parser / serializer (REAL WordPress core) -------------
+
+// The vendored core parser + the three serializer helpers it needs. Nothing
+// here is a simplification: `parse_blocks()` is `WP_Block_Parser::parse()` and
+// `serialize_block()` walks `innerContent`'s null markers exactly as core does,
+// so the Validator's round-trip contract is exercised for real.
+if ( ! class_exists( 'WP_Block_Parser', false ) ) {
+	require_once __DIR__ . '/wp-block-parser.php';
+}
 
 if ( ! function_exists( 'parse_blocks' ) ) {
 	function parse_blocks( string $content ): array {
-		return _senroflux_parse_blocks_inner( $content );
+		$parser = new WP_Block_Parser();
+
+		return $parser->parse( $content );
+	}
+}
+
+if ( ! function_exists( 'strip_core_block_namespace' ) ) {
+	function strip_core_block_namespace( $block_name = null ) {
+		if ( is_string( $block_name ) && str_starts_with( $block_name, 'core/' ) ) {
+			return substr( $block_name, 5 );
+		}
+
+		return $block_name;
+	}
+}
+
+if ( ! function_exists( 'serialize_block_attributes' ) ) {
+	function serialize_block_attributes( array $block_attributes ): string {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- core uses wp_json_encode() with these exact flags; the bootstrap shim drops them.
+		$encoded_attributes = json_encode( $block_attributes, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
+
+		return strtr(
+			(string) $encoded_attributes,
+			array(
+				'\\\\' => '\\u005c',
+				'--'   => '\\u002d\\u002d',
+				'<'    => '\\u003c',
+				'>'    => '\\u003e',
+				'&'    => '\\u0026',
+				'\\"'  => '\\u0022',
+			)
+		);
+	}
+}
+
+if ( ! function_exists( 'get_comment_delimited_block_content' ) ) {
+	function get_comment_delimited_block_content( $block_name, $block_attributes, $block_content ) {
+		if ( is_null( $block_name ) ) {
+			return $block_content;
+		}
+
+		$serialized_block_name = strip_core_block_namespace( $block_name );
+		$serialized_attributes = empty( $block_attributes ) ? '' : serialize_block_attributes( $block_attributes ) . ' ';
+
+		if ( empty( $block_content ) ) {
+			return sprintf( '<!-- wp:%s %s/-->', $serialized_block_name, $serialized_attributes );
+		}
+
+		return sprintf(
+			'<!-- wp:%s %s-->%s<!-- /wp:%s -->',
+			$serialized_block_name,
+			$serialized_attributes,
+			$block_content,
+			$serialized_block_name
+		);
+	}
+}
+
+if ( ! function_exists( 'serialize_block' ) ) {
+	function serialize_block( array $block ): string {
+		$block_content = '';
+
+		$index = 0;
+		foreach ( $block['innerContent'] as $chunk ) {
+			$block_content .= is_string( $chunk ) ? $chunk : serialize_block( $block['innerBlocks'][ $index++ ] );
+		}
+
+		if ( ! is_array( $block['attrs'] ) ) {
+			$block['attrs'] = array();
+		}
+
+		return get_comment_delimited_block_content(
+			$block['blockName'],
+			$block['attrs'],
+			$block_content
+		);
 	}
 }
 
 if ( ! function_exists( 'serialize_blocks' ) ) {
 	function serialize_blocks( array $blocks ): string {
-		$out = '';
-		foreach ( $blocks as $block ) {
-			$out .= _senroflux_serialize_block( $block );
-		}
-
-		return $out;
+		return implode( '', array_map( 'serialize_block', $blocks ) );
 	}
 }
 
-/**
- * @return list<array<string,mixed>>
- */
-function _senroflux_parse_blocks_inner( string $html ): array {
-	$blocks = array();
-	$pos    = 0;
-	$len    = strlen( $html );
-
-	while ( $pos < $len ) {
-		$open = strpos( $html, '<!-- wp:', $pos );
-		if ( false === $open ) {
-			break; // Trailing text/freeform is not attributed in this shim.
-		}
-
-		$open_end = strpos( $html, '-->', $open );
-		if ( false === $open_end ) {
-			break;
-		}
-
-		$token = substr( $html, $open, ( $open_end + 3 ) - $open );
-		$name  = _senroflux_block_name_from_open( $token );
-		if ( null === $name ) {
-			$pos = $open_end + 3;
-			continue;
-		}
-
-		$attrs = _senroflux_attrs_from_open( $token );
-		// Closers use the bare comment name (`<!-- /wp:group -->`), not the
-		// inferred blockName (`core/group`).
-		$comment_name = str_starts_with( $name, 'core/' ) ? substr( $name, strlen( 'core/' ) ) : $name;
-		$close_tag    = '<!-- /wp:' . $comment_name . ' -->';
-		$close        = strpos( $html, $close_tag, $open_end + 3 );
-
-		if ( false === $close ) {
-			$inner_full = substr( $html, $open_end + 3 );
-			$close      = $len;
-		} else {
-			$inner_full = substr( $html, $open_end + 3, $close - ( $open_end + 3 ) );
-		}
-
-		$inner_blocks = _senroflux_parse_blocks_inner( $inner_full );
-
-		$blocks[] = array(
-			'blockName'   => $name,
-			'attrs'       => $attrs,
-			'innerHTML'   => $inner_full,
-			'innerBlocks' => $inner_blocks,
-		);
-
-		$pos = $close + strlen( $close_tag );
-	}
-
-	return $blocks;
-}
-
-function _senroflux_block_name_from_open( string $token ): ?string {
-	$rest  = substr( $token, strlen( '<!-- wp:' ) );
-	$space = strpos( $rest, ' ' );
-	$name  = false === $space ? $rest : substr( $rest, 0, $space );
-	$name  = trim( $name );
-
-	if ( '' === $name ) {
-		return null;
-	}
-
-	// Real WP parse_blocks maps a bare `wp:group` to `core/group`; a namespaced
-	// `wp:foo/bar` stays `foo/bar`. Mirror that.
-	return str_contains( $name, '/' ) ? $name : 'core/' . $name;
-}
-
-function _senroflux_attrs_from_open( string $token ): array {
-	$rest  = substr( $token, strlen( '<!-- wp:' ) );
-	$space = strpos( $rest, ' ' );
-	if ( false === $space ) {
-		return array();
-	}
-
-	$attr_part   = trim( substr( $rest, $space ) );
-	$open_brace  = strpos( $attr_part, '{' );
-	$close_brace = strrpos( $attr_part, '}' );
-	if ( false === $open_brace || false === $close_brace || $close_brace <= $open_brace ) {
-		return array();
-	}
-
-	$json    = substr( $attr_part, $open_brace, $close_brace - $open_brace + 1 );
-	$decoded = json_decode( $json, true );
-
-	return is_array( $decoded ) ? $decoded : array();
-}
-
-function _senroflux_serialize_block( array $block ): string {
-	$name = (string) ( $block['blockName'] ?? '' );
-	// Real WP emits a core block as a bare `wp:group`, not `wp:core/group`.
-	$comment_name = str_starts_with( $name, 'core/' ) ? substr( $name, strlen( 'core/' ) ) : $name;
-	$open         = '<!-- wp:' . $comment_name;
-	$attrs        = $block['attrs'] ?? array();
-
-	if ( array() !== $attrs ) {
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- the test shim's wp_json_encode() drops the JSON_UNESCAPED_SLASHES flag the round-trip contract relies on.
-		$open .= ' ' . json_encode( $attrs, JSON_UNESCAPED_SLASHES );
-	}
-	$open .= ' -->';
-
-	$inner = (string) ( $block['innerHTML'] ?? '' );
-	$close = '<!-- /wp:' . $comment_name . ' -->';
-
-	return $open . $inner . $close;
-}
 
 // --- Post shims (in-memory store) -----------------------------------------
 
@@ -245,9 +211,13 @@ if ( ! function_exists( 'wp_update_post' ) ) {
 				if ( 'ID' === $key ) {
 					continue;
 				}
-				$prop = 'post_' . ltrim( $key, 'post_' );
-				if ( property_exists( $post, $prop ) ) {
-					$post->{$prop} = $value;
+				// The keys ARE already the `post_*` column names; the previous
+				// `ltrim( $key, 'post_' )` stripped a CHARACTER SET, not a
+				// prefix, so `post_status` became `post_atus` and no write ever
+				// landed. Tests that assert a refusal persisted nothing were
+				// therefore true by construction.
+				if ( property_exists( $post, (string) $key ) ) {
+					$post->{$key} = $value;
 				}
 			}
 		}
