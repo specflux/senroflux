@@ -61,6 +61,8 @@ final class Runner {
 		private readonly mixed $verb_map_resolver = null,
 		/** @var callable(Run,string,array<string,mixed>):string|null Verb resolver (S9): ability + args => verb; absent = the ability name IS the verb. */
 		private readonly mixed $verb_resolver = null,
+		/** @var callable(Run):mixed|null Pack resolver (S8/S9): the run's pack descriptor, passed opaquely to SkillSet; absent = a direct-allow run. */
+		private readonly mixed $pack_resolver = null,
 	) {
 	}
 
@@ -882,11 +884,18 @@ final class Runner {
 	 *
 	 * WP_Error (skills_too_large) fails the run — S8 forbids truncation.
 	 *
+	 * The collection inputs are the SAME ones `start()` used: the run's pack
+	 * (reached opaquely through the injected resolver, so the loop still knows
+	 * nothing about packs) and the disable list persisted on the run. Dropping
+	 * either here would show the model a different instruction from the one the
+	 * ceiling was checked against and `skills_json` recorded.
+	 *
 	 * @param list<array<string,mixed>> $new_steps Accumulator.
 	 * @return string|WP_Error
 	 */
 	private function instructionFor( Run $run, array &$new_steps ): string|WP_Error {
-		$skills = SkillSet::collect( $run->consumer, $run->goal );
+		$pack   = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
+		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable );
 
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
@@ -944,6 +953,13 @@ final class Runner {
 	 * fingerprints — a drift appends a `skills_changed` note and the run
 	 * CONTINUES with the new text (never rewrites the audit record).
 	 *
+	 * The comparison baseline is the LATEST recorded fingerprint set (seq 0, or
+	 * the newest `skills_changed` note), not the immutable seq-0 record: a drift
+	 * that persists — a consumer filter that adds a skill for the rest of the
+	 * run — is a single event, and re-recording it every tick would both spam
+	 * the audit trail and burn one `max_steps` per tick until the run dies of
+	 * budget.
+	 *
 	 * @param list<Skill>               $skills     Freshly collected set.
 	 * @param list<array<string,mixed>> $new_steps  Accumulator.
 	 */
@@ -967,7 +983,7 @@ final class Runner {
 			return;
 		}
 
-		$stored  = (array) ( $recorded['skills'] ?? array() );
+		$stored  = $this->latestSkillFingerprints( $run->id );
 		$changed = array();
 		foreach ( $fingerprints as $id => $hash ) {
 			if ( ( $stored[ $id ] ?? null ) !== $hash ) {
@@ -981,24 +997,51 @@ final class Runner {
 		}
 
 		if ( array() !== $changed ) {
+			// The note carries the NEW fingerprints as well as the changed ids:
+			// it becomes the baseline the next tick compares against, so a
+			// stable drift is recorded exactly once.
+			$payload = array(
+				'note'   => 'skills_changed',
+				'ids'    => $changed,
+				'skills' => $fingerprints,
+			);
+
 			$new_steps[] = array(
-				'seq'         => $this->store->appendSystemNote(
-					$run->id,
-					array(
-						'note' => 'skills_changed',
-						'ids'  => $changed,
-					)
-				),
+				'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
 				'kind'        => StepKind::System->value,
-				'message'     => array(
-					'note' => 'skills_changed',
-					'ids'  => $changed,
-				),
+				'message'     => $payload,
 				'tool_name'   => null,
 				'approval_id' => null,
 				'status'      => 'ok',
 			);
 		}
+	}
+
+	/**
+	 * The newest recorded per-skill fingerprint map: the seq-0
+	 * `system_instruction` record, superseded by any later `skills_changed`
+	 * note. Empty when nothing has been recorded yet.
+	 *
+	 * @return array<string,string>
+	 */
+	private function latestSkillFingerprints( int $run_id ): array {
+		$latest = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::System !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			$note = $step->messageArray['note'] ?? null;
+			if ( 'system_instruction' !== $note && 'skills_changed' !== $note ) {
+				continue;
+			}
+			$skills = $step->messageArray['skills'] ?? null;
+			if ( is_array( $skills ) ) {
+				/** @var array<string,string> $skills */
+				$latest = $skills;
+			}
+		}
+
+		return $latest;
 	}
 
 	/**

@@ -29,6 +29,7 @@ final class Run {
 	 * accepted plan's step id, and the two captured locales.
 	 *
 	 * @param list<array<string,mixed>>|null $skills  The skills_json snapshot at start.
+	 * @param list<string>|null              $skillsDisable Non-required skill ids the start suppressed (S8).
 	 * @param array<string,mixed>|null       $result  The harness-built report (S12).
 	 * @param array<string,mixed>|null       $objects The written-object set behind the re-read nudge (S12).
 	 */
@@ -49,6 +50,7 @@ final class Run {
 		public readonly ?array $error = null,
 		public readonly ?string $pack = null,
 		public readonly ?array $skills = null,
+		public readonly ?array $skillsDisable = null,
 		public readonly ?array $result = null,
 		public readonly ?array $objects = null,
 		public readonly ?int $acceptedPlanStepId = null,
@@ -68,6 +70,7 @@ final class Run {
 		$error   = json_decode( (string) ( $row['error_json'] ?? 'null' ), true );
 		$status  = RunStatus::tryFrom( (string) ( $row['status'] ?? '' ) );
 		$skills  = json_decode( (string) ( $row['skills_json'] ?? 'null' ), true );
+		$disable = json_decode( (string) ( $row['skills_disable_json'] ?? 'null' ), true );
 		$result  = json_decode( (string) ( $row['result_json'] ?? 'null' ), true );
 		$objects = json_decode( (string) ( $row['objects_json'] ?? 'null' ), true );
 
@@ -88,6 +91,7 @@ final class Run {
 			error: is_array( $error ) ? $error : null,
 			pack: isset( $row['pack'] ) && is_string( $row['pack'] ) && '' !== $row['pack'] ? $row['pack'] : null,
 			skills: is_array( $skills ) ? array_values( $skills ) : null,
+			skillsDisable: is_array( $disable ) ? array_values( array_filter( $disable, 'is_string' ) ) : null,
 			result: is_array( $result ) ? $result : null,
 			objects: is_array( $objects ) ? $objects : null,
 			acceptedPlanStepId: isset( $row['accepted_plan_step_id'] ) && '' !== (string) $row['accepted_plan_step_id'] ? (int) $row['accepted_plan_step_id'] : null,
@@ -119,6 +123,7 @@ final class Run {
 			'error_json'            => null !== $this->error ? (string) wp_json_encode( $this->error ) : null,
 			'pack'                  => $this->pack,
 			'skills_json'           => null !== $this->skills ? (string) wp_json_encode( $this->skills ) : null,
+			'skills_disable_json'   => null !== $this->skillsDisable ? (string) wp_json_encode( $this->skillsDisable ) : null,
 			'result_json'           => null !== $this->result ? (string) wp_json_encode( $this->result ) : null,
 			'objects_json'          => null !== $this->objects ? (string) wp_json_encode( $this->objects ) : null,
 			'accepted_plan_step_id' => $this->acceptedPlanStepId,

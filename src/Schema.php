@@ -28,9 +28,11 @@ final class Schema {
 	/**
 	 * Current schema version. 1 = the 0.1 runs/steps tables; 2 = 0.2 S4's
 	 * additive run columns (pack, skills_json, result_json, objects_json,
-	 * accepted_plan_step_id, conversation_locale, content_locale).
+	 * accepted_plan_step_id, conversation_locale, content_locale); 3 adds
+	 * skills_disable_json, so every TICK can collect the run's skills exactly
+	 * as start() did (S8) instead of honouring the disable list only once.
 	 */
-	public const DB_VERSION = 2;
+	public const DB_VERSION = 3;
 
 	/**
 	 * Runs table name for this site.
@@ -128,6 +130,7 @@ final class Schema {
 				// 0.2 S4 columns. Additive: no 0.1 column changed shape.
 				'pack VARCHAR(64) NULL',
 				'skills_json LONGTEXT NULL',
+				'skills_disable_json LONGTEXT NULL',
 				'result_json LONGTEXT NULL',
 				'objects_json LONGTEXT NULL',
 				'accepted_plan_step_id BIGINT(20) UNSIGNED NULL',

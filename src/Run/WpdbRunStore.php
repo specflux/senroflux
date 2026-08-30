@@ -170,6 +170,7 @@ final class WpdbRunStore implements RunStore {
 			// 0.2 S4 columns (written by the run-model features that own them).
 			'pack'                  => '%s',
 			'skills_json'           => '%s',
+			'skills_disable_json'   => '%s',
 			'result_json'           => '%s',
 			'objects_json'          => '%s',
 			'accepted_plan_step_id' => '%d',

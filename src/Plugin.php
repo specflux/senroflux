@@ -347,7 +347,11 @@ final class Plugin {
 		$store->updateRun(
 			$run_id,
 			array(
-				'skills_json' => array_map(
+				// S8: the disable list rides the RUN, not just the start call —
+				// every tick re-collects the same set the ceiling was checked
+				// against, so a dropped skill stays dropped.
+				'skills_disable_json' => null !== $skills_disable ? array_values( array_filter( $skills_disable, 'is_string' ) ) : null,
+				'skills_json'         => array_map(
 					static fn ( Skill $skill ): array => array(
 						'id'      => $skill->id,
 						'sha256'  => hash( 'sha256', $skill->body ),
@@ -614,7 +618,11 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->verbFor( $ability, $args ) : $ability;
-			}
+			},
+			// S8: the pack whose skills ride every tick's instruction. The
+			// Runner passes it straight to SkillSet without knowing the type —
+			// the pack seam stays a composition-root concern.
+			static fn ( \Specflux\SenroFlux\Run\Run $run ): ?\Specflux\SenroFlux\Packs\Pack => self::pack_for_run( $run )
 		);
 
 		return $this->runner;

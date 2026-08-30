@@ -166,6 +166,128 @@ final class SkillsAuditTest extends TestCase {
 		}
 	}
 
+	/**
+	 * A minimal pack carrying the given skills (S8's pack seam).
+	 *
+	 * @param list<Skill> $skills The pack's skills, in render order.
+	 */
+	private function packWith( array $skills ): \Specflux\SenroFlux\Packs\Pack {
+		$pack = new class() extends \Specflux\SenroFlux\Packs\Pack {
+			/** @var list<Skill> */
+			public array $packSkills = array();
+
+			public function name(): string {
+				return 'test-pack';
+			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			/** @return list<Skill> */
+			public function skills(): array {
+				return $this->packSkills;
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+		};
+
+		$pack->packSkills = $skills;
+
+		return $pack;
+	}
+
+	/** A runner whose pack resolver always answers `$pack`. */
+	private function runnerWithPack( \Specflux\SenroFlux\Packs\Pack $pack ): Runner {
+		return new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new \Specflux\SenroFlux\Approval\ApprovalBridge(),
+			null,
+			null,
+			null,
+			static function ( \Specflux\SenroFlux\Run\Run $run ) use ( $pack ): \Specflux\SenroFlux\Packs\Pack {
+				unset( $run );
+
+				return $pack;
+			}
+		);
+	}
+
+	public function test_pack_skills_ride_every_tick_and_the_disable_list_survives(): void {
+		$pack   = $this->packWith(
+			array(
+				new Skill( 'pack/tone', 'Tone', 'Pack tone guidance.', false, SkillSource::Pack ),
+				new Skill( 'pack/optional', 'Optional', 'Pack optional guidance.', false, SkillSource::Pack ),
+			)
+		);
+		$runner = $this->runnerWithPack( $pack );
+
+		$run_id = $this->createRun();
+		// What start() persisted: this run drops one non-required pack skill.
+		$this->store->updateRun( $run_id, array( 'skills_disable_json' => array( 'pack/optional' ) ) );
+
+		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
+		$runner->tick( $run_id, 0, null );
+
+		$this->store->updateRun( $run_id, array( 'status' => RunStatus::Running->value ) );
+		$this->gateway->script[] = $this->textTurn( 'Turn two.' );
+		$runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, null );
+
+		$this->assertCount( 2, $this->gateway->systemInstructions );
+		foreach ( $this->gateway->systemInstructions as $index => $instruction ) {
+			$this->assertStringContainsString(
+				'Pack tone guidance.',
+				$instruction,
+				'tick ' . ( $index + 1 ) . ' shows the model the pack skills'
+			);
+			$this->assertStringNotContainsString(
+				'Pack optional guidance.',
+				$instruction,
+				'tick ' . ( $index + 1 ) . ' honours the run\'s skills_disable list'
+			);
+		}
+	}
+
+	public function test_a_stable_drift_is_recorded_once_not_every_tick(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
+		$this->runner->tick( $run_id, 0, null );
+
+		// The drift appears once and STAYS: the same consumer filter is on for
+		// the rest of the run.
+		add_filter(
+			'senroflux_run_skills',
+			static fn ( array $skills ): array => array_merge(
+				$skills,
+				array( new Skill( 'consumer/extra', 'Extra', 'Extra guidance.', false, SkillSource::Consumer ) )
+			),
+			10,
+			1
+		);
+
+		foreach ( array( 2, 3 ) as $unused ) {
+			unset( $unused );
+			$this->store->updateRun( $run_id, array( 'status' => RunStatus::Running->value ) );
+			$this->gateway->script[] = $this->textTurn( 'Another turn.' );
+			$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, null );
+		}
+
+		$notes = array_filter(
+			$this->store->getSteps( $run_id ),
+			static fn ( $step ): bool => StepKind::System === $step->kind
+				&& 'skills_changed' === ( $step->messageArray['note'] ?? '' )
+		);
+
+		$this->assertCount( 1, $notes, 'a drift that persists is one event, not one per tick' );
+	}
+
 	public function test_the_post_render_filter_reshapes_the_final_string(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = $this->textTurn( 'Done.' );
