@@ -8,7 +8,9 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   calls.
 - **Step** — one recorded unit of a run: user message, model message, tool result, or a park.
 - **Park** — a step at which the run stops and waits for a human. Kinds:
-  - **Approval park** — a Tier-2 tool call blocked by Agent Safety; resumes on approve/reject.
+  - **Approval park** — a tool call blocked by the gate, waiting for a human's approve/reject.
+    With Agent Safety active the gate is its verdict pipeline and only Tier-2 calls park; without
+    it, SenroFlux's built-in gate parks every side-effecting call. Resumes on approve/reject.
   - **Question park** — the model asks the user one structured clarifying question (text,
     optional choices, one-line rationale); resumes with the answer, or a skip, returned to the
     model as the result of its question.
