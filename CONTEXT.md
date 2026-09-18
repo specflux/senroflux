@@ -72,13 +72,19 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   required; pack skills may be disabled for a run; skills are always on, never conditional.
 - **Role** — what a pack needs an ability *for* (read, create, update, preview, patterns),
   independent of which registered ability fills it — core's when it exists and fits, a
-  polyfill otherwise.
+  polyfill otherwise. A role may also name the capability it needs from the person starting
+  the run (adding images needs `upload_files`), separately from the pack's run capability.
 - **Run capability** — the WordPress capability a pack requires of whoever starts a run with it
   (`edit_posts` for the posts pack, `edit_pages` for the pages pack, `manage_options` for the site
   pack, `manage_woocommerce` for commerce). It answers "may this
   person set this pack going at all", which is a different question from what the gate lets the
   run do once started, and a different word from **Role** above. Holding no pack's run
   capability is what makes SenroFlux invisible to a user.
+- **Withheld role** — a pack role removed from a run's tool set at start because the starting
+  user lacks the capability that role names (a Contributor's posts run has no images). The
+  model is told the role is unavailable, and the run view and **Report** name it. It is decided
+  once, at start, from who is running, which is different from a gate refusal, decided per call
+  from the verb's tier.
 - **Site navigation** — the one navigation the active theme actually renders to visitors, named as
   a single domain object so a run never has to know which of WordPress's two menu worlds it is in:
   in a block theme, the navigation entry the theme's header refers to; in a classic theme, the menu
