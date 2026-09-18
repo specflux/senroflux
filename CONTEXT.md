@@ -49,6 +49,13 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   needs, the verbs it exposes with their tiers, its skills, its pattern vocabulary, the run
   capability it requires and the setup checks it declares. A SenroFlux pack produces the Agent
   Safety capability pack that governs it.
+- **Extension API** — the part of SenroFlux another plugin may build a pack against, under a
+  semver promise from 1.0: the pack contract, the pack registration hook, pack skills, budget
+  defaults and a pack's namespace preferences. Everything else is internal and may change in any
+  release. A pack registered through it is governed exactly like a bundled one.
+- **Add-on** — a separate plugin that adds packs through the extension API; SenroFlux itself
+  never contains an add-on's code or checks its licence. **SenroFlux Pro** is Specflux's paid
+  add-on, sold outside wordpress.org; paying for it never buys a weaker gate.
 - **Setup check** — a condition shown on the Runs screen before a run can be started, declared
   by the harness or by a registered pack and identified by a namespaced id. **Blocking** checks
   disable Start while they fail (no model provider); **advisory** ones only recommend (Agent
