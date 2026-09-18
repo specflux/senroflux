@@ -30,9 +30,11 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
 - **Pre-approval grant** — a human's advance approval, given when accepting a plan, of the
   irreversible actions that plan lists; scoped to one run, one verb, a count, and a lifetime, and
   spent one action at a time. Anything outside the grant, or any call after the grant has expired,
-  still parks.
-- **Budget** — per-run ceilings: steps, tool calls, tokens, questions, plans, and generated
-  images. A consumer may only lower the registered ceiling. Running out of questions is not a
+  still parks. An **ungrantable verb** never enters a grant: every call to it parks on its own,
+  whatever the plan lists. Verbs that move money or reach a person outside the site (a refund, a
+  customer-visible order note) are ungrantable.
+- **Budget** — per-run ceilings: steps, tool calls, tokens, questions, plans, generated
+  images, and refunds (a count, not a sum of money). A consumer may only lower the registered ceiling. Running out of questions is not a
   failure: the model loses the ability to ask and proceeds on stated assumptions.
 - **Park resolution** — the human's reply that resumes a parked run: approve or reject for an
   approval park, answer or skip for a question park, accept / accept-with-pre-approval / veto
@@ -82,7 +84,8 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   are different verbs).
 - **Polyfill ability** — an ability SenroFlux registers only because upstream does not yet
   provide it, named to mirror the ability upstream is expected to ship, and withdrawn the
-  release after it does. Upstream is core where core is the natural home, and a canonical
+  release after it does. The mirror is the ability's name, never its namespace: a polyfill
+  always lives in SenroFlux's own namespace, never in one another plugin owns. Upstream is core where core is the natural home, and a canonical
   upstream plugin where it is not.
 - **Pattern vocabulary** — the curated set of core-block patterns a pack ships and the model
   composes content from. Content is a sequence of pattern instances and nothing else; anything
@@ -113,12 +116,15 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   unmapped verb is Tier 2. One declaration serves both gates: Agent Safety consumes the full
   scale and parks Tier 2, while the built-in gate reads it only as zero-or-above and parks
   anything above. Where one ability spans verbs of several tiers, the ability registers at the
-  highest.
+  highest. For an ability another plugin owns (WooCommerce's), the tier — including any raise
+  that depends on the call's arguments, such as a price change — is declared by Agent Safety's
+  integration for that plugin, and the pack's own declaration must agree with it.
 - **Gate mode** — which gate governs a run: Agent Safety's, or SenroFlux's built-in minimal
   gate. Resolved once when the run starts, pinned to the run, and reported with it. If the live
   environment stops matching the pinned mode — Agent Safety activated or deactivated mid-run —
   the next tick fails the run with a partial report rather than switching gates under an
-  already-accepted plan.
+  already-accepted plan. A pack may refuse the built-in gate: the commerce pack is unavailable
+  unless Agent Safety is active, and says so as a blocking setup check.
 
 **Grant** — A human-issued, run-scoped permission to execute a named verb up to N times,
 not bound to a specific object. Distinct from an Approval, which is bound to one exact
