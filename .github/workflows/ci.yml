@@ -29,6 +29,33 @@ jobs:
       - name: PHPUnit
         run: composer test
 
+  editor-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          composer install --prefer-dist --no-interaction
+          npm ci --no-audit --no-fund
+
+      # The block editor's own validation over the shipped patterns and a
+      # cleaned page: catches "Block contains unexpected or invalid content"
+      # that the PHP round-trip check cannot see.
+      - name: Editor parity
+        run: npm run test:editor
+
   plugin-check:
     runs-on: ubuntu-latest
     steps:

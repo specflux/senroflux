@@ -18,12 +18,24 @@
  *      to `wp_insert_post()`. The pack therefore does its own, stricter pass
  *      and REFUSES rather than silently stripping — a silent strip would let a
  *      model believe it had written what it asked for.
+ *   2c. no colour attribute (`backgroundColor`, `textColor`, `gradient`,
+ *      `style.color`) on any block → `decorative_color` (index + block name +
+ *      attr). Refused rather than stripped: removing the attribute from the
+ *      block comment leaves the colour in the HTML. A leftover inline colour
+ *      style makes the editor report "Block contains unexpected or invalid
+ *      content"; leftover preset classes are kept as a custom CSS class, so
+ *      the colour survives the strip anyway.
  *   3. unresolved `{{placeholder}}` text → `unresolved_placeholder`.
  *   4. pattern identity is STRUCTURAL (blockName tree + layout-defining attrs +
  *      slot counts in min..max) → `unknown_pattern` (index + nearest name),
  *      `slot_count` (slot + allowed range), `page_shape` (rule broken).
- *   5. MUTATIONS, not refusals — strip decorative colour attributes and
- *      normalise `metadata.name`. Exposed only through {@see clean()}.
+ *   4b. every block's comment attributes and HTML shell match a block of the
+ *      same name in the vocabulary ({@see BlockShells}) → `block_mismatch`
+ *      (index + block name + reason + found/expected). This is what keeps a
+ *      write from opening as "Block contains unexpected or invalid content".
+ *   5. MUTATION, not a refusal — normalise `metadata.name` (block metadata
+ *      is not part of any block's saved HTML, so this cannot desync the
+ *      editor). Exposed only through {@see clean()}.
  *
  * Return shape (documented): {@see validate()} is the refusal gateway returning
  * `true|WP_Error`; {@see clean()} is the callers' single entry point returning
@@ -128,7 +140,10 @@ final class Validator {
 	/**
 	 * @param Vocabulary $vocabulary The pattern vocabulary (identity + constraints).
 	 */
+	private readonly BlockShells $shells;
+
 	public function __construct( private readonly Vocabulary $vocabulary ) {
+		$this->shells = new BlockShells( $vocabulary );
 	}
 
 	/**
@@ -212,6 +227,12 @@ final class Validator {
 			return $this->refuse( $markup_error );
 		}
 
+		// Step 2c — colour attributes.
+		$color_error = $this->checkDecorativeColor( $blocks );
+		if ( null !== $color_error ) {
+			return $this->refuse( $color_error );
+		}
+
 		// Step 3 — unresolved `{{placeholder}}`.
 		$placeholder = $this->findPlaceholder( $content );
 		if ( null !== $placeholder ) {
@@ -271,6 +292,12 @@ final class Validator {
 		$shape_error = $this->checkPageShape( $identities );
 		if ( null !== $shape_error ) {
 			return $this->refuse( $shape_error );
+		}
+
+		// Step 4b — editor parity.
+		$shell_error = $this->checkBlockShells( $blocks );
+		if ( null !== $shell_error ) {
+			return $this->refuse( $shell_error );
 		}
 
 		return array(
@@ -454,6 +481,98 @@ final class Validator {
 			}
 			if ( $this->isPatternBlock( $block ) ) {
 				++$index;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Step 4b — refuses the whole write on the first block whose attributes or
+	 * HTML shell the vocabulary does not use.
+	 *
+	 * @param list<array<string,mixed>> $blocks Parsed top-level blocks.
+	 */
+	private function checkBlockShells( array $blocks ): ?WP_Error {
+		$index = 0;
+		foreach ( $blocks as $block ) {
+			if ( ! $this->isPatternBlock( $block ) ) {
+				continue;
+			}
+			$found = $this->shells->mismatch( $block );
+			if ( null !== $found ) {
+				$data = array_merge( array( 'index' => $index ), $found );
+
+				return new WP_Error(
+					'block_mismatch',
+					$this->message( 'block_mismatch', array(), $data ),
+					array_merge( array( 'status' => 400 ), $data )
+				);
+			}
+			++$index;
+		}
+
+		return null;
+	}
+
+	/**
+	 * Step 2c — refuses the whole write on the first block carrying a colour
+	 * attribute, reporting the top-level pattern index it sits in.
+	 *
+	 * @param list<array<string,mixed>> $blocks Parsed top-level blocks.
+	 */
+	private function checkDecorativeColor( array $blocks ): ?WP_Error {
+		$index = 0;
+		foreach ( $blocks as $block ) {
+			$found = $this->findDecorativeColor( $block );
+			if ( null !== $found ) {
+				$data = array(
+					'index' => $index,
+					'name'  => $found['name'],
+					'attr'  => $found['attr'],
+				);
+
+				return new WP_Error(
+					'decorative_color',
+					$this->message( 'decorative_color', array(), $data ),
+					array_merge( array( 'status' => 400 ), $data )
+				);
+			}
+			if ( $this->isPatternBlock( $block ) ) {
+				++$index;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param array<string,mixed> $block One parsed block.
+	 * @return array{name:string, attr:string}|null
+	 */
+	private function findDecorativeColor( array $block ): ?array {
+		$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+		foreach ( array( 'backgroundColor', 'textColor', 'gradient' ) as $key ) {
+			if ( array_key_exists( $key, $attrs ) ) {
+				return array(
+					'name' => (string) ( $block['blockName'] ?? '' ),
+					'attr' => $key,
+				);
+			}
+		}
+		if ( is_array( $attrs['style'] ?? null ) && array_key_exists( 'color', $attrs['style'] ) ) {
+			return array(
+				'name' => (string) ( $block['blockName'] ?? '' ),
+				'attr' => 'style.color',
+			);
+		}
+
+		$children = $block['innerBlocks'] ?? array();
+		/** @var list<array<string,mixed>> $children */
+		foreach ( $children as $child ) {
+			$found = $this->findDecorativeColor( $child );
+			if ( null !== $found ) {
+				return $found;
 			}
 		}
 
@@ -1101,8 +1220,8 @@ final class Validator {
 	}
 
 	/**
-	 * Step 5 — the mutation pass: strip decorative colour attrs and normalise
-	 * `metadata.name` to `senroflux/<slug>` on each top-level pattern block.
+	 * Step 5 — the mutation pass: normalise `metadata.name` to
+	 * `senroflux/<slug>` on each top-level pattern block.
 	 *
 	 * @param list<array<string,mixed>> $blocks     Parsed top-level blocks.
 	 * @param array<int,string>         $identities parse offset => slug.
@@ -1111,44 +1230,13 @@ final class Validator {
 		$mutated = $blocks;
 		foreach ( $mutated as $i => $block ) {
 			if ( isset( $identities[ $i ] ) ) {
-				$mutated[ $i ] = $this->mutateBlock( $block, $identities[ $i ] );
+				$attrs                  = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+				$attrs['metadata']      = array( 'name' => 'senroflux/' . $identities[ $i ] );
+				$mutated[ $i ]['attrs'] = $attrs;
 			}
 		}
 
 		return $this->serialize( $mutated );
-	}
-
-	/**
-	 * Recursively strip decorative attrs and (for a top-level pattern block)
-	 * set the canonical metadata.name.
-	 *
-	 * @param array<string,mixed> $block One parsed block.
-	 * @return array<string,mixed>
-	 */
-	private function mutateBlock( array $block, ?string $slug = null ): array {
-		$attrs = $block['attrs'] ?? array();
-		unset( $attrs['backgroundColor'], $attrs['textColor'], $attrs['gradient'] );
-
-		if ( isset( $attrs['style']['color'] ) ) {
-			unset( $attrs['style']['color'] );
-			if ( empty( $attrs['style'] ) ) {
-				unset( $attrs['style'] );
-			}
-		}
-
-		if ( null !== $slug ) {
-			$attrs['metadata'] = array( 'name' => 'senroflux/' . $slug );
-		}
-
-		$children = $block['innerBlocks'] ?? array();
-		/** @var list<array<string,mixed>> $children */
-		foreach ( $children as $j => $child ) {
-			$children[ $j ] = $this->mutateBlock( $child );
-		}
-		$block['attrs']       = $attrs;
-		$block['innerBlocks'] = $children;
-
-		return $block;
 	}
 
 	/**
@@ -1190,6 +1278,30 @@ final class Validator {
 				$data['name'] ?? 'unknown'
 			),
 			'disallowed_markup'      => $this->disallowedMarkupMessage( $data ),
+			'decorative_color'       => sprintf(
+				/* translators: %1$d: pattern index, %2$s: block name, %3$s: attribute. */
+				__( 'Pattern %1$d: block "%2$s" sets the colour attribute "%3$s". Remove it; pages take their colours from the theme.', 'senroflux' ),
+				$data['index'] ?? 0,
+				$data['name'] ?? '',
+				$data['attr'] ?? ''
+			),
+			'block_mismatch'         => 'attributes' === ( $data['reason'] ?? '' )
+				? sprintf(
+					/* translators: %1$d: pattern index, %2$s: block name, %3$s: attributes written, %4$s: allowed attribute sets. */
+					__( 'Pattern %1$d: block "%2$s" has attributes %3$s, which no page pattern uses for this block. Use one of: %4$s ({{pN}} is any preset slug; the same N must be the same slug).', 'senroflux' ),
+					$data['index'] ?? 0,
+					$data['name'] ?? '',
+					$data['found'] ?? '',
+					$data['expected'] ?? ''
+				)
+				: sprintf(
+					/* translators: %1$d: pattern index, %2$s: block name, %3$s: expected HTML, %4$s: HTML written. */
+					__( 'Pattern %1$d: block "%2$s" HTML does not match its attributes, so the editor would reject it. Expected %3$s but found %4$s (… is your text).', 'senroflux' ),
+					$data['index'] ?? 0,
+					$data['name'] ?? '',
+					$data['expected'] ?? '',
+					$data['found'] ?? ''
+				),
 			'unresolved_placeholder' => sprintf(
 				/* translators: %s: placeholder. */
 				__( 'Unresolved placeholder "{{%s}}" must be filled before writing.', 'senroflux' ),
