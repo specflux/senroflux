@@ -682,7 +682,7 @@ final class RunsScreenTest extends TestCase {
 		// The empty state/example goals still render below a merely-advisory panel.
 		$this->assertStringContainsString( 'name="goal"', $html );
 
-		Checks::setProviderProbe( null );
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}
 
 	public function test_the_setup_panel_is_empty_when_everything_is_clear(): void {
@@ -695,7 +695,7 @@ final class RunsScreenTest extends TestCase {
 
 		$this->assertStringNotContainsString( 'senroflux-setup-check', $html );
 
-		Checks::setProviderProbe( null );
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}
 
 	public function test_the_start_button_is_disabled_server_side_when_the_provider_check_fails(): void {
@@ -710,7 +710,7 @@ final class RunsScreenTest extends TestCase {
 
 		$this->assertMatchesRegularExpression( '/id="senroflux-start-run"[^>]*\bdisabled\b/', $html );
 
-		Checks::setProviderProbe( null );
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}
 
 	public function test_handle_setup_panel_reports_start_disabled_when_the_provider_check_fails(): void {
@@ -727,7 +727,7 @@ final class RunsScreenTest extends TestCase {
 			$this->assertFalse( $json->data['start_enabled'] );
 			$this->assertStringContainsString( 'senroflux-setup-panel', $json->data['html'] );
 		} finally {
-			Checks::setProviderProbe( null );
+			Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 		}
 	}
 

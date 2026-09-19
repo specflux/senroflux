@@ -19,6 +19,7 @@ use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\WpdbRunStore;
+use Specflux\SenroFlux\Setup\Checks;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\ToolExecutor;
@@ -366,6 +367,21 @@ final class Plugin {
 
 		$user_id      = (int) get_current_user_id();
 		$caller_allow = $allow; // Captured BEFORE the pack derives it (S9).
+
+		// 0.3 S11: start() re-decides on the server through the SAME evaluator
+		// the setup panel renders — the harness's own blocking checks (the
+		// provider check…) refuse here exactly as they disable the panel's
+		// Start button. Advisory checks (Agent Safety) never block. This runs
+		// for BOTH the direct-allow and pack paths; a pack's OWN checks are
+		// asked separately below, by preflight().
+		$harness_failure = Checks::firstBlockingFailure( Checks::harnessChecks( $user_id ) );
+		if ( null !== $harness_failure ) {
+			return new WP_Error(
+				$harness_failure->errorCode(),
+				$harness_failure->messageFor( $user_id ),
+				array( 'status' => 400 )
+			);
+		}
 
 		// S9: pack resolution first — an unknown pack is a 400 before any DB
 		// write. A caller-supplied $allow is IGNORED when a pack is given: the

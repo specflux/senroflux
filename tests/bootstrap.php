@@ -438,3 +438,15 @@ if ( ! function_exists( 'delete_option' ) ) {
 		return true;
 	}
 }
+
+// 0.3 S11 follow-up: `Plugin::start()` now asks the SAME `senroflux/provider`
+// harness check the setup panel renders (Checks::providerCheck()). Most of
+// the suite starts runs without ever configuring a model provider and is not
+// testing that check at all, so the suite-wide default is "configured" —
+// exactly like `Plugin::set_dependency_probe()` already defaults Agent Safety
+// presence per test. Tests that ARE about the provider check (tests/Setup/ChecksTest.php,
+// tests/Admin/RunsScreenTest.php, tests/PluginProviderCheckTest.php) override
+// this explicitly and restore it to `true` (never to `null`, which would fall
+// through to the real, unconfigured `wordpress/php-ai-client` registry and
+// strand every OTHER test file that runs afterwards in the same process).
+\Specflux\SenroFlux\Setup\Checks::setProviderProbe( true );

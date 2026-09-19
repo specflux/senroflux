@@ -20,14 +20,19 @@ final class ChecksTest extends TestCase {
 
 	protected function setUp(): void {
 		Plugin::reset();
-		Checks::setProviderProbe( null );
+		// Reset to the suite-wide default (tests/bootstrap.php), not null: null
+		// falls through to the real, always-unconfigured `wordpress/php-ai-client`
+		// registry in CI, which would strand every test file that runs after
+		// this one in the same process once `Plugin::start()` also asks this
+		// check (0.3 S11 follow-up).
+		Checks::setProviderProbe( true );
 		$GLOBALS['senroflux_test_user_caps']       = array();
 		$GLOBALS['senroflux_test_user_caps_by_id'] = array();
 		$GLOBALS['senroflux_test_user_meta']       = array();
 	}
 
 	protected function tearDown(): void {
-		Checks::setProviderProbe( null );
+		Checks::setProviderProbe( true );
 		Plugin::reset();
 	}
 
