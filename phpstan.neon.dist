@@ -52,6 +52,13 @@ parameters:
             path: src/Schema.php
             count: 1
         -
+            # Same family: AiClientMediaGateway's download_url()/wp_upload_bits()
+            # fallback requires the real WP-core file only when it hasn't
+            # already been loaded mid-request — never present in this checkout.
+            message: '#^Path in require_once\(\) ".*wp\-admin/includes/file\.php" is not a file or it does not exist\.$#'
+            path: src/Model/AiClientMediaGateway.php
+            count: 2
+        -
             # Message::fromArray() documents a narrow PHPStan array-shape
             # generic; Runner stores exactly toArray() output (S4), so the
             # shape holds BY CONSTRUCTION (same as Step::toMessage()).

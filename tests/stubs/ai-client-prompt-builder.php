@@ -10,6 +10,7 @@
 
 declare ( strict_types = 1 );
 
+use WordPress\AiClient\Files\DTO\File;
 use WordPress\AiClient\Providers\Http\DTO\RequestOptions;
 
 if ( ! class_exists( 'SenroFlux_Test_Fake_Prompt_Builder', false ) ) {
@@ -18,6 +19,8 @@ if ( ! class_exists( 'SenroFlux_Test_Fake_Prompt_Builder', false ) ) {
 		private string $prompt;
 
 		private ?RequestOptions $requestOptions = null;
+
+		private ?File $file = null;
 
 		public function __construct( string $prompt ) {
 			$this->prompt = $prompt;
@@ -29,11 +32,24 @@ if ( ! class_exists( 'SenroFlux_Test_Fake_Prompt_Builder', false ) ) {
 			return $this;
 		}
 
+		/**
+		 * Mirrors PromptBuilder::withFile(): a File object or a string
+		 * (URL/base64/data-URI/local path) that File itself detects.
+		 *
+		 * @param File|string $file The file (real vendor DTO detects the shape).
+		 */
+		public function with_file( File|string $file ): self {
+			$this->file = $file instanceof File ? $file : new File( $file );
+
+			return $this;
+		}
+
 		/** @return mixed */
 		private function nextResult() {
 			$GLOBALS['senroflux_test_prompt_builder_calls'][] = array(
 				'prompt'          => $this->prompt,
 				'request_options' => $this->requestOptions,
+				'file'            => $this->file,
 			);
 
 			$script = $GLOBALS['senroflux_test_prompt_builder_script'] ?? array();

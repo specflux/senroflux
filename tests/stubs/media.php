@@ -136,6 +136,67 @@ if ( ! function_exists( 'get_posts' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_generate_password' ) ) {
+	function wp_generate_password( int $length = 12, bool $special_chars = true, bool $extra_special_chars = false ): string {
+		unset( $special_chars, $extra_special_chars );
+
+		return substr( str_repeat( 'abcdef0123456789', 4 ), 0, $length );
+	}
+}
+
+if ( ! function_exists( 'wp_upload_bits' ) ) {
+	/**
+	 * Writes `$bits` into the (test) uploads dir, mirroring the real
+	 * function's return shape (defect A: AiClientMediaGateway persists
+	 * generated images via this call).
+	 */
+	function wp_upload_bits( string $name, ?string $deprecated, string $bits, ?string $time = null ): array {
+		unset( $deprecated, $time );
+
+		$dir  = wp_upload_dir();
+		$path = $dir['basedir'] . '/' . $name;
+		file_put_contents( $path, $bits ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- test fixture, not a WP runtime path.
+
+		return array(
+			'file'  => $path,
+			'url'   => $dir['baseurl'] . '/' . $name,
+			'type'  => '',
+			'error' => false,
+		);
+	}
+}
+
+if ( ! function_exists( 'wp_delete_file' ) ) {
+	function wp_delete_file( string $file ): void {
+		if ( is_file( $file ) ) {
+			unlink( $file ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- test fixture, not a WP runtime path.
+		}
+	}
+}
+
+if ( ! function_exists( 'download_url' ) ) {
+	/**
+	 * Test double: writes the scripted response body
+	 * (`$GLOBALS['senroflux_test_download_url_response']`) to a temp file and
+	 * returns its path, or a WP_Error if the script sets one.
+	 */
+	function download_url( string $url, int $timeout = 300, bool $signature_verification = false ): string|WP_Error {
+		unset( $timeout, $signature_verification );
+
+		$GLOBALS['senroflux_test_download_url_calls'][] = $url;
+
+		$response = $GLOBALS['senroflux_test_download_url_response'] ?? null;
+		if ( $response instanceof WP_Error ) {
+			return $response;
+		}
+
+		$tmp = tempnam( sys_get_temp_dir(), 'senroflux-download-' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_tempnam -- test fixture, not a WP runtime path.
+		file_put_contents( $tmp, (string) $response ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- test fixture, not a WP runtime path.
+
+		return $tmp;
+	}
+}
+
 if ( ! function_exists( 'get_taxonomy' ) ) {
 	function get_taxonomy( string $taxonomy ): object|false {
 		unset( $taxonomy );
