@@ -698,6 +698,21 @@ final class RunsScreenTest extends TestCase {
 		Checks::setProviderProbe( null );
 	}
 
+	public function test_the_start_button_is_disabled_server_side_when_the_provider_check_fails(): void {
+		Plugin::set_dependency_probe( true );
+		Checks::setProviderProbe( false );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertMatchesRegularExpression( '/id="senroflux-start-run"[^>]*\bdisabled\b/', $html );
+
+		Checks::setProviderProbe( null );
+	}
+
 	public function test_handle_setup_panel_reports_start_disabled_when_the_provider_check_fails(): void {
 		Checks::setProviderProbe( false );
 

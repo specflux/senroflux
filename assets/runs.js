@@ -333,10 +333,22 @@
 						next.outerHTML = json.data.html;
 					}
 				}
+				applyStartEnabled( json );
 			} )
 			.catch( function () {
 				// Silent: the server-rendered panel from page load stands.
 			} );
+	}
+
+	/** Toggle the Start button per the server's start_enabled verdict — start() re-decides regardless. */
+	function applyStartEnabled( json ) {
+		if ( ! json || ! json.success || ! json.data || typeof json.data.start_enabled !== 'boolean' ) {
+			return;
+		}
+		var button = document.getElementById( 'senroflux-start-run' );
+		if ( button ) {
+			button.disabled = ! json.data.start_enabled;
+		}
 	}
 
 	window.addEventListener( 'focus', refreshPanel );

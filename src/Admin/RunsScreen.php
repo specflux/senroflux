@@ -1002,8 +1002,14 @@ class RunsScreen {
 
 		echo '</details>';
 
+		// S11: the harness's own blocking checks (provider…) disable Start
+		// server-side too, on TOP of the per-pack disabled <option>s above —
+		// start() re-decides regardless (fail closed either way).
+		$harness_blocked = null !== Checks::firstBlockingFailure( Checks::harnessChecks( $user_id ) );
+
 		printf(
-			'<p><button type="submit" class="button button-primary">%s</button></p>',
+			'<p><button type="submit" class="button button-primary" id="senroflux-start-run"%s>%s</button></p>',
+			$harness_blocked ? ' disabled' : '',
 			esc_html__( 'Start run', 'senroflux' )
 		);
 
