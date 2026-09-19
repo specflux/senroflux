@@ -60,12 +60,12 @@ final class SkillSetTest extends TestCase {
 		return $pack;
 	}
 
-	public function test_harness_skills_are_four_required_harness_skills_in_order(): void {
+	public function test_harness_skills_are_five_required_harness_skills_in_order(): void {
 		$skills = SkillSet::harnessSkills();
 
-		$this->assertCount( 4, $skills );
+		$this->assertCount( 5, $skills );
 		$this->assertSame(
-			array( 'harness/identity', 'harness/injection-rule', 'harness/workflow', 'harness/authority' ),
+			array( 'harness/identity', 'harness/injection-rule', 'harness/workflow', 'harness/authority', 'harness/content-language' ),
 			array_map( static fn ( Skill $skill ): string => $skill->id, $skills )
 		);
 
@@ -100,6 +100,7 @@ final class SkillSetTest extends TestCase {
 				'harness/injection-rule',
 				'harness/workflow',
 				'harness/authority',
+				'harness/content-language',
 				'pack/copy-rules',
 				'pack/tone',
 				'consumer/brand',
@@ -149,7 +150,7 @@ final class SkillSetTest extends TestCase {
 		}
 
 		$this->assertCount(
-			4,
+			5,
 			array_filter( $skills, static fn ( Skill $skill ): bool => SkillSource::Harness === $skill->source )
 		);
 	}
@@ -170,6 +171,7 @@ final class SkillSetTest extends TestCase {
 				'harness/injection-rule',
 				'harness/workflow',
 				'harness/authority',
+				'harness/content-language',
 				'pack/tone',
 			),
 			array_map( static fn ( Skill $skill ): string => $skill->id, $skills )
@@ -258,6 +260,45 @@ final class SkillSetTest extends TestCase {
 
 	public function test_ceiling_error_returns_null_within_the_default_ceiling(): void {
 		$this->assertNull( SkillSet::ceilingError( SkillSet::harnessSkills() ) );
+	}
+
+	public function test_content_language_defaults_to_the_site_language(): void {
+		$skills = SkillSet::harnessSkills();
+		$skill  = null;
+		foreach ( $skills as $candidate ) {
+			if ( 'harness/content-language' === $candidate->id ) {
+				$skill = $candidate;
+			}
+		}
+
+		$this->assertNotNull( $skill );
+		$this->assertStringContainsString( 'the site language', $skill->body );
+	}
+
+	public function test_content_language_names_a_resolved_locale(): void {
+		$skills = SkillSet::harnessSkills( 'en_US' );
+		$skill  = null;
+		foreach ( $skills as $candidate ) {
+			if ( 'harness/content-language' === $candidate->id ) {
+				$skill = $candidate;
+			}
+		}
+
+		$this->assertNotNull( $skill );
+		$this->assertStringContainsString( 'English (US)', $skill->body );
+	}
+
+	public function test_collect_passes_the_content_locale_to_the_harness_skill(): void {
+		$skills = SkillSet::collect( 'user-42', 'Build a landing page', null, null, 'en_GB' );
+		$skill  = null;
+		foreach ( $skills as $candidate ) {
+			if ( 'harness/content-language' === $candidate->id ) {
+				$skill = $candidate;
+			}
+		}
+
+		$this->assertNotNull( $skill );
+		$this->assertStringContainsString( 'English (UK)', $skill->body );
 	}
 
 	public function test_ceiling_error_returns_wp_error_when_over_and_never_truncates(): void {

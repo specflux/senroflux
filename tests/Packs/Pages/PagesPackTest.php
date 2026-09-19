@@ -152,14 +152,17 @@ final class PagesPackTest extends TestCase {
 		);
 	}
 
-	public function test_skills_returns_three_pack_skills(): void {
+	public function test_skills_returns_two_pack_skills(): void {
+		// 0.3 S5: `pages/content-language` is promoted to the harness's own
+		// `harness/content-language` — the pages pack now declares only its
+		// two pattern-specific skills.
 		$skills = ( new PagesPack() )->skills();
 
-		$this->assertCount( 3, $skills );
+		$this->assertCount( 2, $skills );
 		$ids = array_map( static fn ( $s ) => $s->id, $skills );
 		$this->assertContains( 'pages/layout-rules', $ids );
 		$this->assertContains( 'pages/copy-rules', $ids );
-		$this->assertContains( 'pages/content-language', $ids );
+		$this->assertNotContains( 'pages/content-language', $ids );
 
 		foreach ( $skills as $skill ) {
 			$this->assertSame( '1', $skill->version );

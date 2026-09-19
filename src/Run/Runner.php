@@ -1079,7 +1079,7 @@ final class Runner {
 	 */
 	private function instructionFor( Run $run, array &$new_steps ): string|WP_Error {
 		$pack   = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
-		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable );
+		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale );
 
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {

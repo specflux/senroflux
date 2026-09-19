@@ -21,7 +21,6 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Packs\Pages;
 
 use Specflux\SenroFlux\Packs\Pack;
-use Specflux\SenroFlux\Run\Tail;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
@@ -34,11 +33,7 @@ defined( 'ABSPATH' ) || exit;
  */
 final class PagesPack extends Pack {
 
-	/**
-	 * @param string|null $content_locale The site content locale (S15); null → the
-	 *                                    content-language skill says "the site language".
-	 */
-	public function __construct( private readonly ?string $content_locale = null ) {
+	public function __construct() {
 		parent::__construct(
 			array(
 				'read'     => 'read-content',
@@ -209,7 +204,10 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The three pack skills, in render order (source Pack, version '1').
+	 * The two pack skills, in render order (source Pack, version '1').
+	 * `pages/content-language` used to be a third (0.2 S15); 0.3 S5 promotes
+	 * it to the harness's own `harness/content-language`, shared with every
+	 * pack (and no pack), so it is no longer declared here.
 	 *
 	 * @return list<Skill>
 	 */
@@ -229,14 +227,6 @@ final class PagesPack extends Pack {
 				'pages/copy-rules',
 				'Copy rules',
 				$this->copyRulesBody( $vocabulary->all() ),
-				false,
-				SkillSource::Pack,
-				'1'
-			),
-			new Skill(
-				'pages/content-language',
-				'Content language',
-				$this->contentLanguageBody(),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -298,22 +288,6 @@ final class PagesPack extends Pack {
 		$lines[] = 'Give prices as "$—/month (price TBC)" unless the user supplied a price.';
 
 		return implode( "\n", $lines );
-	}
-
-	/**
-	 * The `pages/content-language` body (S15): names the site content language,
-	 * or "the site language" when unknown.
-	 */
-	private function contentLanguageBody(): string {
-		$name = 'the site language';
-		if ( null !== $this->content_locale ) {
-			$resolved = Tail::languageName( $this->content_locale );
-			if ( null !== $resolved && '' !== $resolved ) {
-				$name = $resolved;
-			}
-		}
-
-		return sprintf( 'Write page content in %s unless the goal says otherwise.', $name );
 	}
 
 	/**

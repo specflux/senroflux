@@ -57,6 +57,9 @@ final class Plugin {
 	/** The one pages-pack instance this request shares. */
 	private ?\Specflux\SenroFlux\Packs\Pages\PagesPack $pages_pack = null;
 
+	/** The one posts-pack instance this request shares (S5). */
+	private ?\Specflux\SenroFlux\Packs\Posts\PostsPack $posts_pack = null;
+
 	/** Whether {@see govern()} has already wired its filters this request. */
 	private bool $governed = false;
 
@@ -121,9 +124,13 @@ final class Plugin {
 		$this->governed = true;
 
 		$pages_pack = $this->pages_pack();
+		$posts_pack = $this->posts_pack();
 		add_filter(
 			'senroflux_packs',
-			static fn ( array $packs ): array => $packs + array( 'pages' => $pages_pack ),
+			static fn ( array $packs ): array => $packs + array(
+				'pages' => $pages_pack,
+				'posts' => $posts_pack,
+			),
 			10,
 			1
 		);
@@ -136,11 +143,21 @@ final class Plugin {
 	 */
 	private function pages_pack(): \Specflux\SenroFlux\Packs\Pages\PagesPack {
 		if ( null === $this->pages_pack ) {
-			$content_locale   = function_exists( 'get_locale' ) ? get_locale() : '';
-			$this->pages_pack = new \Specflux\SenroFlux\Packs\Pages\PagesPack( $content_locale );
+			$this->pages_pack = new \Specflux\SenroFlux\Packs\Pages\PagesPack();
 		}
 
 		return $this->pages_pack;
+	}
+
+	/**
+	 * The request's one posts-pack instance (S5).
+	 */
+	private function posts_pack(): \Specflux\SenroFlux\Packs\Posts\PostsPack {
+		if ( null === $this->posts_pack ) {
+			$this->posts_pack = new \Specflux\SenroFlux\Packs\Posts\PostsPack();
+		}
+
+		return $this->posts_pack;
 	}
 
 	/**
@@ -169,28 +186,31 @@ final class Plugin {
 		// on a host that never fired the early hook.
 		$this->govern();
 		$pages_pack = $this->pages_pack();
+		$posts_pack = $this->posts_pack();
 		// The AS pack resolves the ability allow-list, which touches the
 		// Abilities registry — that must not happen before `init`, so the
 		// registration is deferred with the pack captured by value.
 		add_action(
 			'init',
-			static function () use ( $pages_pack ): void {
-				$as_pack = $pages_pack->agentSafetyPack();
-				if ( null === $as_pack ) {
-					return;
-				}
-				add_filter(
-					'agent_safety_pack_registry',
-					static function ( $registry ) use ( $as_pack ) {
-						if ( is_object( $registry ) && method_exists( $registry, 'register' ) ) {
-							$registry->register( $as_pack );
-						}
+			static function () use ( $pages_pack, $posts_pack ): void {
+				foreach ( array( $pages_pack, $posts_pack ) as $pack ) {
+					$as_pack = $pack->agentSafetyPack();
+					if ( null === $as_pack ) {
+						continue;
+					}
+					add_filter(
+						'agent_safety_pack_registry',
+						static function ( $registry ) use ( $as_pack ) {
+							if ( is_object( $registry ) && method_exists( $registry, 'register' ) ) {
+								$registry->register( $as_pack );
+							}
 
-						return $registry;
-					},
-					10,
-					1
-				);
+							return $registry;
+						},
+						10,
+						1
+					);
+				}
 			},
 			5
 		);
@@ -207,6 +227,14 @@ final class Plugin {
 			$pages_vocabulary,
 			'edit_pages'
 		);
+		// S5: same registration for the posts pack, under its own slug.
+		$posts_vocabulary = new \Specflux\SenroFlux\Packs\Posts\Vocabulary();
+		\Specflux\SenroFlux\Packs\Content\Abilities::registerSource(
+			'posts',
+			new \Specflux\SenroFlux\Packs\Posts\Validator( $posts_vocabulary ),
+			$posts_vocabulary,
+			'edit_posts'
+		);
 		// S14: object binding for pre-approval grants. Registered
 		// unconditionally and answering FALSE until a tick opens a run context
 		// — a missing hook would mean "no grant applies", never "every grant
@@ -214,11 +242,12 @@ final class Plugin {
 		\Specflux\SenroFlux\Run\GrantEligibility::boot();
 		add_action(
 			'init',
-			static function () use ( $pages_pack ): void {
-				// Pattern registration rides the pack's vocabulary; failures
+			static function () use ( $pages_pack, $posts_pack ): void {
+				// Pattern registration rides each pack's vocabulary; failures
 				// must never break the site — the Validator refuses unknown
 				// markup at write time regardless (fail closed there).
 				$pages_pack->registerPatterns();
+				$posts_pack->registerPatterns();
 			},
 			20
 		);
@@ -358,21 +387,24 @@ final class Plugin {
 			);
 		}
 
-		// S8: collect skills WITH the pack's skills and the disable list; the
-		// ceiling is a start-time gate — refused, never truncated.
-		$skills  = SkillSet::collect( $consumer, $goal, $pack_obj, $skills_disable );
-		$ceiling = SkillSet::ceilingError( $skills );
-		if ( null !== $ceiling ) {
-			return $ceiling;
-		}
-
 		// S15: capture the two best-effort locales at start so a DIFFERENT
-		// admin answering a park never switches them.
+		// admin answering a park never switches them. Resolved BEFORE
+		// collecting skills: S5 promotes `harness/content-language` off the
+		// pack and onto every run, so the ceiling must be checked against the
+		// same locale-rendered body `instructionFor()` will render later.
 		$conversation_locale = function_exists( 'get_user_locale' ) ? get_user_locale( $user_id ) : '';
 		if ( '' === $conversation_locale && function_exists( 'get_locale' ) ) {
 			$conversation_locale = get_locale();
 		}
 		$content_locale = function_exists( 'get_locale' ) ? get_locale() : '';
+
+		// S8: collect skills WITH the pack's skills and the disable list; the
+		// ceiling is a start-time gate — refused, never truncated.
+		$skills  = SkillSet::collect( $consumer, $goal, $pack_obj, $skills_disable, $content_locale );
+		$ceiling = SkillSet::ceilingError( $skills );
+		if ( null !== $ceiling ) {
+			return $ceiling;
+		}
 
 		// 0.3 S3: resolve the gate mode ONCE, here, and pin it on the run row.
 		// It never changes afterwards, even if Agent Safety is later

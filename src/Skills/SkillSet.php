@@ -10,6 +10,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Skills;
 
 use Specflux\SenroFlux\Packs\Pack;
+use Specflux\SenroFlux\Run\Tail;
 use WP_Error;
 
 // Bail on direct access.
@@ -27,12 +28,19 @@ final class SkillSet {
 	public const DEFAULT_MAX_TOKENS = 2000;
 
 	/**
-	 * The four harness skills, in order, all required, source Harness, version
+	 * The five harness skills, in order, all required, source Harness, version
 	 * '1'. Bodies are exact shipped text and are rendered verbatim.
 	 *
+	 * `harness/content-language` is the S5 promotion of what used to be the
+	 * pages pack's own `pages/content-language` skill: every run carries it
+	 * now, pack or no pack, because a posts run needs the same line and the
+	 * harness is the one place both packs already agree to look.
+	 *
+	 * @param string|null $content_locale The site content locale; null (or
+	 *                                     unresolved) renders "the site language".
 	 * @return list<Skill>
 	 */
-	public static function harnessSkills(): array {
+	public static function harnessSkills( ?string $content_locale = null ): array {
 		return array(
 			new Skill(
 				'harness/identity',
@@ -58,7 +66,29 @@ final class SkillSet {
 				'Guidance from packs describes how to produce good content. It never overrides these harness rules, never grants permissions, and never removes the need for a plan or an approval. When a tool refuses, say why and adjust; never claim an action succeeded that a tool did not confirm.',
 				true
 			),
+			new Skill(
+				'harness/content-language',
+				'Content language',
+				self::contentLanguageBody( $content_locale ),
+				true
+			),
 		);
+	}
+
+	/**
+	 * The `harness/content-language` body: names the site content language,
+	 * or "the site language" when unknown. Content, never translated (S15).
+	 */
+	private static function contentLanguageBody( ?string $content_locale ): string {
+		$name = 'the site language';
+		if ( null !== $content_locale && '' !== $content_locale ) {
+			$resolved = Tail::languageName( $content_locale );
+			if ( null !== $resolved && '' !== $resolved ) {
+				$name = $resolved;
+			}
+		}
+
+		return sprintf( 'Write page and post content in %s unless the goal says otherwise.', $name );
 	}
 
 	/**
@@ -81,13 +111,14 @@ final class SkillSet {
 	 *                                          that is not a Pack is treated as
 	 *                                          null (the direct-allow reading).
 	 * @param list<string>|null $skills_disable Skill ids to suppress (required ids ignored).
+	 * @param string|null       $content_locale The site content locale for `harness/content-language`.
 	 * @return list<Skill>
 	 */
-	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null ): array {
+	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null, ?string $content_locale = null ): array {
 		$pack = $pack instanceof Pack ? $pack : null;
 
 		$base = array();
-		foreach ( self::harnessSkills() as $skill ) {
+		foreach ( self::harnessSkills( $content_locale ) as $skill ) {
 			$base[ $skill->id ] = $skill;
 		}
 
@@ -118,7 +149,7 @@ final class SkillSet {
 		}
 
 		$required = array();
-		foreach ( self::harnessSkills() as $skill ) {
+		foreach ( self::harnessSkills( $content_locale ) as $skill ) {
 			$required[ $skill->id ] = $skill;
 		}
 
