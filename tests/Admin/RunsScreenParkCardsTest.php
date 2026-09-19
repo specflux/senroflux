@@ -395,6 +395,56 @@ final class RunsScreenParkCardsTest extends TestCase {
 		);
 	}
 
+	/**
+	 * Defect B (0.3 live run): the previous fix's test used one verb per
+	 * step, so counting STEPS happened to equal counting CALLS by
+	 * coincidence. The actual live plan grouped several Tier>=1 verbs into
+	 * ONE step — [create-draft], [media-generate, update-alt,
+	 * set-featured-image], [read] — and the card said "approve 2 changes"
+	 * (2 qualifying steps) when the correct count is 4 (every Tier>=1 verb
+	 * occurrence across all steps: 1 + 3 + 0).
+	 *
+	 * @return list<array<string,mixed>>
+	 */
+	private function liveMultiVerbPlanSteps(): array {
+		return array(
+			array(
+				'text'  => 'Create the draft post',
+				'verbs' => array( 'posts/create-draft' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Generate and attach the image',
+				'verbs' => array( 'posts/media-generate', 'posts/update-alt', 'posts/set-featured-image' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Read the post',
+				'verbs' => array( 'posts/read' ),
+				'tier'  => 0,
+			),
+		);
+	}
+
+	public function test_built_in_mode_plan_card_counts_every_call_not_every_step(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingPlan,
+			StepKind::Plan,
+			array(
+				'steps'       => $this->liveMultiVerbPlanSteps(),
+				'assumptions' => array(),
+			),
+			null,
+			\Specflux\SenroFlux\Run\GateMode::BuiltIn
+		);
+
+		$this->assertStringContainsString(
+			'This plan will ask you to approve 4 changes.',
+			$html,
+			'each Tier >= 1 verb occurrence parks once per call, even when several are grouped into one step'
+		);
+	}
+
 	public function test_agent_safety_mode_plan_card_counts_only_tier_two_as_approvals(): void {
 		$html = $this->renderPark(
 			RunStatus::AwaitingPlan,

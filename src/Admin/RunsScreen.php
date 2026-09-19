@@ -1441,11 +1441,16 @@ class RunsScreen {
 		echo '</ol>';
 
 		if ( $built_in ) {
+			// Defect B (live run): the built-in gate parks once per CALL,
+			// not once per plan step — a step listing three Tier>=1 verbs
+			// (e.g. [media-generate, update-alt, set-featured-image]) parks
+			// three times, not once. Counting steps undercounted a live
+			// plan ([create-draft], [media-generate, update-alt,
+			// set-featured-image], [read]) as "2 changes" when the correct
+			// count is 4 (1 + 3 + 0).
 			$needs_approval = 0;
 			foreach ( $steps as $step ) {
-				if ( $this->stepParksInBuiltinMode( $step ) ) {
-					++$needs_approval;
-				}
+				$needs_approval += $this->countParksInBuiltinMode( $step );
 			}
 
 			echo '<p class="senroflux-plan-approval-count">';
@@ -1731,18 +1736,15 @@ class RunsScreen {
 	}
 
 	/**
-	 * S3/S19 (defect 4): the BUILT-IN gate parks every call above Tier 0
-	 * (see {@see \Specflux\SenroFlux\Tools\BuiltinGate::$active}: "tier
-	 * above 0, or unmapped"), NOT just Tier 2 — that threshold is Agent
-	 * Safety mode's own ("needs approval", {@see self::stepNeedsApproval()}).
-	 * The plan card's built-in-mode approval count must use THIS threshold,
-	 * or it undercounts (live run: a 6-step plan with 4 Tier-1 writes showed
-	 * "0 changes").
+	 * Defect B: how many CALLS within this step will park under the
+	 * built-in gate — one park per Tier>=1 (or unmapped) verb occurrence,
+	 * not one per step. A step naming the same qualifying verb twice parks
+	 * twice, since each occurrence is a separate call.
 	 *
 	 * @param array<string,mixed> $step One plan step payload.
 	 */
-	private function stepParksInBuiltinMode( array $step ): bool {
-		return $this->stepAtOrAboveTier( $step, VerbTier::TIER_1 );
+	private function countParksInBuiltinMode( array $step ): int {
+		return $this->countVerbsAtOrAboveTier( $step, VerbTier::TIER_1 );
 	}
 
 	/**
@@ -1750,13 +1752,22 @@ class RunsScreen {
 	 * @param int                 $threshold The minimum tier that counts.
 	 */
 	private function stepAtOrAboveTier( array $step, int $threshold ): bool {
+		return $this->countVerbsAtOrAboveTier( $step, $threshold ) > 0;
+	}
+
+	/**
+	 * @param array<string,mixed> $step      One plan step payload.
+	 * @param int                 $threshold The minimum tier that counts.
+	 */
+	private function countVerbsAtOrAboveTier( array $step, int $threshold ): int {
 		$verbs = $step['verbs'] ?? array();
 		if ( ! is_array( $verbs ) ) {
-			return false;
+			return 0;
 		}
 
 		// Fail closed: a verb whose tier is unknown is Tier 2, so a step with a
 		// tiered verb is checked against the annotated tier first, then the map.
+		$count = 0;
 		foreach ( $verbs as $verb ) {
 			if ( ! is_string( $verb ) ) {
 				continue;
@@ -1765,11 +1776,11 @@ class RunsScreen {
 			// guard is simply whether the tier is present (unchanged behaviour).
 			$tier = isset( $step['tier'] ) ? (int) $step['tier'] : VerbTier::tierFor( $verb );
 			if ( $tier >= $threshold ) {
-				return true;
+				++$count;
 			}
 		}
 
-		return false;
+		return $count;
 	}
 
 	/**
