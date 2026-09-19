@@ -77,6 +77,8 @@ final class Runner {
 		private readonly mixed $withheld_abilities_resolver = null,
 		/** @var callable(Run):list<string>|null S19: the run's UNGRANTABLE pack verbs (a pack's `ungrantableVerbs()`); absent/null = none, every Tier-2 verb stays grantable (0.2/0.3-pre-S19 behaviour). {@see grantCounts()} skips issuing a grant for any verb this names, however many times the accepted plan lists it. */
 		private readonly mixed $ungrantable_verbs_resolver = null,
+		/** @var callable(Run,string):(string|null)|null Object-id PREFIX resolver (S12 defect fix): a per-verb string prepended to the id {@see $object_id_key_resolver} extracts, before it is tracked/verified/looked up — lets a pack keep two object kinds that share a raw id space (a post and an attachment can both be `63`) from colliding in one run's `objects_json`; absent/null = no prefix (every pre-existing pack's ids are unchanged). */
+		private readonly mixed $object_id_prefix_resolver = null,
 	) {
 	}
 
@@ -2806,20 +2808,24 @@ final class Runner {
 		$before  = ( null !== $current && is_array( $current->objects ) ) ? $current->objects : array();
 		$objects = $before;
 
-		$verb = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
-		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
-		$key  = $this->objectIdKeyFor( $run, $verb );
+		$verb   = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
+		$tier   = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
+		$key    = $this->objectIdKeyFor( $run, $verb );
+		$prefix = $this->objectIdPrefixFor( $run, $verb );
 
 		if ( $tier >= VerbTier::TIER_1 ) {
 			$write_id = self::objectIdIn( $outcome->output ?? array(), $key );
 			if ( null !== $write_id ) {
-				$objects = Tracker::recordWrite( $objects, $write_id, $seq );
+				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq );
 			}
 		} elseif ( VerbTier::TIER_0 === $tier ) {
 			$args    = $call['args'] ?? null;
 			$read_id = is_array( $args ) ? self::objectIdIn( $args, $key ) : null;
-			if ( null !== $read_id && array_key_exists( $read_id, $objects ) ) {
-				$objects = Tracker::recordVerification( $objects, $read_id, $seq );
+			if ( null !== $read_id ) {
+				$qualified = $prefix . $read_id;
+				if ( array_key_exists( $qualified, $objects ) ) {
+					$objects = Tracker::recordVerification( $objects, $qualified, $seq );
+				}
 			}
 		}
 
@@ -2841,6 +2847,21 @@ final class Runner {
 		$key = ( $this->object_id_key_resolver )( $run, $verb );
 
 		return is_string( $key ) && '' !== $key ? $key : 'id';
+	}
+
+	/**
+	 * The object-id PREFIX for one verb: whatever the injected resolver
+	 * answers, else '' (no prefix, S12 pre-existing behaviour). A resolver
+	 * that misbehaves falls back to '' rather than corrupting every id.
+	 */
+	private function objectIdPrefixFor( Run $run, string $verb ): string {
+		if ( ! is_callable( $this->object_id_prefix_resolver ) ) {
+			return '';
+		}
+
+		$prefix = ( $this->object_id_prefix_resolver )( $run, $verb );
+
+		return is_string( $prefix ) ? $prefix : '';
 	}
 
 	/**

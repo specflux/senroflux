@@ -69,6 +69,23 @@ final class PostsPackTest extends TestCase {
 		}
 	}
 
+	/**
+	 * S12 (defect fix): `update-alt`'s output carries the attachment id as
+	 * `attachment_id`, never `id` — the harness base's default would
+	 * silently track nothing for it, and a bare id could collide with a
+	 * post sharing the same number.
+	 */
+	public function test_object_id_key_and_prefix_for_update_alt(): void {
+		$pack = new PostsPack();
+
+		$this->assertSame( 'attachment_id', $pack->objectIdKey( 'posts/update-alt' ) );
+		$this->assertSame( 'attachment:', $pack->objectIdPrefix( 'posts/update-alt' ) );
+
+		// Every other verb keeps the harness base default: bare 'id', no prefix.
+		$this->assertSame( 'id', $pack->objectIdKey( 'posts/read' ) );
+		$this->assertSame( '', $pack->objectIdPrefix( 'posts/read' ) );
+	}
+
 	public function test_role_capabilities_require_upload_files_for_media_roles_only(): void {
 		$pack = new PostsPack();
 

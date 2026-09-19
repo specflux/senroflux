@@ -353,6 +353,26 @@ abstract class Pack {
 	}
 
 	/**
+	 * S12 (defect fix): a STRING prepended to the id {@see objectIdKey()}
+	 * extracts for one pack verb, before the harness tracks/looks it up in
+	 * `objects_json`. A pack whose ability space has more than one object
+	 * kind sharing one id space (e.g. a post and an attachment can both be
+	 * `63`) uses this to keep them from colliding in the same run's written-
+	 * object set. The harness treats the qualified id as an OPAQUE string —
+	 * it never parses the prefix back out; only the pack's own report lookup
+	 * (wired at the composition root) needs to recognise it. The base
+	 * declares none (backward compatible: every pre-existing pack keeps its
+	 * bare ids).
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		unset( $verb );
+
+		return '';
+	}
+
+	/**
 	 * role => required WordPress capability (0.3 S6). A role absent from this
 	 * map, or mapped to `''`, needs no capability of its own beyond whatever
 	 * `runCapability()`/the ability's own permission callback already checks

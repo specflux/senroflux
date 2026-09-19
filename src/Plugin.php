@@ -14,8 +14,10 @@ use Specflux\SenroFlux\Http\Ajax;
 use Specflux\SenroFlux\Http\Rest;
 use Specflux\SenroFlux\Model\AiClientGateway;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
+use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\GateMode;
+use Specflux\SenroFlux\Run\Report;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\WpdbRunStore;
@@ -848,7 +850,21 @@ final class Plugin {
 			new ToolExecutor(),
 			$gateway,
 			new ApprovalBridge(),
-			null,
+			// S12 (defect fix): a report row for a type-qualified id (an
+			// attachment written by the posts pack, {@see Media::OBJECT_ID_PREFIX})
+			// is resolved through the pack's OWN lookup; every other id falls
+			// back to the pre-existing post/page lookup. The composition
+			// root is the one place allowed to know both.
+			static function ( string|int $object_id ): array {
+				$object_id = (string) $object_id;
+				if ( str_starts_with( $object_id, Media::OBJECT_ID_PREFIX ) ) {
+					$attachment_id = substr( $object_id, strlen( Media::OBJECT_ID_PREFIX ) );
+
+					return Media::attachmentLookup( (int) $attachment_id );
+				}
+
+				return ( Report::wpPostLookup() )( $object_id );
+			},
 			// S9: a run started with a pack is fenced/annotated by the PACK's
 			// verb map; direct-allow runs keep the site-wide filter seam. The
 			// composition root is the one place that may reference Packs.
@@ -920,6 +936,15 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->ungrantableVerbs() : array();
+			},
+			// S12 (defect fix): the per-verb id PREFIX ({@see Pack::objectIdPrefix()})
+			// — only the pack knows which of its verbs share an id space with
+			// another object kind; a direct-allow run has no pack and needs
+			// no prefix.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb ): string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->objectIdPrefix( $verb ) : '';
 			}
 		);
 

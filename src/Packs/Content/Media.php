@@ -79,9 +79,23 @@ final class Media {
 
 	/**
 	 * The `media-alt:` key prefix inside a run's `objects_json` map — kept
-	 * distinct from a post/page id recorded by {@see Abilities}.
+	 * distinct from a post/page id recorded by {@see Abilities}. Pack-internal
+	 * bookkeeping ONLY, for the S5 25-attachment cap; never surfaced in the
+	 * S12 report (contrast {@see OBJECT_ID_PREFIX}).
 	 */
 	private const ALT_KEY_PREFIX = 'media-alt:';
+
+	/**
+	 * The type-qualified id prefix an attachment carries in the S12
+	 * written-object set (defect fix): {@see \Specflux\SenroFlux\Packs\Pack::objectIdPrefix()}
+	 * for `posts/update-alt` names this, so the generic
+	 * {@see \Specflux\SenroFlux\Run\Runner} write/verify tracking never
+	 * collides an attachment id with a post id sharing the same number. The
+	 * composition root's report lookup (wired in Plugin.php) strips it back
+	 * off before calling {@see attachmentLookup()} — the harness itself
+	 * (`src/Run`) never parses it.
+	 */
+	public const OBJECT_ID_PREFIX = 'attachment:';
 
 	/**
 	 * Whether {@see register()} has run for this request.
@@ -799,6 +813,47 @@ final class Media {
 		self::recordAltWrite( $id );
 
 		return array( 'attachment_id' => $id );
+	}
+
+	/**
+	 * The S12 report lookup for one attachment (defect fix): the shape
+	 * {@see \Specflux\SenroFlux\Run\Report::LOOKUP_KEYS} needs — never taught
+	 * to the harness by name (wired through the composition root's
+	 * `$post_lookup`, Plugin.php, which strips {@see OBJECT_ID_PREFIX}
+	 * before calling this).
+	 *
+	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
+	 */
+	public static function attachmentLookup( int $attachment_id ): array {
+		if ( 'attachment' !== self::postType( $attachment_id ) ) {
+			return array(
+				'object_type' => 'unknown',
+				'title'       => '',
+				'status'      => '',
+				'edit_url'    => null,
+				'preview_url' => null,
+			);
+		}
+
+		$title = function_exists( 'get_the_title' ) ? (string) get_the_title( $attachment_id ) : '';
+		if ( '' === $title ) {
+			// Fall back to the filename when the attachment has no title.
+			$title = basename( self::attachmentUrl( $attachment_id ) );
+		}
+
+		$status = function_exists( 'get_post_status' ) ? (string) get_post_status( $attachment_id ) : '';
+		$edit   = function_exists( 'get_edit_post_link' ) ? get_edit_post_link( $attachment_id, 'raw' ) : '';
+		$file   = self::attachmentUrl( $attachment_id );
+
+		return array(
+			'object_type' => 'attachment',
+			'title'       => $title,
+			'status'      => '' !== $status ? $status : '',
+			'edit_url'    => ( is_string( $edit ) && '' !== $edit ) ? $edit : null,
+			// S12: "preview_url" for an attachment is its own file, not a
+			// post preview — there is nothing to draft-preview.
+			'preview_url' => '' !== $file ? $file : null,
+		);
 	}
 
 	/**

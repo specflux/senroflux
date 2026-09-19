@@ -19,6 +19,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Posts;
 
+use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
@@ -239,6 +240,37 @@ final class PostsPack extends Pack {
 			'terms'       => array( 'posts/set-terms' ),
 			'new-term'    => array( 'posts/create-term' ),
 		);
+	}
+
+	/**
+	 * S12 (defect fix): `update-alt`'s output carries the attachment id as
+	 * `attachment_id`, never `id` — the base's default would silently track
+	 * nothing for it.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdKey( string $verb ): string {
+		return match ( $verb ) {
+			'posts/update-alt' => 'attachment_id',
+			default => parent::objectIdKey( $verb ),
+		};
+	}
+
+	/**
+	 * S12 (defect fix): an attachment and a post can share the same numeric
+	 * id, so `update-alt`'s write qualifies it with
+	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it — the
+	 * same prefix {@see Media::attachmentLookup()} expects, stripped back
+	 * off by the composition root's report lookup (Plugin.php). Every other
+	 * verb here keeps a bare id (posts never collide with themselves).
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		return match ( $verb ) {
+			'posts/update-alt' => Media::OBJECT_ID_PREFIX,
+			default => parent::objectIdPrefix( $verb ),
+		};
 	}
 
 	/**
