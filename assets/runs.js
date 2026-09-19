@@ -105,6 +105,19 @@
 		live.textContent = strings.pollError || 'Live updates stopped. Use Refresh to see the latest state.';
 	}
 
+	/**
+	 * Defect C (0.3 live run): a run that finished mid-poll (no reload —
+	 * only park statuses reload) left the "Cancel run" button from the
+	 * initial "running" render sitting in the DOM, offering to cancel a run
+	 * that was already failed/completed/cancelled.
+	 */
+	function hideCancelLink() {
+		var wrapper = document.querySelector( '.senroflux-cancel-run' );
+		if ( wrapper ) {
+			wrapper.remove();
+		}
+	}
+
 	function setBadge( status ) {
 		if ( ! badge ) {
 			return;
@@ -218,8 +231,10 @@
 				announce( status );
 
 				if ( isTerminal( status ) ) {
-					// Terminal: stop and let the server render the report.
+					// Terminal: stop, drop the now-stale Cancel button (defect
+					// C), and let the server render the report on next load.
 					stopPolling();
+					hideCancelLink();
 					return;
 				}
 				if ( isParked( status ) ) {

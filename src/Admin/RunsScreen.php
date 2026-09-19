@@ -1240,7 +1240,7 @@ class RunsScreen {
 			// Without JS the link is followed directly — `handleCancel()`
 			// verifies the nonce and the capability server-side.
 			printf(
-				'<p><a class="button button-secondary" href="%s">%s</a></p>',
+				'<p class="senroflux-cancel-run"><a class="button button-secondary" href="%s">%s</a></p>',
 				esc_url( $cancel_url ),
 				esc_html__( 'Cancel run', 'senroflux' )
 			);
