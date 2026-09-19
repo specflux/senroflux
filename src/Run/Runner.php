@@ -2970,6 +2970,27 @@ final class Runner {
 			'status'      => 'ok',
 		);
 
+		// The `system` step above is audit-only (S12): it never re-enters the
+		// prompt as history (StepKind::historyKinds()). Left there, the
+		// conversation still ends on the model's own (text-only) turn, and a
+		// real AI Client refuses the next call outright — "The last message
+		// must be from a user role, not from model" (live run 54). Append a
+		// real history-bearing user turn carrying the same sentence the tail
+		// already renders, so the conversation the NEXT tick sends is valid
+		// on the wire as well as informative in the system instruction.
+		$titles      = $this->verifyObjectTitles( $fresh );
+		$new_steps[] = $this->appendStep(
+			$run->id,
+			StepKind::User,
+			new UserMessage(
+				array(
+					new MessagePart(
+						'Before finishing, re-read: ' . implode( ', ', (array) $titles ) . '.'
+					),
+				)
+			)
+		);
+
 		return true;
 	}
 

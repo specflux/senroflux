@@ -29,6 +29,7 @@ use SenroFlux_Test_Fake_Ability;
 use WordPress\AiClient\Messages\DTO\MessagePart;
 use WordPress\AiClient\Messages\DTO\ModelMessage;
 use WordPress\AiClient\Messages\DTO\UserMessage;
+use WordPress\AiClient\Messages\Enums\MessageRoleEnum;
 use WordPress\AiClient\Tools\DTO\FunctionCall;
 use wpdb;
 
@@ -457,6 +458,44 @@ final class VerificationReportTest extends TestCase {
 		$nudged = (string) end( $this->gateway->systemInstructions );
 		$this->assertStringContainsString( 'Before finishing, re-read:', $nudged );
 		$this->assertStringContainsString( 'The draft for 42 (42)', $nudged, 'named by title, not by bare id' );
+	}
+
+	// ------------------------------------------------------------------
+	// (k) the nudge is delivered to the GATEWAY as a trailing user message,
+	// not just baked into the tail text — a real AI Client rejects a
+	// conversation ending on a model turn (live run 54).
+	// ------------------------------------------------------------------
+
+	public function test_k_the_nudge_is_sent_to_the_gateway_as_a_trailing_user_message(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$second                  = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $second );
+		$this->assertSame( 'completed', $second['run']['status'], 'the run continues instead of failing on a bad role order' );
+
+		$nudged_history = (array) end( $this->gateway->histories );
+		$last_message   = end( $nudged_history );
+		$this->assertNotFalse( $last_message, 'the nudged call sent a non-empty history' );
+		$this->assertSame(
+			MessageRoleEnum::user(),
+			$last_message->getRole(),
+			'the conversation must not end on a model turn, or a real AI Client rejects the call'
+		);
+
+		$text = '';
+		foreach ( $last_message->getParts() as $part ) {
+			$text .= (string) $part->getText();
+		}
+		$this->assertStringContainsString( 'Before finishing, re-read:', $text, 'the trailing user message carries the nudge text' );
 	}
 
 	// ------------------------------------------------------------------
