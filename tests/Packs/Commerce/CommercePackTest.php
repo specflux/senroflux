@@ -1,6 +1,7 @@
 <?php
 /**
- * CommercePack build-contract tests (S19, stage 12 — catalogue slice only).
+ * CommercePack build-contract tests (S19): catalogue (stage 12) and
+ * operations (stage 13 — order read/note, refund, shipping, tax, report).
  *
  * TARGET REPO PATH: tests/Packs/Commerce/CommercePackTest.php
  *
@@ -59,7 +60,7 @@ final class CommercePackTest extends TestCase {
 	// verbMap() — catalogue rows only (S19 table)
 	// ------------------------------------------------------------------
 
-	public function test_verb_map_matches_the_s19_catalogue_rows(): void {
+	public function test_verb_map_matches_the_full_s19_table(): void {
 		$this->assertSame(
 			array(
 				'commerce/product-read'         => 0,
@@ -71,24 +72,44 @@ final class CommercePackTest extends TestCase {
 				'commerce/image-generate'       => 1,
 				'commerce/coupon-draft'         => 1,
 				'commerce/coupon-enable'        => 2,
+				'commerce/order-read'           => 0,
+				'commerce/order-note-private'   => 1,
+				'commerce/order-note-customer'  => 2,
+				'commerce/refund'               => 2,
+				'commerce/shipping-write'       => 2,
+				'commerce/tax-write'            => 2,
+				'commerce/store-report'         => 0,
+				'commerce/report-save'          => 2,
 			),
 			( new CommercePack() )->verbMap()
 		);
 	}
 
-	public function test_stage_13_verbs_are_not_yet_declared(): void {
-		// Order/refund/shipping/tax/report rows are stage 13 (B3): asserting
-		// their absence pins this pack to the catalogue slice only.
-		$map = ( new CommercePack() )->verbMap();
-		foreach ( array( 'commerce/order-read', 'commerce/order-note-private', 'commerce/order-note-customer', 'commerce/refund', 'commerce/shipping-write', 'commerce/tax-write', 'commerce/store-report', 'commerce/report-save' ) as $verb ) {
-			$this->assertArrayNotHasKey( $verb, $map );
-		}
+	public function test_ungrantable_verbs_are_order_note_customer_and_refund(): void {
+		$this->assertSame(
+			array( 'commerce/order-note-customer', 'commerce/refund' ),
+			( new CommercePack() )->ungrantableVerbs()
+		);
 	}
 
-	public function test_ungrantable_verbs_are_empty_at_stage_12(): void {
-		// The two S19 ungrantable rows (order-note-customer, refund) belong to
-		// abilities this pack does not register until stage 13.
-		$this->assertSame( array(), ( new CommercePack() )->ungrantableVerbs() );
+	/**
+	 * Confirms the stage-12 grant guard (`Runner::poisonedGateVerbs()`) now
+	 * has real teeth over `woocommerce/order-add-note`: the pack's own
+	 * `gateVerbFor()` shows BOTH the grantable private-note verb and the
+	 * ungrantable customer-note verb resolve to the exact same gate ability,
+	 * which is precisely the shape `poisonedGateVerbs()` refuses a grant
+	 * for — so no plan can ever buy a pre-approval that a customer-visible
+	 * note could spend.
+	 */
+	public function test_order_note_private_and_customer_share_one_gate_ability_so_no_grant_ever_issues(): void {
+		$pack = new CommercePack();
+
+		$private  = $pack->gateVerbFor( 'commerce/order-note-private' );
+		$customer = $pack->gateVerbFor( 'commerce/order-note-customer' );
+
+		$this->assertNotNull( $private );
+		$this->assertSame( $private, $customer, 'both notes must resolve to the same ability for the guard to poison it' );
+		$this->assertContains( 'commerce/order-note-customer', $pack->ungrantableVerbs() );
 	}
 
 	// ------------------------------------------------------------------
@@ -225,6 +246,95 @@ final class CommercePackTest extends TestCase {
 		$this->assertSame(
 			'commerce/coupon-enable',
 			( new CommercePack() )->verbFor( 'senroflux/coupon-enable', array( 'coupon_id' => 1 ) )
+		);
+	}
+
+	public function test_orders_query_is_order_read(): void {
+		$this->assertSame(
+			'commerce/order-read',
+			( new CommercePack() )->verbFor( 'woocommerce/orders-query', array( 'id' => 10 ) )
+		);
+	}
+
+	public function test_order_add_note_without_customer_note_is_private(): void {
+		$this->assertSame(
+			'commerce/order-note-private',
+			( new CommercePack() )->verbFor(
+				'woocommerce/order-add-note',
+				array(
+					'id'   => 10,
+					'note' => 'internal',
+				)
+			)
+		);
+	}
+
+	public function test_order_add_note_with_customer_note_false_is_private(): void {
+		$this->assertSame(
+			'commerce/order-note-private',
+			( new CommercePack() )->verbFor(
+				'woocommerce/order-add-note',
+				array(
+					'id'            => 10,
+					'note'          => 'internal',
+					'customer_note' => false,
+				)
+			)
+		);
+	}
+
+	public function test_order_add_note_with_customer_note_true_is_customer(): void {
+		$this->assertSame(
+			'commerce/order-note-customer',
+			( new CommercePack() )->verbFor(
+				'woocommerce/order-add-note',
+				array(
+					'id'            => 10,
+					'note'          => 'Refunded',
+					'customer_note' => true,
+				)
+			)
+		);
+	}
+
+	public function test_orders_refund_is_refund(): void {
+		$this->assertSame(
+			'commerce/refund',
+			( new CommercePack() )->verbFor( 'senroflux/orders-refund', array( 'order_id' => 1 ) )
+		);
+	}
+
+	public function test_shipping_zone_save_is_shipping_write(): void {
+		$this->assertSame(
+			'commerce/shipping-write',
+			( new CommercePack() )->verbFor( 'senroflux/shipping-zone-save', array( 'name' => 'US' ) )
+		);
+	}
+
+	public function test_tax_rate_save_is_tax_write(): void {
+		$this->assertSame(
+			'commerce/tax-write',
+			( new CommercePack() )->verbFor( 'senroflux/tax-rate-save', array( 'country' => 'US' ) )
+		);
+	}
+
+	public function test_store_report_is_store_report(): void {
+		$this->assertSame(
+			'commerce/store-report',
+			( new CommercePack() )->verbFor(
+				'senroflux/store-report',
+				array(
+					'from' => '2026-01-01',
+					'to'   => '2026-01-31',
+				)
+			)
+		);
+	}
+
+	public function test_save_store_report_is_report_save(): void {
+		$this->assertSame(
+			'commerce/report-save',
+			( new CommercePack() )->verbFor( 'senroflux/save-store-report', array( 'title' => 'Q1' ) )
 		);
 	}
 

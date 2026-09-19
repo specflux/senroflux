@@ -1,8 +1,8 @@
 <?php
 /**
- * The commerce capability pack — catalogue slice (S19, stage 12: D1 add
- * product, D2 bulk price, D3 descriptions, D5 coupons). Order/refund/
- * shipping/tax/report (D4/D6/D7) are stage 13 and NOT declared here.
+ * The commerce capability pack — catalogue (S19, stage 12: D1 add product,
+ * D2 bulk price, D3 descriptions, D5 coupons) AND operations (S19, stage 13:
+ * D4 refund + customer note, D6 store health report, D7 shipping/tax).
  *
  * TARGET REPO PATH: src/Packs/Commerce/CommercePack.php
  *
@@ -52,6 +52,16 @@ final class CommercePack extends Pack {
 				'image-generate' => 'generate-image',
 				'coupon-create'  => 'coupon-create',
 				'coupon-enable'  => 'coupon-enable',
+				// Stage 13 (S19 operations rows). 'order-note' resolves to
+				// ONE ability (Woo's own `order-add-note`) that spans TWO
+				// pack verbs, same shape as 'update' above (see roleVerbs()).
+				'order-read'     => 'orders-query',
+				'order-note'     => 'order-add-note',
+				'refund'         => 'orders-refund',
+				'shipping-write' => 'shipping-zone-save',
+				'tax-write'      => 'tax-rate-save',
+				'store-report'   => 'store-report',
+				'report-save'    => 'save-store-report',
 			)
 		);
 	}
@@ -94,6 +104,8 @@ final class CommercePack extends Pack {
 			'products-query'  => array( 'id' ),
 			'product-create'  => array( 'name', 'sku', 'description', 'short_description', 'status', 'regular_price', 'sale_price' ),
 			'product-update'  => array( 'id', 'name', 'sku', 'description', 'short_description', 'status', 'regular_price', 'sale_price' ),
+			'orders-query'    => array( 'id' ),
+			'order-add-note'  => array( 'id', 'note', 'customer_note' ),
 			default           => array(),
 		};
 	}
@@ -115,8 +127,34 @@ final class CommercePack extends Pack {
 			'generate-image'     => 'commerce/image-generate',
 			'coupon-create'      => 'commerce/coupon-draft',
 			'coupon-enable'      => 'commerce/coupon-enable',
+			'orders-query'       => 'commerce/order-read',
+			'order-add-note'     => $this->noteVerb( $input ),
+			'orders-refund'      => 'commerce/refund',
+			'shipping-zone-save' => 'commerce/shipping-write',
+			'tax-rate-save'      => 'commerce/tax-write',
+			'store-report'       => 'commerce/store-report',
+			'save-store-report'  => 'commerce/report-save',
 			default              => $ability,
 		};
+	}
+
+	/**
+	 * `order-add-note`'s predicate (S19 table): `customer_note` true is the
+	 * customer-visible note, Tier 2 and ungrantable; false or absent is the
+	 * private, internal-only note, Tier 1. Only a strict `true` counts —
+	 * a truthy-but-not-boolean value (e.g. the string `"1"` a looser client
+	 * might send) is read as absent/false, the SAME fail-closed-on-the-SAFER-
+	 * reading choice `isPublishStatus()` makes for `status`: understating
+	 * which note is customer-visible would be the dangerous direction, but
+	 * Woo's own ability schema types `customer_note` as a boolean, so a
+	 * non-boolean value here is a malformed call, not a legitimate "true".
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private function noteVerb( array $input ): string {
+		return true === ( $input['customer_note'] ?? false )
+			? 'commerce/order-note-customer'
+			: 'commerce/order-note-private';
 	}
 
 	/**
@@ -191,10 +229,8 @@ final class CommercePack extends Pack {
 	}
 
 	/**
-	 * The S19 verb => tier table — CATALOGUE rows only (stage 12). The
-	 * order/refund/shipping/tax/report rows are stage 13 and deliberately
-	 * absent: declaring them here with no role/ability behind them would
-	 * mistier calls this pack cannot yet make.
+	 * The full S19 verb => tier table (catalogue, stage 12, plus operations,
+	 * stage 13).
 	 *
 	 * @return array<string,int>
 	 */
@@ -209,11 +245,19 @@ final class CommercePack extends Pack {
 			'commerce/image-generate'       => 1,
 			'commerce/coupon-draft'         => 1,
 			'commerce/coupon-enable'        => 2,
+			'commerce/order-read'           => 0,
+			'commerce/order-note-private'   => 1,
+			'commerce/order-note-customer'  => 2,
+			'commerce/refund'               => 2,
+			'commerce/shipping-write'       => 2,
+			'commerce/tax-write'            => 2,
+			'commerce/store-report'         => 0,
+			'commerce/report-save'          => 2,
 		);
 	}
 
 	/**
-	 * The S19 role => pack-verb split (catalogue rows only, stage 12).
+	 * The full S19 role => pack-verb split.
 	 *
 	 * @return array<string,list<string>>
 	 */
@@ -226,22 +270,34 @@ final class CommercePack extends Pack {
 			'image-generate' => array( 'commerce/image-generate' ),
 			'coupon-create'  => array( 'commerce/coupon-draft' ),
 			'coupon-enable'  => array( 'commerce/coupon-enable' ),
+			'order-read'     => array( 'commerce/order-read' ),
+			'order-note'     => array( 'commerce/order-note-private', 'commerce/order-note-customer' ),
+			'refund'         => array( 'commerce/refund' ),
+			'shipping-write' => array( 'commerce/shipping-write' ),
+			'tax-write'      => array( 'commerce/tax-write' ),
+			'store-report'   => array( 'commerce/store-report' ),
+			'report-save'    => array( 'commerce/report-save' ),
 		);
 	}
 
 	/**
-	 * S19 stage 12: NO ungrantable verbs are declared yet. The two
-	 * ungrantable rows in S19's table (`commerce/order-note-customer`,
-	 * `commerce/refund`) belong to abilities this pack does not register
-	 * until stage 13 (order/refund) — declaring them here, with no role or
-	 * verb-map entry behind them, would name verbs this pack cannot
-	 * produce. Left for stage 13, which adds them alongside the roles that
-	 * make them real. See the stage-12 report.
+	 * S19 stage 13: `commerce/order-note-customer` and `commerce/refund` are
+	 * NEVER pre-approval-granted, however many times an accepted plan lists
+	 * them — they ask a human every single time (the operations skill says
+	 * so). Both share Woo-owned/polyfill abilities with a grantable sibling
+	 * (`order-add-note` also carries the private-note verb; `orders-refund`
+	 * has no grantable sibling but is still named here so the rule reads as
+	 * one list rather than one special case), and
+	 * {@see \Specflux\SenroFlux\Run\Runner::poisonedGateVerbs()} (S19 stage
+	 * 12 guard) already refuses to let a grant issued for the private-note
+	 * verb be spent on a customer-visible note instead — see that method's
+	 * docblock for why "no grant at all" is the only safe reading for a
+	 * shared ability.
 	 *
 	 * @return list<string>
 	 */
 	public function ungrantableVerbs(): array {
-		return array();
+		return array( 'commerce/order-note-customer', 'commerce/refund' );
 	}
 
 	/**
@@ -277,11 +333,10 @@ final class CommercePack extends Pack {
 	}
 
 	/**
-	 * The two pack skills (S19). `commerce/operations-rules` DESCRIBES
-	 * stage-13 behaviour (refunds/notes ask every time, one refund per run,
-	 * the report is read-only) even though this stage does not yet enforce
-	 * any of it — the model is told the rule in advance of the abilities
-	 * that make it operative, same as any other forward-declared skill.
+	 * The two pack skills (S19). `commerce/operations-rules` now DESCRIBES
+	 * ENFORCED stage-13 behaviour: refunds/customer notes ask every time
+	 * (`ungrantableVerbs()`), the `refunds` budget defaults to one per run,
+	 * and the store report never writes.
 	 *
 	 * @return list<Skill>
 	 */

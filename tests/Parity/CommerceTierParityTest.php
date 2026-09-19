@@ -6,12 +6,15 @@
  *
  * TARGET REPO PATH: tests/Parity/CommerceTierParityTest.php
  *
- * SCOPE (stage 12, catalogue slice only): the fixture also carries rows for
- * `orders-query`, `order-add-note`, `order-update-status` and
- * `product-delete` — abilities the commerce pack does not yet register a
- * role for (stage 13). Those rows are SKIPPED here, by ability base name,
- * rather than asserted against a verb this pack cannot yet produce; stage 13
- * extends this same test to cover them once their roles exist.
+ * SCOPE (stage 13): every fixture row this pack now registers a role for
+ * (`orders-query`, `order-add-note` both flags) is exercised against
+ * `verbFor()` + `verbMap()`, same as the stage-12 catalogue rows. The
+ * fixture also carries `order-update-status` and `product-delete` rows —
+ * abilities S19 deliberately does NOT make pack roles ("product-delete and
+ * order-update-status are deliberately not roles") — those are asserted the
+ * OTHER way: `verbFor()` returns the ability id unchanged (the base-class
+ * direct-allow fallback) and neither base name appears in any `roleVerbs()`
+ * entry, rather than being skipped as out of scope.
  *
  * @package SenroFlux
  */
@@ -26,8 +29,15 @@ use Specflux\SenroFlux\Tools\VerbTier;
 
 final class CommerceTierParityTest extends TestCase {
 
-	/** Ability base names this pack governs at stage 12 (catalogue only). */
-	private const STAGE_12_ABILITIES = array( 'products-query', 'product-create', 'product-update' );
+	/** Ability base names this pack registers a role for (S19, full table). */
+	private const PACK_ABILITIES = array( 'products-query', 'product-create', 'product-update', 'orders-query', 'order-add-note' );
+
+	/**
+	 * Ability base names S19 deliberately does NOT make pack roles for
+	 * ("`product-delete` and `order-update-status` are deliberately not
+	 * roles").
+	 */
+	private const DELIBERATELY_NOT_ROLES = array( 'order-update-status', 'product-delete' );
 
 	private function fixturePath(): string {
 		return __DIR__ . '/commerce-tier-parity.json';
@@ -47,11 +57,11 @@ final class CommerceTierParityTest extends TestCase {
 	}
 
 	/**
-	 * SenroFlux's own `verbFor()` + `verbMap()` classify every STAGE-12 row of
-	 * the fixture at the same tier the fixture (and, on the Agent Safety side,
-	 * `TierClassifier`) expects.
+	 * SenroFlux's own `verbFor()` + `verbMap()` classify every fixture row for
+	 * an ability this pack registers a role for at the same tier the fixture
+	 * (and, on the Agent Safety side, `TierClassifier`) expects.
 	 */
-	public function test_senroflux_classifies_every_stage_12_fixture_row_at_the_fixture_tier(): void {
+	public function test_senroflux_classifies_every_pack_ability_fixture_row_at_the_fixture_tier(): void {
 		$pack      = new CommercePack();
 		$verbMap   = $pack->verbMap();
 		$exercised = 0;
@@ -60,8 +70,8 @@ final class CommerceTierParityTest extends TestCase {
 			$ability = (string) ( $case['ability'] ?? '' );
 			$base    = str_contains( $ability, '/' ) ? substr( $ability, strrpos( $ability, '/' ) + 1 ) : $ability;
 
-			if ( ! in_array( $base, self::STAGE_12_ABILITIES, true ) ) {
-				continue; // Stage 13 row (orders/notes/status/delete) — not yet in scope.
+			if ( ! in_array( $base, self::PACK_ABILITIES, true ) ) {
+				continue; // order-update-status / product-delete — deliberately not roles, see below.
 			}
 
 			$args = is_array( $case['args'] ?? null ) ? $case['args'] : array();
@@ -76,7 +86,42 @@ final class CommerceTierParityTest extends TestCase {
 			++$exercised;
 		}
 
-		$this->assertGreaterThan( 0, $exercised, 'the fixture must actually exercise stage-12 abilities' );
+		$this->assertGreaterThan( 0, $exercised, 'the fixture must actually exercise the pack\'s abilities' );
+	}
+
+	/**
+	 * `order-update-status` and `product-delete` are DELIBERATELY not pack
+	 * roles (S19): `verbFor()` falls through to the base-class direct-allow
+	 * default (the ability id unchanged) for both, and neither base name
+	 * appears in any `roleVerbs()` entry.
+	 */
+	public function test_order_update_status_and_product_delete_are_deliberately_not_roles(): void {
+		$pack       = new CommercePack();
+		$role_verbs = $pack->roleVerbs();
+
+		foreach ( $this->fixture() as $case ) {
+			$ability = (string) ( $case['ability'] ?? '' );
+			$base    = str_contains( $ability, '/' ) ? substr( $ability, strrpos( $ability, '/' ) + 1 ) : $ability;
+
+			if ( ! in_array( $base, self::DELIBERATELY_NOT_ROLES, true ) ) {
+				continue;
+			}
+
+			$args = is_array( $case['args'] ?? null ) ? $case['args'] : array();
+			$this->assertSame( $ability, $pack->verbFor( $ability, $args ), "$ability must fall through to the ability id unchanged" );
+		}
+
+		foreach ( $role_verbs as $role => $verbs ) {
+			foreach ( $verbs as $verb ) {
+				foreach ( self::DELIBERATELY_NOT_ROLES as $not_role ) {
+					$this->assertStringNotContainsString(
+						$not_role,
+						$verb,
+						"role $role must not declare a verb naming $not_role"
+					);
+				}
+			}
+		}
 	}
 
 	/**
