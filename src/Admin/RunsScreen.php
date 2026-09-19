@@ -750,7 +750,16 @@ class RunsScreen {
 		echo '<h2>' . esc_html__( 'Start a new run', 'senroflux' ) . '</h2>';
 		$this->renderNewRunForm();
 
-		$all_runs = senroflux()->available() ? senroflux()->listRecent() : array();
+		// Defect D (live run): this used to gate on `available()`, which
+		// means "Agent Safety is present" — NOT "the plugin can list runs".
+		// SenroFlux's hard dependency on Agent Safety was retired ({@see
+		// \Specflux\SenroFlux\Plugin::ready()}: no longer requires it), but
+		// this screen was never updated to match, so a built-in-mode
+		// install (no Agent Safety) always saw "Needs you (0) | All (0)"
+		// even with runs the viewer owned. `listRecent()` already guards
+		// itself on `ready()` (a DB handle + the Runner class), which is
+		// the only precondition that actually matters here.
+		$all_runs = senroflux()->listRecent();
 
 		// 0.3 S9: "Needs you" is the DEFAULT tab — parked runs the viewer may
 		// tick. `filter=all` (or anything else unrecognised) shows every run,
