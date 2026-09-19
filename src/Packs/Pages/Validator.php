@@ -716,9 +716,15 @@ class Validator implements ContentValidator {
 	 * or a scheme on {@see ALLOWED_SCHEMES}. The value is entity-decoded and
 	 * stripped of the control/whitespace characters browsers ignore first, so
 	 * `java&#9;script:` and `&#106;avascript:` are caught.
+	 *
+	 * `public static` (0.3 S19, stage 12): shared with
+	 * {@see \Specflux\SenroFlux\Packs\Commerce\DescriptionValidator}, which
+	 * reuses this exact rule for a product description's `<a href>` rather
+	 * than duplicating it — a pure function of the string, so making it
+	 * static changes no behaviour here.
 	 */
-	private function urlIsSafe( string $value ): bool {
-		$flat = strtolower( $this->flatten( $value ) );
+	public static function urlIsSafe( string $value ): bool {
+		$flat = strtolower( self::flatten( $value ) );
 		if ( '' === $flat ) {
 			return true;
 		}
@@ -740,7 +746,7 @@ class Validator implements ContentValidator {
 	 * Decode HTML entities and drop every character a browser ignores inside an
 	 * attribute value (NUL through space, plus DEL).
 	 */
-	private function flatten( string $value ): string {
+	private static function flatten( string $value ): string {
 		$decoded = html_entity_decode( $value, ENT_QUOTES | ENT_HTML5, 'UTF-8' );
 
 		return (string) preg_replace( '/[\x00-\x20\x7f]+/', '', $decoded );

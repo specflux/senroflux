@@ -1410,8 +1410,29 @@ final class Runner {
 		return $this->executor->call(
 			$name,
 			is_array( $args ) ? $args : null,
-			$this->builtinGateFor( $run, $name, is_array( $args ) ? $args : array(), (string) ( $call['id'] ?? '' ), $approved )
+			$this->builtinGateFor( $run, $name, is_array( $args ) ? $args : array(), (string) ( $call['id'] ?? '' ), $approved ),
+			$this->validateCallFor( $run )
 		);
+	}
+
+	/**
+	 * S19 (stage 12): the run's pack's pre-execution call validator
+	 * ({@see \Specflux\SenroFlux\Packs\Pack::validateCall()}), for a rule a
+	 * pack must enforce on an ability ANOTHER plugin owns and registers —
+	 * WooCommerce's `product-update`/`product-create` accepting HTML the
+	 * commerce pack's description validator refuses — where the pack has no
+	 * other seam to bind a check to (it never owns that ability's
+	 * `check_permissions()`/`execute()`). Null when the run has no pack
+	 * (direct-allow runs have no pack rules to enforce here).
+	 *
+	 * @return callable(string,array<string,mixed>):(WP_Error|null)|null
+	 */
+	private function validateCallFor( Run $run ): ?callable {
+		$pack = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
+
+		return ( null !== $pack )
+			? static fn ( string $ability, array $args ): ?WP_Error => $pack->validateCall( $ability, $args )
+			: null;
 	}
 
 	/**
@@ -2199,6 +2220,7 @@ final class Runner {
 	private function grantCounts( Run $run, array $payload ): array {
 		$map         = $this->packVerbMap( $run );
 		$ungrantable = $this->ungrantableVerbs( $run );
+		$poisoned    = $this->poisonedGateVerbs( $run, $ungrantable );
 		$counts      = array();
 
 		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
@@ -2226,12 +2248,54 @@ final class Runner {
 					continue;
 				}
 
+				if ( isset( $poisoned[ $gate_verb ] ) ) {
+					// S19 guard (stage 12): this GATE ABILITY is also what one of
+					// the pack's own ungrantable verbs resolves to. Agent Safety
+					// keys a grant on the ability id, not the pack verb, so a
+					// grant issued here for the grantable verb could be SPENT by
+					// the ungrantable call instead — silently turning "asks every
+					// time" into "pre-approved once the grantable sibling is
+					// approved". No grant at all is the only safe reading: the
+					// call still executes (it just parks every time, like any
+					// other ungrantable verb sharing this ability would).
+					continue;
+				}
+
 				$seen[ $gate_verb ]   = true;
 				$counts[ $gate_verb ] = ( $counts[ $gate_verb ] ?? 0 ) + 1;
 			}
 		}
 
 		return $counts;
+	}
+
+	/**
+	 * S19 guard (stage 12, item 0): the GATE ABILITY ids (resolved ability,
+	 * {@see gateVerbFor()}) that any of this run's pack's ungrantable PACK
+	 * verbs also resolves to.
+	 *
+	 * Agent Safety grants key on the ability id, never on the pack verb
+	 * (S14) — so if a grantable verb and an ungrantable verb of the SAME
+	 * pack both resolve to one ability (e.g. a Woo-owned ability whose tier
+	 * an argument can raise from SideEffecting to Irreversible), a grant
+	 * issued for the grantable verb is indistinguishable, at the gate, from
+	 * permission to spend it on the ungrantable call. {@see grantCounts()}
+	 * therefore never issues a grant for any ability in the returned set,
+	 * however the plan names the grantable verb that shares it.
+	 *
+	 * @param list<string> $ungrantable This run's pack's ungrantable verbs.
+	 * @return array<string,true>
+	 */
+	private function poisonedGateVerbs( Run $run, array $ungrantable ): array {
+		$poisoned = array();
+		foreach ( $ungrantable as $verb ) {
+			$gate_verb = $this->gateVerbFor( $run, $verb );
+			if ( null !== $gate_verb ) {
+				$poisoned[ $gate_verb ] = true;
+			}
+		}
+
+		return $poisoned;
 	}
 
 	/**

@@ -547,6 +547,32 @@ abstract class Pack {
 	}
 
 	/**
+	 * S19 (`@api`, stage 12): refuse (a WP_Error) or allow (null) one call
+	 * BEFORE its ability's own `check_permissions()`/`execute()` run — the
+	 * seam for a pack rule that must bind to an ability ANOTHER plugin
+	 * registers, which this pack has no other hook into. A pack's OWN
+	 * polyfill abilities validate their own input directly inside their
+	 * `execute_callback` and never need this; it exists for the case a
+	 * polyfill cannot cover — the commerce pack's description-tag rule over
+	 * WooCommerce's own `product-create`/`product-update` abilities.
+	 *
+	 * Called by {@see \Specflux\SenroFlux\Run\Runner::executeCall()} for
+	 * every admitted call, in AS and built-in gate modes alike, after the S7
+	 * plan fence and the gate's own approval decision but before the
+	 * ability's own permission/execute pair — so a refusal here can never be
+	 * bypassed by anything downstream. The base returns null (no opinion)
+	 * for every call, which is every pre-S19 pack's unchanged behaviour.
+	 *
+	 * @param string               $ability The concrete ability id the model called.
+	 * @param array<string,mixed>  $input   The call input.
+	 */
+	public function validateCall( string $ability, array $input ): ?WP_Error {
+		unset( $ability, $input );
+
+		return null;
+	}
+
+	/**
 	 * S13 preflight: the run may not start from this pack unless (a) the skills
 	 * ceiling holds (S8) and (b) the user is bound to an Agent Safety Capability
 	 * Pack that allows every ability this pack resolves and approval-gates

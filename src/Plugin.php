@@ -64,6 +64,9 @@ final class Plugin {
 	/** The one site-pack instance this request shares (S7). */
 	private ?\Specflux\SenroFlux\Packs\Site\SitePack $site_pack = null;
 
+	/** The one commerce-pack instance this request shares (S19), when WooCommerce is active. */
+	private ?\Specflux\SenroFlux\Packs\Commerce\CommercePack $commerce_pack = null;
+
 	/** Whether {@see govern()} has already wired its filters this request. */
 	private bool $governed = false;
 
@@ -141,7 +144,35 @@ final class Plugin {
 			1
 		);
 
+		// S19: the commerce pack registers only when WooCommerce is active —
+		// with it absent, there is no `manage_woocommerce` capability and no
+		// Woo abilities to poly-fill against, so the pack has nothing to do
+		// at all (never mind govern). Unlike the Agent Safety check below,
+		// THIS gate is unconditional: a WooCommerce-less site must never see
+		// a commerce run option.
+		if ( class_exists( 'WooCommerce' ) ) {
+			$commerce_pack = $this->commerce_pack();
+			add_filter(
+				'senroflux_packs',
+				static fn ( array $packs ): array => $packs + array( 'commerce' => $commerce_pack ),
+				10,
+				1
+			);
+		}
+
 		\Specflux\SenroFlux\Packs\PackRegistry::contributeToAgentSafety();
+	}
+
+	/**
+	 * The request's one commerce-pack instance (S19), lazily created only
+	 * when {@see govern()}/{@see boot()} decided WooCommerce is active.
+	 */
+	private function commerce_pack(): \Specflux\SenroFlux\Packs\Commerce\CommercePack {
+		if ( null === $this->commerce_pack ) {
+			$this->commerce_pack = new \Specflux\SenroFlux\Packs\Commerce\CommercePack();
+		}
+
+		return $this->commerce_pack;
 	}
 
 	/**
@@ -205,13 +236,19 @@ final class Plugin {
 		$pages_pack = $this->pages_pack();
 		$posts_pack = $this->posts_pack();
 		$site_pack  = $this->site_pack();
+		// S19: only built when WooCommerce is active (mirrors govern()'s own
+		// gate) — a null entry here is filtered out below, never registered.
+		$commerce_pack = class_exists( 'WooCommerce' ) ? $this->commerce_pack() : null;
 		// The AS pack resolves the ability allow-list, which touches the
 		// Abilities registry — that must not happen before `init`, so the
 		// registration is deferred with the pack captured by value.
 		add_action(
 			'init',
-			static function () use ( $pages_pack, $posts_pack, $site_pack ): void {
-				foreach ( array( $pages_pack, $posts_pack, $site_pack ) as $pack ) {
+			static function () use ( $pages_pack, $posts_pack, $site_pack, $commerce_pack ): void {
+				$packs = null !== $commerce_pack
+					? array( $pages_pack, $posts_pack, $site_pack, $commerce_pack )
+					: array( $pages_pack, $posts_pack, $site_pack );
+				foreach ( $packs as $pack ) {
 					$as_pack = $pack->agentSafetyPack();
 					if ( null === $as_pack ) {
 						continue;
@@ -234,6 +271,12 @@ final class Plugin {
 		);
 		\Specflux\SenroFlux\Packs\Content\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Content\Media::boot();
+		// S19: the commerce pack's own polyfill abilities. Registered
+		// unconditionally like the other registrars above — `wp_register_ability`
+		// is harmless with WooCommerce absent, and the pack itself never
+		// reaches the model's tool set unless it was registered on
+		// `senroflux_packs` above (WooCommerce active).
+		\Specflux\SenroFlux\Packs\Commerce\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
 		// S7: site navigation + front-page abilities. Navigation::boot() also
 		// registers the shared `senroflux-site` ability category.
@@ -572,6 +615,9 @@ final class Plugin {
 		// the same way — its own OBJECT_ID, so it never collides with
 		// Navigation's marker on the same run.
 		\Specflux\SenroFlux\Packs\Site\FrontPage::useRunContext( $run_id, $this->runner()->store() );
+		// S19: the commerce polyfills' own stale-write compare (coupon-enable
+		// only — see the class docblock), scoped the same way.
+		\Specflux\SenroFlux\Packs\Commerce\Abilities::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
 			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
@@ -582,6 +628,7 @@ final class Plugin {
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\Navigation::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\FrontPage::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Commerce\Abilities::forgetRunContext();
 		}
 	}
 

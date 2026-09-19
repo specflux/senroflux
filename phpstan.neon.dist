@@ -109,3 +109,17 @@ parameters:
             message: '#^Call to method registry\(\) on an unknown class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver\.$#'
             path: src/Packs/Site/SitePack.php
             count: 1
+        -
+            # Same external-class situation as the other packs' binding check
+            # (S19's commerce pack duplicates the same S13 pattern).
+            message: '#^Method Specflux\\SenroFlux\\Packs\\Commerce\\CommercePack::resolveAsPackForUser\(\) has invalid return type Specflux\\AgentSafety\\Packs\\Pack\.$#'
+            path: src/Packs/Commerce/CommercePack.php
+            count: 2
+        -
+            message: '#^Instantiated class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver not found\.$#'
+            path: src/Packs/Commerce/CommercePack.php
+            count: 1
+        -
+            message: '#^Call to method registry\(\) on an unknown class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver\.$#'
+            path: src/Packs/Commerce/CommercePack.php
+            count: 1
