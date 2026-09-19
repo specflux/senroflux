@@ -60,12 +60,9 @@ final class DependencyCheckTest extends TestCase {
 
 		// 0.3 S3: Agent Safety's absence is advisory, not fail-closed — the
 		// runtime wires up (HTTP surfaces, init hooks) exactly as it would
-		// with Agent Safety present, PLUS the advisory notice.
-		$this->assertContains(
-			'admin_notices',
-			array_keys( $GLOBALS['senroflux_test_actions'] ),
-			'the advisory notice must still be registered'
-		);
+		// with Agent Safety present. It does NOT register a site-wide
+		// notice: per S11 the advisory lives ONLY in the Runs-screen setup
+		// panel ({@see \Specflux\SenroFlux\Setup\Checks::agentSafetyAdvisory}).
 		$this->assertContains(
 			'rest_api_init',
 			array_keys( $GLOBALS['senroflux_test_actions'] ),
@@ -74,11 +71,24 @@ final class DependencyCheckTest extends TestCase {
 		$this->assertFalse( $plugin->available() );
 	}
 
-	public function test_missing_notice_renders_the_advisory_warning(): void {
-		ob_start();
-		Plugin::instance()->render_missing_notice();
-		$html = (string) ob_get_clean();
+	/**
+	 * Defect 3 (0.3 live run + S11/S3): a site-wide "SenroFlux is running
+	 * without Agent Safety…" notice used to render on EVERY admin screen
+	 * (e.g. the Dashboard) via an unconditional admin_notices hook. S11
+	 * places that advisory in the Runs-screen setup panel only.
+	 */
+	public function test_no_admin_notice_is_registered_for_the_agent_safety_state(): void {
+		$GLOBALS['senroflux_test_actions'] = array();
 
-		$this->assertStringContainsString( 'Agent Safety', $html );
+		Plugin::set_dependency_probe( false );
+
+		$plugin = Plugin::instance();
+		$plugin->boot();
+
+		$this->assertArrayNotHasKey(
+			'admin_notices',
+			$GLOBALS['senroflux_test_actions'],
+			'no callback advertising the Agent Safety state may run on every admin screen'
+		);
 	}
 }

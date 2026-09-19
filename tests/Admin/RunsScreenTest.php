@@ -685,6 +685,33 @@ final class RunsScreenTest extends TestCase {
 		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}
 
+	/**
+	 * Defect 3 (0.3 live run + S11): WordPress core's admin JS relocates
+	 * every `.wrap .notice` element below the page heading EXCEPT
+	 * `.notice.inline` — a setup-check notice left as a bare `.notice`
+	 * therefore gets pulled out of `#senroflux-setup-panel` and shown a
+	 * second time (and, after the panel's own focus refresh re-renders it,
+	 * a stale relocated copy can linger).
+	 */
+	public function test_setup_check_notices_carry_the_inline_class_core_skips(): void {
+		Plugin::set_dependency_probe( false );
+		Checks::setProviderProbe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertMatchesRegularExpression(
+			'/<div class="notice [^"]*\binline\b[^"]*senroflux-setup-check"/',
+			$html,
+			'a setup-check notice must carry the "inline" class core skips when relocating .wrap .notice elements'
+		);
+
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+	}
+
 	public function test_the_setup_panel_is_empty_when_everything_is_clear(): void {
 		Plugin::set_dependency_probe( true );
 		Checks::setProviderProbe( true );

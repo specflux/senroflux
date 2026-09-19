@@ -338,11 +338,11 @@ final class Plugin {
 			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
 		}
 
-		// 0.3 S3/S11: advisory only — runs still start and tick without
-		// Agent Safety, in GateMode::BuiltIn.
-		if ( ! $this->available ) {
-			add_action( 'admin_notices', array( $this, 'render_missing_notice' ) );
-		}
+		// 0.3 S3: Agent Safety's absence is advisory only — runs still start
+		// and tick without it, in GateMode::BuiltIn. S11 places that advisory
+		// SOLELY in the Runs-screen setup panel (Checks::agentSafetyAdvisory(),
+		// rendered by RunsScreen::renderSetupPanel()) — never as a notice on
+		// every admin screen (defect 3: it used to show on the Dashboard too).
 	}
 
 	/**
@@ -355,19 +355,6 @@ final class Plugin {
 		}
 
 		return $this->available;
-	}
-
-	/**
-	 * Render the missing-dependency notice.
-	 */
-	public function render_missing_notice(): void {
-		printf(
-			'<div class="notice notice-warning"><p>%s</p></div>',
-			esc_html__(
-				'SenroFlux is running without Agent Safety: every change-making call stops for your approval on the SenroFlux Runs screen instead. Install and activate Agent Safety for governance by another plugin on the site.',
-				'senroflux'
-			)
-		);
 	}
 
 	// ------------------------------------------------------------------

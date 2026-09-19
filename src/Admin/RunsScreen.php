@@ -650,8 +650,14 @@ class RunsScreen {
 		// dismissal in user meta"); no other check gets a Dismiss button.
 		$dismiss = 'senroflux/agent-safety' === $check->id() ? $this->renderDismissButton() : '';
 
+		// The "inline" class matters as much as "notice" does: it keeps the
+		// warning/error look core's own CSS gives `.notice`, but core's own
+		// admin JS skips `.notice.inline` when it relocates every other
+		// `.wrap .notice` below the page heading (0.3 defect 3) — without
+		// it, one copy of every check ends up duplicated outside this panel,
+		// and a stale copy can linger there after the panel re-renders.
 		return sprintf(
-			'<div class="notice %1$s senroflux-setup-check" data-check-id="%2$s"><p>%3$s%4$s</p>%5$s</div>',
+			'<div class="notice %1$s inline senroflux-setup-check" data-check-id="%2$s"><p>%3$s%4$s</p>%5$s</div>',
 			esc_attr( $css_class ),
 			esc_attr( $check->id() ),
 			esc_html( $message ),
