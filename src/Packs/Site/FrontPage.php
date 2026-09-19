@@ -153,6 +153,19 @@ final class FrontPage {
 	}
 
 	/**
+	 * Stage 14 (AS-15/S19 approval cards): the CURRENT front-page settings,
+	 * for {@see \Specflux\SenroFlux\Packs\Site\ContentSummary} to render
+	 * beside a `set-front-page` call's proposed replacement. A thin public
+	 * alias of {@see currentSettings()} — read-only, records no marker, same
+	 * reasoning as `Navigation::currentItemsForSummary()`.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public static function currentSettingsForSummary(): array {
+		return self::currentSettings();
+	}
+
+	/**
 	 * Register the two abilities. Idempotent per request.
 	 */
 	public static function register(): void {

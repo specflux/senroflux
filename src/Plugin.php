@@ -282,6 +282,13 @@ final class Plugin {
 		// `senroflux_packs` above (WooCommerce active).
 		\Specflux\SenroFlux\Packs\Commerce\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
+		// Stage 14 (AS-15/S19): the commerce pack's own approval-summary
+		// builder, plus the sibling covering the new Tier-2 content calls
+		// (posts publish, site navigation, front page) — same
+		// `agent_safety_approval_summary` hook, each inert for verbs it
+		// does not own.
+		\Specflux\SenroFlux\Packs\Commerce\CommerceSummary::boot();
+		\Specflux\SenroFlux\Packs\Site\ContentSummary::boot();
 		// S7: site navigation + front-page abilities. Navigation::boot() also
 		// registers the shared `senroflux-site` ability category.
 		\Specflux\SenroFlux\Packs\Site\Navigation::boot();
