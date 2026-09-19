@@ -13,6 +13,7 @@ namespace Specflux\SenroFlux\Tests\Run;
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Model\ModelTurn;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Clock;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\StepKind;
 use Specflux\SenroFlux\Run\WpdbRunStore;
@@ -80,6 +81,7 @@ final class RunnerTest extends TestCase {
 
 	protected function tearDown(): void {
 		remove_all_filters( 'senroflux_verb_map' );
+		Clock::reset();
 	}
 
 
@@ -348,6 +350,52 @@ final class RunnerTest extends TestCase {
 		$this->assertSame( 'failed', $result['run']['status'] );
 		$this->assertSame( 'budget_exceeded', $result['run']['error']['code'] ?? '' );
 		$this->assertCount( 0, $this->gateway->calls );
+	}
+
+	public function test_no_elapsed_gap_sentence_on_a_runs_first_tick(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'All done.' );
+
+		$this->runner->tick( $run_id, 0, null );
+
+		$this->assertStringNotContainsString( 'Resumed after', $this->gateway->systemInstructions[0] );
+	}
+
+	public function test_no_elapsed_gap_sentence_five_minutes_after_the_previous_step(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn( 'wpab__agsafe-smoke__blocked', array( 'target' => 'prod-cache' ) );
+		$this->runner->tick( $run_id, 0, null ); // Parks.
+
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] =
+			new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true );
+		$this->gateway->script[]                                     = self::textTurn( 'Cache cleared.' );
+
+		// Only 5 minutes pass before the resume tick: below the S9 threshold.
+		Clock::useFixed( time() + ( 5 * MINUTE_IN_SECONDS ) );
+		$before = $this->store->getRun( $run_id )->stepCount;
+		$this->runner->tick( $run_id, $before, array( 'action' => 'approve' ) );
+
+		$this->assertStringNotContainsString( 'Resumed after', $this->gateway->systemInstructions[1] );
+	}
+
+	public function test_elapsed_gap_sentence_appears_after_a_26_hour_gap_since_the_run_was_parked(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn( 'wpab__agsafe-smoke__blocked', array( 'target' => 'prod-cache' ) );
+		$this->runner->tick( $run_id, 0, null ); // Parks (e.g. left overnight).
+
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] =
+			new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true );
+		$this->gateway->script[]                                     = self::textTurn( 'Cache cleared.' );
+
+		// 26 hours pass before the run is resumed — the S9 example gap.
+		Clock::useFixed( time() + ( 26 * HOUR_IN_SECONDS ) );
+		$before = $this->store->getRun( $run_id )->stepCount;
+		$this->runner->tick( $run_id, $before, array( 'action' => 'approve' ) );
+
+		$this->assertStringContainsString(
+			'Resumed after 26 hours. The site may have changed since your last read.',
+			$this->gateway->systemInstructions[1]
+		);
 	}
 
 	public function test_foreign_owner_is_forbidden(): void {

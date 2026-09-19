@@ -543,9 +543,18 @@ class RunsScreen {
 		echo '<h2>' . esc_html__( 'Start a new run', 'senroflux' ) . '</h2>';
 		$this->renderNewRunForm();
 
-		$runs = senroflux()->available() ? senroflux()->listRecent() : array();
+		$all_runs = senroflux()->available() ? senroflux()->listRecent() : array();
+
+		// 0.3 S9: "Needs you" is the DEFAULT tab — parked runs the viewer may
+		// tick. `filter=all` (or anything else unrecognised) shows every run,
+		// same as before this stage.
+		$filter    = sanitize_key( wp_unslash( $_GET['senroflux_filter'] ?? 'needs_you' ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only list navigation.
+		$needs_you = array_values( array_filter( $all_runs, array( self::class, 'needsYou' ) ) );
+		$runs      = 'needs_you' === $filter ? $needs_you : $all_runs;
 
 		echo '<h2>' . esc_html__( 'Recent runs', 'senroflux' ) . '</h2>';
+
+		$this->renderListTabs( $filter, count( $needs_you ), count( $all_runs ) );
 
 		// Column headers are harness chrome (S15): translated, not machine codes.
 		$columns = array(
@@ -567,7 +576,11 @@ class RunsScreen {
 		echo '</tr></thead><tbody>';
 
 		if ( array() === $runs ) {
-			echo '<tr><td colspan="9">' . esc_html__( 'No runs yet.', 'senroflux' ) . '</td></tr>';
+			echo '<tr><td colspan="9">' . esc_html(
+				'needs_you' === $filter
+					? __( 'Nothing needs you right now.', 'senroflux' )
+					: __( 'No runs yet.', 'senroflux' )
+			) . '</td></tr>';
 		}
 
 		foreach ( $runs as $run ) {
@@ -580,7 +593,9 @@ class RunsScreen {
 				esc_attr( (string) $run['status'] ),
 				// The badge TEXT is chrome: a translated label, never the raw
 				// enum value (the machine value stays in the class + data-status).
-				esc_html( self::statusLabel( (string) $run['status'] ) ),
+				// 0.3 S9: a parked run names its PARK KIND, and a stalled
+				// `running` run says so, instead of the bare status word.
+				esc_html( self::listRowLabel( $run ) ),
 				(int) $run['step_count'],
 				(int) $run['tokens_in'],
 				(int) $run['tokens_out'],
@@ -591,6 +606,86 @@ class RunsScreen {
 		}
 
 		echo '</tbody></table>';
+	}
+
+	/** The All / Needs you tabs above the runs table. */
+	private function renderListTabs( string $active, int $needs_you_count, int $all_count ): void {
+		$base = admin_url( 'tools.php?page=' . self::SLUG );
+
+		echo '<ul class="subsubsub senroflux-runs-tabs">';
+		printf(
+			'<li><a href="%s"%s>%s (%d)</a> |</li>',
+			esc_url( $base . '&senroflux_filter=needs_you' ),
+			'needs_you' === $active ? ' class="current" aria-current="page"' : '',
+			esc_html__( 'Needs you', 'senroflux' ),
+			(int) $needs_you_count
+		);
+		printf(
+			'<li><a href="%s"%s>%s (%d)</a></li>',
+			esc_url( $base . '&senroflux_filter=all' ),
+			'all' === $active ? ' class="current" aria-current="page"' : '',
+			esc_html__( 'All', 'senroflux' ),
+			(int) $all_count
+		);
+		echo '</ul>';
+	}
+
+	/**
+	 * 0.3 S9: a run "needs" the viewer when it is parked AND the viewer may
+	 * tick it (the same `senroflux_can_tick` delegation seam the Runner
+	 * itself gates on) — a stalled `running` run is NOT a park (S9 names
+	 * park kinds and the stalled state as two different things), so it never
+	 * qualifies here even though it also wants a human to reopen the tab.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function needsYou( array $run ): bool {
+		return self::isParkedStatus( (string) $run['status'] ) && (bool) ( $run['viewer_may_tick'] ?? false );
+	}
+
+	/** Whether `$status` is one of the three park statuses (S9). */
+	public static function isParkedStatus( string $status ): bool {
+		return in_array(
+			$status,
+			array( RunStatus::AwaitingApproval->value, RunStatus::AwaitingUser->value, RunStatus::AwaitingPlan->value ),
+			true
+		);
+	}
+
+	/**
+	 * The list row's status text (0.3 S9): the park kind for a parked run,
+	 * "paused while closed — open to continue" for a stalled `running` run,
+	 * or the ordinary status label otherwise.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function listRowLabel( array $run ): string {
+		$status = (string) $run['status'];
+
+		$park_kind = self::parkKindLabel( $status );
+		if ( null !== $park_kind ) {
+			return $park_kind;
+		}
+
+		if ( RunStatus::Running->value === $status && (bool) ( $run['stalled'] ?? false ) ) {
+			return __( 'paused while closed — open to continue', 'senroflux' );
+		}
+
+		return self::statusLabel( $status );
+	}
+
+	/**
+	 * The S9 park-kind phrasing for the Runs LIST row — distinct wording from
+	 * {@see self::statusLabel()}'s detail-screen badge, which S9 leaves
+	 * unchanged. Null for a non-parked status.
+	 */
+	public static function parkKindLabel( string $status ): ?string {
+		return match ( $status ) {
+			RunStatus::AwaitingUser->value => __( 'waiting for your answer', 'senroflux' ),
+			RunStatus::AwaitingApproval->value => __( 'waiting for approval', 'senroflux' ),
+			RunStatus::AwaitingPlan->value => __( 'waiting on the plan', 'senroflux' ),
+			default => null,
+		};
 	}
 
 	/**
@@ -1156,7 +1251,11 @@ class RunsScreen {
 
 		if ( $preapprove ) {
 			echo '<label class="senroflux-choice"><input type="radio" name="senroflux_plan_action" value="accept_preapprove"> ' . esc_html__( 'Accept and pre-approve', 'senroflux' ) . '</label>';
-			echo '<p class="description">' . esc_html__( 'Approve this plan and any irreversible steps in it without asking again.', 'senroflux' ) . '</p>';
+			// S9: Agent Safety already enforces a 24h grant TTL; this names
+			// that expiry so the choice reads honestly — after 24 hours a
+			// matching call parks as an ordinary approval again, same as if
+			// pre-approve had never been chosen.
+			echo '<p class="description">' . esc_html__( 'Approve this plan and any irreversible steps in it without asking again. Good for 24 hours — after that, a matching call asks again.', 'senroflux' ) . '</p>';
 		}
 
 		echo '<label class="senroflux-choice"><input type="radio" name="senroflux_plan_action" value="veto"> ' . esc_html__( 'Veto', 'senroflux' ) . '</label>';

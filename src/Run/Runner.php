@@ -199,6 +199,10 @@ final class Runner {
 	private function tickBody( Run $run, ?array $resume ): array|WP_Error {
 		$run_id = $run->id;
 
+		// S9: snapshot BEFORE any resume drain or new step this tick appends
+		// — see self::$tick_elapsed_gap_seconds.
+		$this->elapsedGapAtTickStart( $run );
+
 		try {
 			// S5: a park resolution only makes sense on a parked run — a
 			// pending/running/terminal run carrying one is a protocol error,
@@ -1137,7 +1141,55 @@ final class Runner {
 			conversation_language: ( null !== $run->conversationLocale && '' !== $run->conversationLocale )
 				? Tail::languageName( $run->conversationLocale )
 				: null,
+			// S9: the elapsed gap AS OF THIS TICK'S START — snapshotted once
+			// by tickBody() before any resume drain appends its own steps
+			// (which would otherwise look like the "previous step" and mask
+			// a long park). See self::$tickElapsedGapSeconds.
+			elapsed_gap_seconds: $this->tick_elapsed_gap_seconds,
 		);
+	}
+
+	/**
+	 * S9: seconds since the run's previous step, computed ONCE per tick by
+	 * {@see self::elapsedGapAtTickStart()} and reused by every {@see tailFor()}
+	 * call this tick — never recomputed against the live step list, which
+	 * would include this SAME tick's own resume-drain step and mask a park's
+	 * real age. Null on a run's very first tick, or below the threshold.
+	 */
+	private ?int $tick_elapsed_gap_seconds = null;
+
+	/**
+	 * Snapshot the S9 elapsed gap from the run's LAST STEP AS OF TICK START —
+	 * called once at the top of {@see tickBody()}, before any resume drain or
+	 * new step is appended.
+	 */
+	private function elapsedGapAtTickStart( Run $run ): void {
+		$last_step_time_utc = null;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( null !== $step->createdAtUtc && '' !== $step->createdAtUtc ) {
+				$last_step_time_utc = $step->createdAtUtc;
+			}
+		}
+
+		$gap = null === $last_step_time_utc ? null : $this->elapsedSince( $last_step_time_utc );
+
+		$this->tick_elapsed_gap_seconds = ( null !== $gap && $gap > Tail::ELAPSED_GAP_THRESHOLD_SECONDS ) ? $gap : null;
+	}
+
+	/**
+	 * Seconds between `$created_at_utc` (a stored `Y-m-d H:i:s` UTC
+	 * timestamp) and {@see Clock::now()}. Never negative — a clock skew or a
+	 * malformed timestamp reports zero rather than a bogus negative gap.
+	 *
+	 * @param string $created_at_utc `Y-m-d H:i:s`, UTC.
+	 */
+	private function elapsedSince( string $created_at_utc ): int {
+		$then = strtotime( $created_at_utc . ' UTC' );
+		if ( false === $then ) {
+			return 0;
+		}
+
+		return max( 0, Clock::now() - $then );
 	}
 
 	/**

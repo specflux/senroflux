@@ -695,18 +695,32 @@ final class Plugin {
 			return array();
 		}
 
+		$viewer_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+
 		return array_map(
-			static fn ( \Specflux\SenroFlux\Run\Run $run ): array => array(
-				'id'         => $run->id,
-				'user_id'    => $run->userId,
-				'consumer'   => $run->consumer,
-				'goal'       => $run->goal,
-				'status'     => $run->status->value,
-				'step_count' => $run->stepCount,
-				'tokens_in'  => $run->tokensIn,
-				'tokens_out' => $run->tokensOut,
-				'updated_at' => $run->updatedAtUtc,
-			),
+			function ( \Specflux\SenroFlux\Run\Run $run ) use ( $viewer_id ): array {
+				return array(
+					'id'              => $run->id,
+					'user_id'         => $run->userId,
+					'consumer'        => $run->consumer,
+					'goal'            => $run->goal,
+					'status'          => $run->status->value,
+					'step_count'      => $run->stepCount,
+					'tokens_in'       => $run->tokensIn,
+					'tokens_out'      => $run->tokensOut,
+					'updated_at'      => $run->updatedAtUtc,
+					// 0.3 S9: "Needs you" reuses the SAME delegation seam the
+					// Runner itself gates ticking on — never a re-derived rule
+					// that could drift from it.
+					'viewer_may_tick' => (bool) apply_filters( 'senroflux_can_tick', $viewer_id === $run->userId, $run ),
+					// 0.3 S9: a `running` run with no live 30-second tick lock
+					// (the SAME transient Runner::tick() itself sets/releases)
+					// is stalled — its owner closed the tab mid-loop.
+					'stalled'         => RunStatus::Running === $run->status
+						&& function_exists( 'get_transient' )
+						&& false === get_transient( 'senroflux_lock_' . $run->id ),
+				);
+			},
 			$this->runner()->store()->listRecent( $limit )
 		);
 	}

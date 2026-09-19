@@ -36,6 +36,13 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	}
 }
 
+if ( ! function_exists( 'sanitize_key' ) ) {
+	/** Lower-cases and strips to `[a-z0-9_-]`, same shape as WP core's own. */
+	function sanitize_key( string $key ): string {
+		return preg_replace( '/[^a-z0-9_-]/', '', strtolower( $key ) ) ?? '';
+	}
+}
+
 if ( ! function_exists( 'sanitize_textarea_field' ) ) {
 	/** Strip-shim that preserves newlines. */
 	function sanitize_textarea_field( string $text ): string {
