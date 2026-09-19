@@ -63,13 +63,19 @@ final class ConsumerPolicy {
 			);
 		}
 
-		// S7: a pack-driven start's ceiling is the pack's OWN (flat-and-high)
-		// defaults, never the registered consumer's generic policy budget —
-		// which would otherwise silently clamp the site pack straight back
-		// down to the shipped table.
-		$ceiling = array() !== $pack_budget_overrides
-			? Budget::defaults( $pack_budget_overrides )
-			: Budget::sanitize( is_array( $policy ) ? ( $policy['budget'] ?? null ) : null );
+		// S7: the pack's own (flat-and-high) defaults become the BASELINE the
+		// ceiling is built from, but the registered consumer's own policy
+		// budget still caps every key it sets — Budget::sanitize()'s
+		// mergeOverCapped keeps a key the consumer didn't set at the
+		// pack-adjusted default while never letting a key the consumer DID
+		// set rise back toward or past the pack's own baseline. Applying this
+		// unconditionally (rather than only when the pack has no overrides)
+		// avoids silently loosening a third-party consumer's registered
+		// budget on every pack-driven start.
+		$ceiling = Budget::sanitize(
+			is_array( $policy ) ? ( $policy['budget'] ?? null ) : null,
+			$pack_budget_overrides
+		);
 
 		return array(
 			'allow'  => $allow,
