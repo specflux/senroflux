@@ -1071,30 +1071,15 @@ final class Media {
 	/**
 	 * The number of PRIOR successful `generate-image` calls in this run,
 	 * derived from the persisted step history — no new schema (see the class
-	 * docblock).
+	 * docblock). Delegates the counting rule to {@see Budget::spentCount()},
+	 * the shared SPEND-style helper `images` and `refunds` (0.3 S19) both use.
 	 */
 	private static function spentImages(): int {
 		if ( null === self::$current_run_id || null === self::$store ) {
 			return 0;
 		}
 
-		$spent = 0;
-		foreach ( self::$store->getSteps( self::$current_run_id ) as $step ) {
-			if ( 'ok' !== $step->status || null === $step->toolName ) {
-				continue;
-			}
-			if ( 'generate-image' === self::baseName( $step->toolName ) ) {
-				++$spent;
-			}
-		}
-
-		return $spent;
-	}
-
-	private static function baseName( string $ability ): string {
-		$pos = strrpos( $ability, '/' );
-
-		return false === $pos ? $ability : substr( $ability, $pos + 1 );
+		return Budget::spentCount( self::$store, self::$current_run_id, 'generate-image' );
 	}
 
 	/**

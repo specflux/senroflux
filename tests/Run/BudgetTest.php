@@ -27,6 +27,7 @@ final class BudgetTest extends TestCase {
 				'max_questions'  => 5,
 				'max_plans'      => 3,
 				'images'         => 6,
+				'refunds'        => 1,
 			),
 			Budget::defaults()
 		);
@@ -73,6 +74,7 @@ final class BudgetTest extends TestCase {
 				'max_questions'  => 2,
 				'max_plans'      => 2,
 				'images'         => 6,
+				'refunds'        => 1,
 			),
 			$sanitized
 		);
@@ -86,6 +88,7 @@ final class BudgetTest extends TestCase {
 			'max_questions'  => 5,
 			'max_plans'      => 3,
 			'images'         => 6,
+			'refunds'        => 1,
 		);
 
 		$this->assertSame( $ceiling, Budget::clamp( 'junk', $ceiling ) );
@@ -97,6 +100,7 @@ final class BudgetTest extends TestCase {
 				'max_questions'  => 1,
 				'max_plans'      => 3,
 				'images'         => 1,
+				'refunds'        => 1,
 			),
 			Budget::clamp(
 				array(
@@ -117,6 +121,58 @@ final class BudgetTest extends TestCase {
 		// The S5 check: a consumer may lower `images` and may not raise it.
 		$this->assertSame( 3, Budget::clamp( array( 'images' => 3 ), Budget::defaults() )['images'] );
 		$this->assertSame( 6, Budget::clamp( array( 'images' => 99 ), Budget::defaults() )['images'] );
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 S19: the `refunds` budget key.
+	// ------------------------------------------------------------------
+
+	public function test_refunds_defaults_to_one(): void {
+		$this->assertSame( 1, Budget::defaults()['refunds'] );
+	}
+
+	public function test_refunds_is_lower_only_like_images(): void {
+		$this->assertSame( 0, Budget::clamp( array( 'refunds' => 0 ), Budget::defaults() )['refunds'] );
+		// An attempt to raise it above the shipped default is capped back down.
+		$this->assertSame( 1, Budget::clamp( array( 'refunds' => 99 ), Budget::defaults() )['refunds'] );
+	}
+
+	public function test_refunds_allows_exactly_zero(): void {
+		$sanitized = Budget::sanitize( array( 'refunds' => 0 ) );
+
+		$this->assertSame( 0, $sanitized['refunds'] );
+	}
+
+	public function test_refunds_rejects_a_negative_value(): void {
+		$sanitized = Budget::sanitize( array( 'refunds' => -1 ) );
+
+		$this->assertSame( 1, $sanitized['refunds'], 'a negative refunds cap falls back to the default' );
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 S19: Budget::spentCount() — the shared SPEND-counting helper
+	// behind `images` and `refunds`.
+	// ------------------------------------------------------------------
+
+	public function test_spent_count_counts_only_ok_steps_for_the_named_ability(): void {
+		$store  = new \Specflux\SenroFlux\Run\WpdbRunStore( new \wpdb() );
+		$run_id = $store->createRun( 1, 'test', 'goal', array(), Budget::defaults() );
+
+		$store->appendStep( $run_id, \Specflux\SenroFlux\Run\StepKind::ToolResult, null, 'senroflux/orders-refund', null, 'ok' );
+		$store->appendStep( $run_id, \Specflux\SenroFlux\Run\StepKind::ToolResult, null, 'senroflux/orders-refund', null, 'ok' );
+		// Refused: not spent.
+		$store->appendStep( $run_id, \Specflux\SenroFlux\Run\StepKind::ToolResult, null, 'senroflux/orders-refund', null, 'refused' );
+		// A different ability: not counted.
+		$store->appendStep( $run_id, \Specflux\SenroFlux\Run\StepKind::ToolResult, null, 'senroflux/order-add-note', null, 'ok' );
+
+		$this->assertSame( 2, Budget::spentCount( $store, $run_id, 'orders-refund' ) );
+	}
+
+	public function test_spent_count_is_zero_with_no_matching_steps(): void {
+		$store  = new \Specflux\SenroFlux\Run\WpdbRunStore( new \wpdb() );
+		$run_id = $store->createRun( 1, 'test', 'goal', array(), Budget::defaults() );
+
+		$this->assertSame( 0, Budget::spentCount( $store, $run_id, 'orders-refund' ) );
 	}
 
 	public function test_sanitize_falls_back_to_the_filtered_defaults_not_the_shipped_ones(): void {
@@ -196,7 +252,14 @@ final class BudgetTest extends TestCase {
 	}
 
 	public function test_pack_overrides_become_the_new_baseline(): void {
-		$this->assertSame( $this->sitePackOverrides(), Budget::defaults( $this->sitePackOverrides() ) );
+		// The site pack's own override table (6 keys, no `refunds` opinion) is
+		// applied over the SHIPPED table (S7), so the untouched `refunds` key
+		// still comes through at its shipped default (1) — same rule as any
+		// other key the pack override doesn't name.
+		$this->assertSame(
+			$this->sitePackOverrides() + array( 'refunds' => 1 ),
+			Budget::defaults( $this->sitePackOverrides() )
+		);
 	}
 
 	public function test_the_default_budget_filter_may_only_lower_a_pack_override_never_raise_it(): void {

@@ -112,3 +112,23 @@ if ( ! function_exists( 'is_wp_error' ) ) {
 		return $thing instanceof \WP_Error;
 	}
 }
+
+if ( ! function_exists( '_doing_it_wrong' ) ) {
+	/**
+	 * Recording shim: appends every call to a global list instead of
+	 * triggering a real E_USER_NOTICE (which PHPUnit's `failOnWarning` would
+	 * turn into a test failure) so a test can assert one fired without the
+	 * suite dying on it (S19 — `PackRegistry::register()`'s refusal notice).
+	 *
+	 * @param string $function_name The offending function/method.
+	 * @param string $message       The notice message.
+	 * @param string $version       The version the notice was added in.
+	 */
+	function _doing_it_wrong( string $function_name, string $message, string $version ): void {
+		$GLOBALS['senroflux_test_doing_it_wrong'][] = array(
+			'function' => $function_name,
+			'message'  => $message,
+			'version'  => $version,
+		);
+	}
+}

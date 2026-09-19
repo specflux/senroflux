@@ -75,6 +75,8 @@ final class Runner {
 		private readonly mixed $gate_mode_probe = null,
 		/** @var callable(Run):list<string>|null S6: the concrete ability ids withheld from this run's execution (a role's resolved ability, for every role in `Run::$withheldRoles`); absent = none. Defence in depth alongside the tool-set drop at start() — this is re-checked on every call, never trusting the allow-list alone. */
 		private readonly mixed $withheld_abilities_resolver = null,
+		/** @var callable(Run):list<string>|null S19: the run's UNGRANTABLE pack verbs (a pack's `ungrantableVerbs()`); absent/null = none, every Tier-2 verb stays grantable (0.2/0.3-pre-S19 behaviour). {@see grantCounts()} skips issuing a grant for any verb this names, however many times the accepted plan lists it. */
+		private readonly mixed $ungrantable_verbs_resolver = null,
 	) {
 	}
 
@@ -2195,8 +2197,9 @@ final class Runner {
 	 * @return array<string,int>
 	 */
 	private function grantCounts( Run $run, array $payload ): array {
-		$map    = $this->packVerbMap( $run );
-		$counts = array();
+		$map         = $this->packVerbMap( $run );
+		$ungrantable = $this->ungrantableVerbs( $run );
+		$counts      = array();
 
 		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
 			if ( ! is_array( $step ) ) {
@@ -2209,6 +2212,12 @@ final class Runner {
 					continue;
 				}
 				if ( VerbTier::tierFor( $verb, $map, $run->id ) < VerbTier::TIER_2 ) {
+					continue;
+				}
+				if ( in_array( $verb, $ungrantable, true ) ) {
+					// S19: this PACK verb never gets a pre-approval grant,
+					// however many times the plan lists it — it asks every
+					// time instead.
 					continue;
 				}
 
@@ -2841,6 +2850,20 @@ final class Runner {
 
 		/** @var array<string,int>|null */
 		return is_array( $pack_map ) ? $pack_map : null;
+	}
+
+	/**
+	 * S19: the run's ungrantable PACK verbs, or an empty list with no
+	 * resolver / no pack (fail open toward the pre-S19 behaviour: nothing was
+	 * ungrantable then, and a run with no pack has no such concept).
+	 *
+	 * @return list<string>
+	 */
+	private function ungrantableVerbs( Run $run ): array {
+		$verbs = is_callable( $this->ungrantable_verbs_resolver ) ? ( $this->ungrantable_verbs_resolver )( $run ) : null;
+
+		/** @var list<string> */
+		return is_array( $verbs ) ? array_values( $verbs ) : array();
 	}
 
 	/**

@@ -877,6 +877,15 @@ final class Plugin {
 				}
 
 				return $abilities;
+			},
+			// S19: the accepted plan's ungrantable pack verbs — only the pack
+			// knows which of its own verbs must ask every time rather than be
+			// pre-approved; a direct-allow run has no pack and nothing is
+			// ungrantable there.
+			static function ( \Specflux\SenroFlux\Run\Run $run ): array {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->ungrantableVerbs() : array();
 			}
 		);
 

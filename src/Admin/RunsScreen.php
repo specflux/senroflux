@@ -1389,8 +1389,9 @@ class RunsScreen {
 		// screen recomputes the SAME condition (S14/S15). In built-in mode the
 		// grants service is never available, so this is already false there —
 		// "Accept and pre-approve" naturally never renders (0.3 S3).
-		$preapprove = $this->preapprovalAvailable();
-		$built_in   = 'built_in' === (string) ( $run['gate_mode'] ?? '' );
+		$preapprove  = $this->preapprovalAvailable();
+		$built_in    = 'built_in' === (string) ( $run['gate_mode'] ?? '' );
+		$ungrantable = $this->ungrantableVerbsFor( $run );
 
 		$action = admin_url( 'admin-post.php' );
 		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-plan-heading">';
@@ -1409,9 +1410,10 @@ class RunsScreen {
 		foreach ( $steps as $step ) {
 			// CONTENT BOUNDARY — step text + verbs are MODEL-AUTHORED (S15),
 			// verbatim. The "needs approval" marker is harness chrome (translated).
-			$text  = (string) ( $step['text'] ?? '' );
-			$verbs = is_array( $step['verbs'] ?? null ) ? $step['verbs'] : array();
-			$needs = $this->stepNeedsApproval( $step );
+			$text       = (string) ( $step['text'] ?? '' );
+			$verbs      = is_array( $step['verbs'] ?? null ) ? $step['verbs'] : array();
+			$needs      = $this->stepNeedsApproval( $step );
+			$asks_every = $this->stepHasUngrantableVerb( $step, $ungrantable );
 
 			echo '<li>';
 			echo '<span class="senroflux-plan-text">' . esc_html( $text ) . '</span>';
@@ -1420,6 +1422,13 @@ class RunsScreen {
 			}
 			if ( $needs ) {
 				echo ' <span class="senroflux-plan-approval">' . esc_html__( 'needs approval', 'senroflux' ) . '</span>';
+			}
+			if ( $asks_every ) {
+				// S19: an ungrantable Tier-2 verb is never covered by a
+				// pre-approval grant — surfaced separately from "needs
+				// approval" so a human sees pre-approving THIS step buys
+				// nothing for that verb.
+				echo ' <span class="senroflux-plan-ungrantable">' . esc_html__( 'asks every time', 'senroflux' ) . '</span>';
 			}
 			echo '</li>';
 		}
@@ -1724,6 +1733,50 @@ class RunsScreen {
 			// guard is simply whether the tier is present (unchanged behaviour).
 			$tier = isset( $step['tier'] ) ? (int) $step['tier'] : VerbTier::tierFor( $verb );
 			if ( $tier >= VerbTier::TIER_2 ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * S19: the run's pack's ungrantable pack verbs, or an empty list with no
+	 * pack (a direct-allow run has no such concept).
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 * @return list<string>
+	 */
+	private function ungrantableVerbsFor( array $run ): array {
+		$pack_name = (string) ( $run['pack'] ?? '' );
+		if ( '' === $pack_name ) {
+			return array();
+		}
+
+		$pack = PackRegistry::fromFilters()->get( $pack_name );
+
+		return null !== $pack ? $pack->ungrantableVerbs() : array();
+	}
+
+	/**
+	 * Does a plan step name any verb from `$ungrantable` (S19 — "asks every
+	 * time" instead of "needs approval")?
+	 *
+	 * @param array<string,mixed> $step        The plan step.
+	 * @param list<string>        $ungrantable The run's ungrantable pack verbs.
+	 */
+	private function stepHasUngrantableVerb( array $step, array $ungrantable ): bool {
+		if ( array() === $ungrantable ) {
+			return false;
+		}
+
+		$verbs = $step['verbs'] ?? array();
+		if ( ! is_array( $verbs ) ) {
+			return false;
+		}
+
+		foreach ( $verbs as $verb ) {
+			if ( is_string( $verb ) && in_array( $verb, $ungrantable, true ) ) {
 				return true;
 			}
 		}

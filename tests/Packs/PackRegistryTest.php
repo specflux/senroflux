@@ -41,7 +41,7 @@ final class PackRegistryTest extends TestCase {
 		remove_all_filters( 'senroflux_skills_max_tokens' );
 		remove_all_filters( 'agent_safety_governed_namespaces' );
 		remove_all_filters( 'agent_safety_verb_map' );
-		unset( $GLOBALS['wpdb'] );
+		unset( $GLOBALS['wpdb'], $GLOBALS['senroflux_test_doing_it_wrong'] );
 		Plugin::reset();
 	}
 
@@ -276,6 +276,143 @@ final class PackRegistryTest extends TestCase {
 		$this->assertSame( $first, $second );
 	}
 
+	// ------------------------------------------------------------------
+	// S19: Pack::abilityNamespaces() — the generalised namespace resolver.
+	// ------------------------------------------------------------------
+
+	/**
+	 * A pack whose namespace preference list, ungrantable verbs, and input
+	 * properties are all injectable — the S19 commerce-pack shape (prefers
+	 * `woocommerce/` and ends with `senroflux/`).
+	 *
+	 * @param list<string>         $namespaces        Preference-ordered namespaces.
+	 * @param list<string>         $input_properties  Properties the client sends.
+	 * @param list<string>         $ungrantable       Ungrantable pack verbs.
+	 * @param array<string,string> $roles             Role => template.
+	 */
+	private function namespacedPack(
+		array $namespaces,
+		array $input_properties = array(),
+		array $ungrantable = array(),
+		array $roles = array( 'read' => 'foo' )
+	): Pack {
+		return new class( $namespaces, $input_properties, $ungrantable, $roles ) extends Pack {
+			/** @param list<string> $namespaces */
+			public function __construct(
+				private array $namespaces,
+				private array $inputProps,
+				private array $ungrantable,
+				array $roles
+			) {
+				parent::__construct( $roles );
+			}
+
+			public function name(): string {
+				return 'commerce-fixture';
+			}
+
+			/** @return list<string> */
+			public function abilityNamespaces(): array {
+				return $this->namespaces;
+			}
+
+			/** @return list<string> */
+			public function ungrantableVerbs(): array {
+				return $this->ungrantable;
+			}
+
+			/** @return list<string> */
+			protected function inputProperties( string $template ): array {
+				unset( $template );
+
+				return $this->inputProps;
+			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+		};
+	}
+
+	public function test_resolver_prefers_a_registered_and_compatible_third_party_namespace(): void {
+		$GLOBALS['senroflux_test_abilities']['woocommerce/foo'] = new \SenroFlux_Test_Fake_Ability(
+			'woocommerce/foo',
+			true,
+			array(),
+			'Woo foo.',
+			array( 'properties' => array( 'id' => array( 'type' => 'integer' ) ) )
+		);
+
+		$pack = $this->namespacedPack( array( 'woocommerce/', 'senroflux/' ), array( 'id' ) );
+
+		$this->assertSame( array( 'read' => 'woocommerce/foo' ), $pack->resolveAbilities() );
+	}
+
+	public function test_resolver_falls_back_to_senroflux_when_the_preferred_namespace_is_not_registered(): void {
+		$pack = $this->namespacedPack( array( 'woocommerce/', 'senroflux/' ), array( 'id' ) );
+
+		$this->assertSame( array( 'read' => 'senroflux/foo' ), $pack->resolveAbilities() );
+	}
+
+	public function test_resolver_falls_back_to_senroflux_when_the_preferred_namespace_is_incompatible(): void {
+		// Registered, but missing a property the pack's client sends.
+		$GLOBALS['senroflux_test_abilities']['woocommerce/foo'] = new \SenroFlux_Test_Fake_Ability(
+			'woocommerce/foo',
+			true,
+			array(),
+			'Woo foo.',
+			array( 'properties' => array() )
+		);
+
+		$pack = $this->namespacedPack( array( 'woocommerce/', 'senroflux/' ), array( 'id' ) );
+
+		$this->assertSame( array( 'read' => 'senroflux/foo' ), $pack->resolveAbilities() );
+	}
+
+	public function test_default_ability_namespaces_is_core_then_senroflux(): void {
+		$pack = $this->namespacedPack( array( 'core/', Pack::POLYFILL_NAMESPACE ), array() );
+
+		$this->assertSame( array( 'core/', 'senroflux/' ), $pack->abilityNamespaces() );
+	}
+
+	public function test_base_pack_default_ability_namespaces_is_core_then_senroflux(): void {
+		$pack = $this->pack( 'pages', array( 'read' => 'read-content' ) );
+
+		$this->assertSame( array( 'core/', 'senroflux/' ), $pack->abilityNamespaces() );
+	}
+
+	public function test_registry_refuses_a_pack_whose_namespace_list_does_not_end_with_senroflux(): void {
+		$GLOBALS['senroflux_test_doing_it_wrong'] = array();
+
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'woocommerce/', 'core/' ) ) );
+
+		$this->assertNull( $registry->get( 'commerce-fixture' ), 'a misconfigured pack is never stored' );
+		$this->assertSame( array(), $registry->all() );
+		$this->assertNotEmpty( $GLOBALS['senroflux_test_doing_it_wrong'] ?? array(), 'the refusal is reported' );
+	}
+
+	public function test_registry_accepts_a_pack_whose_list_ends_with_senroflux(): void {
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'woocommerce/', 'senroflux/' ) ) );
+
+		$this->assertNotNull( $registry->get( 'commerce-fixture' ) );
+	}
+
+	// ------------------------------------------------------------------
+	// S19: Pack::ungrantableVerbs()
+	// ------------------------------------------------------------------
+
+	public function test_ungrantable_verbs_defaults_to_empty(): void {
+		$this->assertSame( array(), $this->pack( 'pages' )->ungrantableVerbs() );
+	}
 
 	public function test_preflight_passes_within_skills_ceiling_and_no_as_binding(): void {
 		$pack = $this->pack( 'pages' );

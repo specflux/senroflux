@@ -169,6 +169,79 @@ final class RunsScreenParkCardsTest extends TestCase {
 	}
 
 	/**
+	 * S19: a step naming an UNGRANTABLE Tier-2 verb is marked "asks every
+	 * time" — distinct from (and in addition to) "needs approval" — while an
+	 * ordinary grantable Tier-2 verb in the same plan is not.
+	 */
+	public function test_plan_card_marks_an_ungrantable_verb_as_asking_every_time(): void {
+		add_filter(
+			'senroflux_packs',
+			static fn ( array $packs ): array => $packs + array(
+				'commerce' => new class() extends \Specflux\SenroFlux\Packs\Pack {
+					public function name(): string {
+						return 'commerce';
+					}
+
+					/** @return array<string,int> */
+					public function verbMap(): array {
+						return array(
+							'commerce/refund'              => 2,
+							'commerce/order-note-customer' => 2,
+						);
+					}
+
+					/** @return list<string> */
+					public function ungrantableVerbs(): array {
+						return array( 'commerce/refund' );
+					}
+
+					protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+						unset( $user_id );
+
+						return null;
+					}
+				},
+			),
+			10,
+			1
+		);
+
+		$html = $this->renderPark(
+			RunStatus::AwaitingPlan,
+			StepKind::Plan,
+			array(
+				'steps'       => array(
+					array(
+						'text'  => 'Refund the order',
+						'verbs' => array( 'commerce/refund' ),
+						'tier'  => 2,
+					),
+					array(
+						'text'  => 'Note the customer',
+						'verbs' => array( 'commerce/order-note-customer' ),
+						'tier'  => 2,
+					),
+				),
+				'assumptions' => array(),
+			),
+			'commerce'
+		);
+
+		$this->assertStringContainsString( 'asks every time', $html );
+
+		// Only the refund step's <li> carries the ungrantable marker.
+		$refund_li = substr( $html, (int) strpos( $html, 'Refund the order' ) );
+		$refund_li = substr( $refund_li, 0, (int) strpos( $refund_li, '</li>' ) );
+		$note_li   = substr( $html, (int) strpos( $html, 'Note the customer' ) );
+		$note_li   = substr( $note_li, 0, (int) strpos( $note_li, '</li>' ) );
+
+		$this->assertStringContainsString( 'asks every time', $refund_li );
+		$this->assertStringNotContainsString( 'asks every time', $note_li );
+
+		remove_all_filters( 'senroflux_packs' );
+	}
+
+	/**
 	 * S13/S15: the pre-approve radio is an AS-12 affordance. With the feature
 	 * off — the default — the human is never offered a decision the Runner
 	 * would answer with `preapproval_disabled`.
@@ -440,8 +513,8 @@ final class RunsScreenParkCardsTest extends TestCase {
 	 *
 	 * @param array<string,mixed> $payload The stored park payload.
 	 */
-	private function renderPark( RunStatus $status, StepKind $kind, array $payload ): string {
-		$run_id = $this->seedRun();
+	private function renderPark( RunStatus $status, StepKind $kind, array $payload, ?string $pack = null ): string {
+		$run_id = $this->seedRun( $pack );
 		$store  = new WpdbRunStore( $GLOBALS['wpdb'] );
 		$store->appendStep( $run_id, $kind, $payload );
 		$store->updateRun( $run_id, array( 'status' => $status->value ) );
@@ -459,8 +532,8 @@ final class RunsScreenParkCardsTest extends TestCase {
 		return (string) ob_get_clean();
 	}
 
-	/** A run owned by the current user. */
-	private function seedRun(): int {
+	/** A run owned by the current user, optionally bound to a pack. */
+	private function seedRun( ?string $pack = null ): int {
 		$this->seedRunnerGraph();
 
 		return ( new WpdbRunStore( $GLOBALS['wpdb'] ) )->createRun(
@@ -474,7 +547,8 @@ final class RunsScreenParkCardsTest extends TestCase {
 				'max_tokens'     => 100,
 				'max_questions'  => 1,
 				'max_plans'      => 1,
-			)
+			),
+			$pack
 		);
 	}
 

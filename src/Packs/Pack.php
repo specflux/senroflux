@@ -103,11 +103,16 @@ abstract class Pack {
 	/**
 	 * role => concrete ability id.
 	 *
-	 * Resolution: 'core/<template>' when `wp_get_ability('core/<template>')`
-	 * exists AND every input property the pack sends for that role exists in
-	 * the core ability's `get_input_schema()` (shape-compat — a core ability
-	 * the pack's calls would not satisfy is NOT adopted); otherwise
-	 * 'senroflux/<template>'. Cached per request.
+	 * Resolution (generalised, S19): {@see abilityNamespaces()} lists the
+	 * candidate namespaces in preference order (default `['core/',
+	 * 'senroflux/']`). Each is tried in turn — the first whose
+	 * `<namespace><template>` ability is REGISTERED and shape-compatible
+	 * (every input property the pack sends for that role exists in the
+	 * ability's `get_input_schema()`) is adopted. The LAST namespace in the
+	 * list is the pack's own polyfill and is always accepted without a
+	 * compat check (it is authored to match the pack's own calls) — this is
+	 * the pre-S19 "otherwise senroflux/<template>" fallback, generalised.
+	 * Cached per request.
 	 *
 	 * @return array<string,string>
 	 */
@@ -128,24 +133,55 @@ abstract class Pack {
 	}
 
 	/**
-	 * The resolved ability id for one template.
+	 * The ability namespaces this pack's roles resolve through, in
+	 * preference order (S19, `@api`). The default is the pre-S19 behaviour
+	 * unchanged: try `core/`, otherwise `senroflux/`. A pack that prefers a
+	 * third-party namespace (e.g. `woocommerce/`) lists it first; the LAST
+	 * entry MUST be `self::POLYFILL_NAMESPACE` — {@see PackRegistry::register()}
+	 * refuses a pack whose list doesn't end with it, because a pack with no
+	 * guaranteed final fallback could resolve a role to nothing.
+	 *
+	 * @return list<string>
+	 */
+	public function abilityNamespaces(): array {
+		return array( 'core/', self::POLYFILL_NAMESPACE );
+	}
+
+	/**
+	 * The resolved ability id for one template: the first namespace in
+	 * {@see abilityNamespaces()} that is registered and shape-compatible, or
+	 * the last (polyfill) namespace when none of the earlier ones qualify.
 	 */
 	private function resolveAbility( string $template ): string {
-		$core = 'core/' . $template;
-		if ( $this->coreCompatible( $core, $template ) ) {
-			return $core;
+		$namespaces = $this->abilityNamespaces();
+		$last_index = count( $namespaces ) - 1;
+
+		foreach ( $namespaces as $index => $namespace ) {
+			$candidate = $namespace . $template;
+			if ( $index === $last_index ) {
+				// The final namespace is the pack's own polyfill: always the
+				// fallback, never gated on a compat check against itself.
+				return $candidate;
+			}
+			if ( $this->namespaceCompatible( $candidate, $template ) ) {
+				return $candidate;
+			}
 		}
 
+		// Defensive only: abilityNamespaces() always ends with the polyfill
+		// namespace (enforced at registration), so an empty list never
+		// reaches here in practice.
 		return self::POLYFILL_NAMESPACE . $template;
 	}
 
 	/**
-	 * Shape-compat check against the Abilities API (S9): the core ability must
-	 * exist, be an object with `get_input_schema()`, and its schema must accept
-	 * every input property this pack's client sends for the role.
+	 * Shape-compat check against the Abilities API (S9, generalised S19): the
+	 * candidate ability must exist, be an object with `get_input_schema()`,
+	 * and its schema must accept every input property this pack's client
+	 * sends for the role.
 	 */
-	private function coreCompatible( string $core_id, string $template ): bool {
-		$schema = $this->coreSchema( $core_id );
+	private function namespaceCompatible( string $candidate_id, string $template ): bool {
+		$schema = $this->abilitySchema( $candidate_id );
 		if ( null === $schema ) {
 			return false;
 		}
@@ -161,7 +197,8 @@ abstract class Pack {
 	}
 
 	/**
-	 * The raw input schema from the core ability, or null when it is absent.
+	 * The raw input schema from a candidate ability, or null when it is
+	 * absent.
 	 *
 	 * Defensive guards: `wp_get_ability()` may return null or a duck-typed
 	 * object across real WordPress versions (the wordpress-stubs type it as a
@@ -171,11 +208,11 @@ abstract class Pack {
 	 *
 	 * @return array<string,mixed>|null
 	 */
-	private function coreSchema( string $core_id ): ?array {
+	private function abilitySchema( string $candidate_id ): ?array {
 		// Probe with wp_has_ability() (a silent registry read): probing with
-		// wp_get_ability() on an unregistered core ability raises a
+		// wp_get_ability() on an unregistered ability raises a
 		// _doing_it_wrong notice on every check — noisy for a step-aside probe.
-		if ( ! function_exists( 'wp_has_ability' ) || ! wp_has_ability( $core_id ) ) {
+		if ( ! function_exists( 'wp_has_ability' ) || ! wp_has_ability( $candidate_id ) ) {
 			return null;
 		}
 
@@ -183,7 +220,7 @@ abstract class Pack {
 			return null;
 		}
 
-		$ability = wp_get_ability( $core_id );
+		$ability = wp_get_ability( $candidate_id );
 		if ( ! is_object( $ability ) ) {
 			return null;
 		}
@@ -393,6 +430,22 @@ abstract class Pack {
 		}
 
 		return null;
+	}
+
+	/**
+	 * PACK verbs (S19, `@api`) that {@see \Specflux\SenroFlux\Run\Runner::grantCounts()}
+	 * must NEVER issue a pre-approval grant for, however many times the
+	 * accepted plan lists them. Default empty (every 0.2/0.3-era verb stays
+	 * grantable). A verb here still gates and audits normally — it just asks
+	 * a human every single time (the plan card marks it "asks every time")
+	 * rather than being spendable ahead of the calls, which is the right
+	 * shape for an operation like a customer-facing refund or note where
+	 * pre-approving N of them is not the same promise as approving each one.
+	 *
+	 * @return list<string>
+	 */
+	public function ungrantableVerbs(): array {
+		return array();
 	}
 
 	/**

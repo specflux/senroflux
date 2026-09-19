@@ -58,10 +58,42 @@ final class PackRegistry {
 	/**
 	 * Register (or replace) a pack, keyed by its own `name()`.
 	 *
+	 * S19: refuses (skips, never stores) a pack whose {@see Pack::abilityNamespaces()}
+	 * doesn't END with `Pack::POLYFILL_NAMESPACE`. That list is walked in
+	 * order for every role resolution, and only the LAST entry is treated as
+	 * the guaranteed fallback (no compat check) — a list that doesn't end
+	 * there could resolve a role to an ability that was never confirmed to
+	 * exist, at all, which is a fail-OPEN shape this registry must never
+	 * carry. The same "drop the offender, keep going" reading as
+	 * {@see fromFilters()}'s "not a Pack" case; a `_doing_it_wrong` notice
+	 * names the culprit for whoever wired the misconfigured pack.
+	 *
 	 * @param Pack $pack The pack to register.
 	 * @return self For chaining.
 	 */
 	public function register( Pack $pack ): self {
+		$namespaces = $pack->abilityNamespaces();
+		$last       = end( $namespaces );
+
+		if ( Pack::POLYFILL_NAMESPACE !== $last ) {
+			if ( function_exists( '_doing_it_wrong' ) ) {
+				_doing_it_wrong(
+					__METHOD__,
+					esc_html(
+						sprintf(
+							/* translators: 1: pack name, 2: required namespace */
+							__( 'The pack "%1$s" was refused: abilityNamespaces() must end with "%2$s".', 'senroflux' ),
+							$pack->name(),
+							Pack::POLYFILL_NAMESPACE
+						)
+					),
+					'0.3.0'
+				);
+			}
+
+			return $this;
+		}
+
 		$this->packs[ $pack->name() ] = $pack;
 
 		return $this;

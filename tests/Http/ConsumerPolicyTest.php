@@ -58,6 +58,7 @@ final class ConsumerPolicyTest extends TestCase {
 				'max_questions'  => 5,
 				'max_plans'      => 3,
 				'images'         => 6,
+				'refunds'        => 1,
 			),
 			$result['budget']
 		);

@@ -368,6 +368,54 @@ final class GrantsTest extends TestCase {
 	}
 
 	/**
+	 * S19: a pack's ungrantable Tier-2 verb never gets a pre-approval grant,
+	 * however the plan lists it — while an ORDINARY grantable Tier-2 verb in
+	 * the SAME plan step is still granted as before. Modelled on the commerce
+	 * pack's shape (`commerce/order-note-customer`, `commerce/refund`).
+	 */
+	public function test_an_ungrantable_tier_2_verb_gets_no_grant_while_a_grantable_one_in_the_same_plan_does(): void {
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new RecordingBridge(),
+			null,
+			static fn (): array => array(
+				'commerce/order-note-private'  => VerbTier::TIER_1,
+				'commerce/order-note-customer' => VerbTier::TIER_2,
+				'commerce/refund'              => VerbTier::TIER_2,
+			),
+			null,
+			null,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			static fn ( $run, string $pack_verb ): ?string => 'senroflux/' . str_replace( 'commerce/', '', $pack_verb ),
+			null,
+			null,
+			// S19: the ungrantable-verbs resolver — the new, LAST constructor
+			// parameter. Every run gets the same fixed list in this test.
+			static fn ( $run ): array => array( 'commerce/refund' ) // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- the real resolver shape is callable(Run):list<string>; this fixture ignores which run.
+		);
+
+		list( $run_id ) = $this->parkPlan(
+			array(
+				array( 'commerce/order-note-customer', 'commerce/refund' ),
+			),
+			$runner
+		);
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		// Only the grantable verb (order-note-customer) is granted; refund,
+		// though Tier-2 and named in the same step, is skipped entirely.
+		$this->assertCount( 1, $this->grants->issued );
+		$this->assertSame( 'senroflux/order-note-customer', $this->grants->issued[0]['verb'] );
+		$this->assertSame( 1, $this->grants->issued[0]['count'] );
+	}
+
+	/**
 	 * A model that re-plans (run 51 did, to add `pages/update-draft`) gets its
 	 * replacement plan accepted — and the FIRST plan's grants must go with the
 	 * plan they were bought for, or two accepts stack two plans' worth of
