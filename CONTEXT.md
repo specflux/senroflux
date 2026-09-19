@@ -91,6 +91,11 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   assigned to the theme's location. Creating a navigation, or choosing where it appears, is not part
   of the concept — a run edits the navigation the site already has. Because it is by definition the
   one visitors see, every change to it is Tier 2.
+  Where it renders a Page List, publishing a page changes it with no navigation write at all, so a
+  plan that publishes pages must say so.
+- **Adopted object** — an existing page, navigation or setting that a plan takes into a run's scope
+  instead of creating it. The plan names it with its ID and status, and the run changes it only
+  where the plan says so; adopting a page links it as-is unless the human asked for a rewrite.
 
 - **Verb** — the unit Agent Safety tiers, grants and audits. A pack maps each (role, input
   shape) to a verb, so one ability can be several verbs (editing a draft and publishing it
@@ -115,6 +120,9 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   the run trying to write it. The refusal belongs to the ability that performs the write, not to the
   model's judgement, so a run parked for days cannot silently overwrite an edit a human made in the
   meantime. A stale write is a refusal the model must react to, never a warning it may proceed past.
+- **Slug collision** — a create refused because a non-trashed object already holds the slug. The
+  refusal belongs to the ability, like a stale write, because WordPress leaves draft slugs
+  un-deduplicated and would otherwise surface the duplicate as `-2` only at publish.
 - **Report** — the run's closing summary: the model's prose plus a harness-built list of every
   object written (status, edit and preview links, verified or not). Links come from the
   harness, never from the model. Cancelled and failed runs still get a partial report.
