@@ -27,6 +27,11 @@ final class PluginWithheldRolesTest extends TestCase {
 		$GLOBALS['senroflux_test_user_caps_by_id'] = array();
 		$GLOBALS['wpdb']                           = new wpdb();
 		Plugin::set_dependency_probe( true ); // AS mode: preflight's binding check is the fixture's own (always bound).
+		// 0.3 S11: in AS mode the run capability is checked too, alongside the
+		// binding. This fixture models a Contributor — holds the pack's run
+		// capability (`edit_posts`) but not `upload_files` — never an
+		// unprivileged user who couldn't even reach the pack picker.
+		$GLOBALS['senroflux_test_user_caps_by_id'][1]['edit_posts'] = true;
 	}
 
 	protected function tearDown(): void {

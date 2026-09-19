@@ -549,14 +549,15 @@ abstract class Pack {
 	 * {@see preflight()} asks, in the SAME order, so the setup panel and the
 	 * preflight refusal can never disagree.
 	 *
-	 * 0.3 S3 unchanged behind the scenes: in built-in mode the run capability
-	 * (or, when the pack refuses to run ungoverned, {@see requiresAgentSafety()})
-	 * is the whole test; in Agent Safety mode {@see agentSafetyBindingError()}
-	 * is the whole test — Agent Safety mode has never asked the WP capability
-	 * question here (a Capability Pack binding IS the governance seam there),
-	 * and 0.3 does not widen that (a fixture-pack regression test — S6's
-	 * withheld-roles worked example — pins a user bound but capability-less in
-	 * AS mode as a PASS).
+	 * In built-in mode the run capability (or, when the pack refuses to run
+	 * ungoverned, {@see requiresAgentSafety()}) is the whole test. In Agent
+	 * Safety mode BOTH the run capability AND {@see agentSafetyBindingError()}
+	 * must hold (S11: "the viewer holds the pack's run capability and, in AS
+	 * mode only, has a valid pack binding") — a Capability Pack binding is the
+	 * governance seam there, but it never substitutes for the WP capability
+	 * question; a user with neither, or with only one of the two, is refused.
+	 * `firstBlockingFailure()` returns whichever of the two checks fails
+	 * first, in the order below.
 	 *
 	 * @param int $user_id The user the run would be started for.
 	 * @return list<SetupCheck>
@@ -570,7 +571,7 @@ abstract class Pack {
 			return array( $this->capabilityCheck( $user_id ) );
 		}
 
-		return array( $this->bindingCheck( $user_id ) );
+		return array( $this->capabilityCheck( $user_id ), $this->bindingCheck( $user_id ) );
 	}
 
 	/** The `<pack>/capability` setup check (built-in mode's whole test). */

@@ -158,4 +158,82 @@ final class PackTest extends TestCase {
 		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_others_posts' => true ) );
 		$this->assertTrue( $pack->preflight( 9 ) );
 	}
+
+	/**
+	 * 0.3 S11: in AS mode a pack check passes only when the viewer holds the
+	 * run capability AND has a valid binding — BOTH, not binding alone.
+	 */
+	private function packRequiringCapability( ?WP_Error $binding_error ): Pack {
+		return new class( $binding_error ) extends Pack {
+			public function __construct( private readonly ?WP_Error $binding_error ) {
+				parent::__construct( array() );
+			}
+
+			public function name(): string {
+				return 'fixture-both';
+			}
+
+			public function verbMap(): array {
+				return array();
+			}
+
+			public function runCapability(): string {
+				return 'edit_posts';
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return $this->binding_error;
+			}
+		};
+	}
+
+	public function test_agent_safety_mode_refuses_when_bound_but_lacking_the_run_capability(): void {
+		Plugin::set_dependency_probe( true ); // AS mode.
+
+		$pack                                      = $this->packRequiringCapability( null ); // Bound.
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_posts' => false ) );
+
+		$refused = $pack->preflight( 9 );
+
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'pack_unbound', $refused->get_error_code() );
+	}
+
+	public function test_agent_safety_mode_refuses_when_capable_but_unbound(): void {
+		Plugin::set_dependency_probe( true ); // AS mode.
+
+		$pack                                      = $this->packRequiringCapability(
+			new WP_Error( 'pack_unbound', 'Not bound.', array( 'status' => 400 ) )
+		);
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_posts' => true ) );
+
+		$refused = $pack->preflight( 9 );
+
+		$this->assertInstanceOf( WP_Error::class, $refused );
+		$this->assertSame( 'pack_unbound', $refused->get_error_code() );
+	}
+
+	public function test_agent_safety_mode_passes_when_both_capable_and_bound(): void {
+		Plugin::set_dependency_probe( true ); // AS mode.
+
+		$pack                                      = $this->packRequiringCapability( null ); // Bound.
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_posts' => true ) );
+
+		$this->assertTrue( $pack->preflight( 9 ) );
+	}
+
+	public function test_built_in_mode_checks_only_the_run_capability_never_the_binding(): void {
+		Plugin::set_dependency_probe( false ); // Built-in mode.
+
+		// A binding error that WOULD refuse in AS mode — proves built-in mode
+		// never asks the binding question at all (S3/S11).
+		$pack                                      = $this->packRequiringCapability(
+			new WP_Error( 'pack_unbound', 'Not bound.', array( 'status' => 400 ) )
+		);
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_posts' => true ) );
+
+		$this->assertTrue( $pack->preflight( 9 ) );
+	}
 }
