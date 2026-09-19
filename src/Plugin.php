@@ -60,6 +60,9 @@ final class Plugin {
 	/** The one posts-pack instance this request shares (S5). */
 	private ?\Specflux\SenroFlux\Packs\Posts\PostsPack $posts_pack = null;
 
+	/** The one site-pack instance this request shares (S7). */
+	private ?\Specflux\SenroFlux\Packs\Site\SitePack $site_pack = null;
+
 	/** Whether {@see govern()} has already wired its filters this request. */
 	private bool $governed = false;
 
@@ -125,11 +128,13 @@ final class Plugin {
 
 		$pages_pack = $this->pages_pack();
 		$posts_pack = $this->posts_pack();
+		$site_pack  = $this->site_pack();
 		add_filter(
 			'senroflux_packs',
 			static fn ( array $packs ): array => $packs + array(
 				'pages' => $pages_pack,
 				'posts' => $posts_pack,
+				'site'  => $site_pack,
 			),
 			10,
 			1
@@ -161,6 +166,17 @@ final class Plugin {
 	}
 
 	/**
+	 * The request's one site-pack instance (S7).
+	 */
+	private function site_pack(): \Specflux\SenroFlux\Packs\Site\SitePack {
+		if ( null === $this->site_pack ) {
+			$this->site_pack = new \Specflux\SenroFlux\Packs\Site\SitePack();
+		}
+
+		return $this->site_pack;
+	}
+
+	/**
 	 * Wire runtime seams. Called once from plugins_loaded (priority 5, after
 	 * Agent Safety's own priority-0 bootstrap so its classes exist).
 	 */
@@ -187,13 +203,14 @@ final class Plugin {
 		$this->govern();
 		$pages_pack = $this->pages_pack();
 		$posts_pack = $this->posts_pack();
+		$site_pack  = $this->site_pack();
 		// The AS pack resolves the ability allow-list, which touches the
 		// Abilities registry — that must not happen before `init`, so the
 		// registration is deferred with the pack captured by value.
 		add_action(
 			'init',
-			static function () use ( $pages_pack, $posts_pack ): void {
-				foreach ( array( $pages_pack, $posts_pack ) as $pack ) {
+			static function () use ( $pages_pack, $posts_pack, $site_pack ): void {
+				foreach ( array( $pages_pack, $posts_pack, $site_pack ) as $pack ) {
 					$as_pack = $pack->agentSafetyPack();
 					if ( null === $as_pack ) {
 						continue;
@@ -217,6 +234,10 @@ final class Plugin {
 		\Specflux\SenroFlux\Packs\Content\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Content\Media::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
+		// S7: site navigation + front-page abilities. Navigation::boot() also
+		// registers the shared `senroflux-site` ability category.
+		\Specflux\SenroFlux\Packs\Site\Navigation::boot();
+		\Specflux\SenroFlux\Packs\Site\FrontPage::boot();
 		// 0.3 S4: the pages pack's vocabulary/validator plug into the shared
 		// content registrar under its own slug — `list-patterns` and the write
 		// abilities resolve THIS pair only while a 'pages' run is ticking (see
@@ -236,6 +257,16 @@ final class Plugin {
 			$posts_vocabulary,
 			'edit_posts'
 		);
+		// S7: same registration for the site pack, under its own slug — its
+		// Vocabulary/Validator extend the pages pack's with the two
+		// homepage-only patterns (page-links, intro).
+		$site_vocabulary = new \Specflux\SenroFlux\Packs\Site\Vocabulary();
+		\Specflux\SenroFlux\Packs\Content\Abilities::registerSource(
+			'site',
+			new \Specflux\SenroFlux\Packs\Site\Validator( $site_vocabulary ),
+			$site_vocabulary,
+			'manage_options'
+		);
 		// S14: object binding for pre-approval grants. Registered
 		// unconditionally and answering FALSE until a tick opens a run context
 		// — a missing hook would mean "no grant applies", never "every grant
@@ -243,12 +274,13 @@ final class Plugin {
 		\Specflux\SenroFlux\Run\GrantEligibility::boot();
 		add_action(
 			'init',
-			static function () use ( $pages_pack, $posts_pack ): void {
+			static function () use ( $pages_pack, $posts_pack, $site_pack ): void {
 				// Pattern registration rides each pack's vocabulary; failures
 				// must never break the site — the Validator refuses unknown
 				// markup at write time regardless (fail closed there).
 				$pages_pack->registerPatterns();
 				$posts_pack->registerPatterns();
+				$site_pack->registerPatterns();
 			},
 			20
 		);
@@ -418,7 +450,7 @@ final class Plugin {
 			$consumer,
 			$goal,
 			$allow,
-			Budget::sanitize( $budget ),
+			Budget::sanitize( $budget, null !== $pack_obj ? $pack_obj->defaultBudget() : array() ),
 			$pack,
 			$conversation_locale,
 			$content_locale,
@@ -517,6 +549,9 @@ final class Plugin {
 		// 0.3 S5: the media registrar's images-budget spend count and
 		// attachment cap are both derived from THIS run's row/steps.
 		\Specflux\SenroFlux\Packs\Content\Media::useRunContext( $run_id, $this->runner()->store() );
+		// 0.3 S7/S8: the site navigation registrar's stale-write compare reads
+		// and updates THIS run's tracker — same discipline as Content\Abilities.
+		\Specflux\SenroFlux\Packs\Site\Navigation::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
 			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
@@ -525,6 +560,7 @@ final class Plugin {
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Site\Navigation::forgetRunContext();
 		}
 	}
 
