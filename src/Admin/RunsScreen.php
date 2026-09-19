@@ -31,6 +31,7 @@ use Specflux\SenroFlux\Http\ConsumerPolicy;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Report;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
 use Specflux\SenroFlux\Setup\Checks;
@@ -1626,8 +1627,12 @@ class RunsScreen {
 		$summary = (string) ( $report['summary'] ?? '' );
 		if ( '' !== $summary ) {
 			// CONTENT BOUNDARY — report summary prose is MODEL-AUTHORED (S12/S15),
-			// rendered verbatim, never __().
-			echo '<div class="senroflux-report-summary"><p>' . esc_html( $summary ) . '</p></div>';
+			// rendered verbatim (never __()), but defensively de-markdowned
+			// (defect fix: a live run showed literal `**text**`) and STILL
+			// escaped — plainSummary() strips markup TOKENS only, it never
+			// renders HTML, so esc_html() here is exactly as load-bearing as
+			// it was before.
+			echo '<div class="senroflux-report-summary"><p>' . esc_html( Report::plainSummary( $summary ) ) . '</p></div>';
 		}
 
 		$changes = is_array( $report['changes'] ?? null ) ? $report['changes'] : array();

@@ -160,6 +160,45 @@ final class Report {
 	}
 
 	/**
+	 * Strip the common markdown tokens the model's summary prose sometimes
+	 * carries despite the harness telling it to write plain sentences
+	 * (defect fix — a live run showed literal `**text**` in the rendered
+	 * report). This is a DISPLAY-time defence, not a content rewrite: it
+	 * never touches the stored `summary`, only what a renderer shows, and it
+	 * strips MARKUP TOKENS only — it is not a markdown-to-HTML conversion
+	 * and never introduces any HTML of its own. The caller must still escape
+	 * the result for its output context (e.g. `esc_html()`); this method
+	 * carries no opinion on HTML and passes angle brackets through
+	 * unchanged, exactly as it received them.
+	 *
+	 * Handles: `**bold**`/`__bold__` → `bold`, `*em*`/`_em*` → `em`,
+	 * `` `code` `` → `code`, and a leading `#`+space heading marker on any
+	 * line. Anything else (the model's actual words) passes through
+	 * unchanged.
+	 */
+	public static function plainSummary( string $raw ): string {
+		$text = $raw;
+
+		// Bold/italic emphasis: strip the wrapping asterisks/underscores,
+		// keep the text between them. Longest markers first so `**bold**`
+		// is not left with stray single asterisks by the `*em*` pass.
+		$text = preg_replace( '/\*\*\*(.+?)\*\*\*/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/___(.+?)___/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/\*\*(.+?)\*\*/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/__(.+?)__/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/s', '$1', $text ) ?? $text;
+
+		// Inline code.
+		$text = preg_replace( '/`([^`]*)`/', '$1', $text ) ?? $text;
+
+		// A leading heading marker ("# ", "## ", …) at the start of a line.
+		$text = preg_replace( '/^#{1,6}\s+/m', '', $text ) ?? $text;
+
+		return $text;
+	}
+
+	/**
 	 * The default wpAdapter: a closure resolving a WP post for an object id.
 	 *
 	 * Every WP call is guarded with `function_exists` so unit tests (which
