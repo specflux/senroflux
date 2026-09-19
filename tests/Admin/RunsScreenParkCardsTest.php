@@ -330,6 +330,90 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$this->assertStringContainsString( '&lt;script&gt;', $html );
 	}
 
+	/**
+	 * Defect 4 (0.3 live run): the built-in gate parks every call whose tier
+	 * is above 0 ({@see \Specflux\SenroFlux\Tools\BuiltinGate}), so the
+	 * built-in-mode plan card's approval count must count Tier >= 1 steps —
+	 * not Tier >= 2, which is the count that actually matters in AS mode.
+	 * The exact verb list from the live run: 4 of the 6 steps are Tier 1
+	 * (create-draft, media-generate, update-alt, set-featured-image); the
+	 * other two are Tier 0 (read, media-search).
+	 *
+	 * @return list<array<string,mixed>>
+	 */
+	private function livePlanSteps(): array {
+		return array(
+			array(
+				'text'  => 'Create the draft post',
+				'verbs' => array( 'posts/create-draft' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Generate the image',
+				'verbs' => array( 'posts/media-generate' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Update the alt text',
+				'verbs' => array( 'posts/update-alt' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Set the featured image',
+				'verbs' => array( 'posts/set-featured-image' ),
+				'tier'  => 1,
+			),
+			array(
+				'text'  => 'Read the post',
+				'verbs' => array( 'posts/read' ),
+				'tier'  => 0,
+			),
+			array(
+				'text'  => 'Search for media',
+				'verbs' => array( 'posts/media-search' ),
+				'tier'  => 0,
+			),
+		);
+	}
+
+	public function test_built_in_mode_plan_card_counts_tier_one_and_above_as_approvals(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingPlan,
+			StepKind::Plan,
+			array(
+				'steps'       => $this->livePlanSteps(),
+				'assumptions' => array(),
+			),
+			null,
+			\Specflux\SenroFlux\Run\GateMode::BuiltIn
+		);
+
+		$this->assertStringContainsString(
+			'This plan will ask you to approve 4 changes.',
+			$html,
+			'built-in mode parks every Tier >= 1 call, so 4 of the 6 steps need approval'
+		);
+	}
+
+	public function test_agent_safety_mode_plan_card_counts_only_tier_two_as_approvals(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingPlan,
+			StepKind::Plan,
+			array(
+				'steps'       => $this->livePlanSteps(),
+				'assumptions' => array(),
+			),
+			null,
+			\Specflux\SenroFlux\Run\GateMode::AgentSafety
+		);
+
+		// AS mode has no approval-count paragraph at all (S3): the "needs
+		// approval" markers on the Tier-2 steps are the AS-mode equivalent,
+		// and none of these six steps is Tier 2.
+		$this->assertStringNotContainsString( 'senroflux-plan-approval-count', $html );
+		$this->assertStringNotContainsString( 'needs approval', $html );
+	}
+
 	// ------------------------------------------------------------------
 	// Approval card (S6/S15)
 	// ------------------------------------------------------------------
@@ -513,8 +597,8 @@ final class RunsScreenParkCardsTest extends TestCase {
 	 *
 	 * @param array<string,mixed> $payload The stored park payload.
 	 */
-	private function renderPark( RunStatus $status, StepKind $kind, array $payload, ?string $pack = null ): string {
-		$run_id = $this->seedRun( $pack );
+	private function renderPark( RunStatus $status, StepKind $kind, array $payload, ?string $pack = null, \Specflux\SenroFlux\Run\GateMode $gate_mode = \Specflux\SenroFlux\Run\GateMode::AgentSafety ): string {
+		$run_id = $this->seedRun( $pack, $gate_mode );
 		$store  = new WpdbRunStore( $GLOBALS['wpdb'] );
 		$store->appendStep( $run_id, $kind, $payload );
 		$store->updateRun( $run_id, array( 'status' => $status->value ) );
@@ -533,7 +617,7 @@ final class RunsScreenParkCardsTest extends TestCase {
 	}
 
 	/** A run owned by the current user, optionally bound to a pack. */
-	private function seedRun( ?string $pack = null ): int {
+	private function seedRun( ?string $pack = null, \Specflux\SenroFlux\Run\GateMode $gate_mode = \Specflux\SenroFlux\Run\GateMode::AgentSafety ): int {
 		$this->seedRunnerGraph();
 
 		return ( new WpdbRunStore( $GLOBALS['wpdb'] ) )->createRun(
@@ -548,7 +632,10 @@ final class RunsScreenParkCardsTest extends TestCase {
 				'max_questions'  => 1,
 				'max_plans'      => 1,
 			),
-			$pack
+			$pack,
+			null,
+			null,
+			$gate_mode
 		);
 	}
 

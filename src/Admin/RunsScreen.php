@@ -1443,7 +1443,7 @@ class RunsScreen {
 		if ( $built_in ) {
 			$needs_approval = 0;
 			foreach ( $steps as $step ) {
-				if ( $this->stepNeedsApproval( $step ) ) {
+				if ( $this->stepParksInBuiltinMode( $step ) ) {
 					++$needs_approval;
 				}
 			}
@@ -1723,7 +1723,33 @@ class RunsScreen {
 	 *
 	 * @param array<string,mixed> $step The plan step.
 	 */
+	/**
+	 * @param array<string,mixed> $step One plan step payload.
+	 */
 	private function stepNeedsApproval( array $step ): bool {
+		return $this->stepAtOrAboveTier( $step, VerbTier::TIER_2 );
+	}
+
+	/**
+	 * S3/S19 (defect 4): the BUILT-IN gate parks every call above Tier 0
+	 * (see {@see \Specflux\SenroFlux\Tools\BuiltinGate::$active}: "tier
+	 * above 0, or unmapped"), NOT just Tier 2 — that threshold is Agent
+	 * Safety mode's own ("needs approval", {@see self::stepNeedsApproval()}).
+	 * The plan card's built-in-mode approval count must use THIS threshold,
+	 * or it undercounts (live run: a 6-step plan with 4 Tier-1 writes showed
+	 * "0 changes").
+	 *
+	 * @param array<string,mixed> $step One plan step payload.
+	 */
+	private function stepParksInBuiltinMode( array $step ): bool {
+		return $this->stepAtOrAboveTier( $step, VerbTier::TIER_1 );
+	}
+
+	/**
+	 * @param array<string,mixed> $step      One plan step payload.
+	 * @param int                 $threshold The minimum tier that counts.
+	 */
+	private function stepAtOrAboveTier( array $step, int $threshold ): bool {
 		$verbs = $step['verbs'] ?? array();
 		if ( ! is_array( $verbs ) ) {
 			return false;
@@ -1738,7 +1764,7 @@ class RunsScreen {
 			// `(int)` cast makes `is_int((int)$step['tier'])` always true, so the
 			// guard is simply whether the tier is present (unchanged behaviour).
 			$tier = isset( $step['tier'] ) ? (int) $step['tier'] : VerbTier::tierFor( $verb );
-			if ( $tier >= VerbTier::TIER_2 ) {
+			if ( $tier >= $threshold ) {
 				return true;
 			}
 		}
