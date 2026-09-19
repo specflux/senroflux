@@ -1,12 +1,15 @@
 <?php
 /**
- * Site\FrontPage tests (stage 7, S7).
+ * Site\FrontPage tests (stage 7/8, S7/S8).
  *
  * TARGET REPO PATH: tests/Packs/Site/FrontPageTest.php
  *
- * Covers: reading the current settings with titles, and that switching from
+ * Covers: reading the current settings with titles, that switching from
  * "latest posts" to a static front page sets `page_for_posts` in the SAME
- * write when given, while never touching the OLD front page's post.
+ * write when given, while never touching the OLD front page's post, and the
+ * S8 stale-write discipline: `set-front-page` refuses when the run never
+ * read the front page, or when an external change happened between the read
+ * and the write.
  *
  * @package SenroFlux
  */
@@ -17,8 +20,15 @@ namespace Specflux\SenroFlux\Tests\Packs\Site;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Site\FrontPage;
+use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\WpdbRunStore;
+use wpdb;
 
 final class FrontPageTest extends TestCase {
+
+	private WpdbRunStore $store;
+
+	private int $runId;
 
 	private function loadShims(): void {
 		require_once dirname( __DIR__, 2 ) . '/stubs/blocks.php';
@@ -36,6 +46,14 @@ final class FrontPageTest extends TestCase {
 
 		FrontPage::reset();
 		FrontPage::register();
+
+		$this->store = new WpdbRunStore( new wpdb() );
+		$this->runId = $this->store->createRun( 1, 'test', 'goal', array(), Budget::defaults() );
+		FrontPage::useRunContext( $this->runId, $this->store );
+	}
+
+	protected function tearDown(): void {
+		FrontPage::forgetRunContext();
 	}
 
 	private function readAbility(): object {
@@ -52,6 +70,88 @@ final class FrontPageTest extends TestCase {
 		$this->assertSame( 'posts', $result['show_on_front'] );
 		$this->assertNull( $result['page_on_front'] );
 		$this->assertNull( $result['page_for_posts'] );
+	}
+
+	public function test_set_front_page_refuses_without_a_prior_read(): void {
+		$new_home = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home',
+			)
+		);
+
+		// Never read via the ability — the run has no recorded marker at
+		// all, which fails closed exactly like an external edit would.
+		$result = $this->setAbility()->execute(
+			array(
+				'show_on_front' => 'page',
+				'page_id'       => $new_home,
+			)
+		);
+
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'stale_write', $result->get_error_code() );
+		$this->assertSame( 409, $result->get_error_data()['status'] );
+	}
+
+	public function test_set_front_page_succeeds_after_a_read(): void {
+		$new_home  = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home',
+			)
+		);
+		$blog_page = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Blog',
+			)
+		);
+
+		$this->readAbility()->execute();
+
+		$result = $this->setAbility()->execute(
+			array(
+				'show_on_front'     => 'page',
+				'page_id'           => $new_home,
+				'page_for_posts_id' => $blog_page,
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'page', $result['show_on_front'] );
+		$this->assertSame( $new_home, $result['page_on_front']['id'] );
+		$this->assertSame( $blog_page, $result['page_for_posts']['id'] );
+	}
+
+	public function test_set_front_page_refuses_when_settings_changed_externally_between_read_and_set(): void {
+		$new_home = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home',
+			)
+		);
+
+		$this->readAbility()->execute();
+
+		// Simulate an external change to the Reading Settings screen (or any
+		// other plugin) after the run's read, before its write.
+		update_option( 'show_on_front', 'page' );
+		update_option( 'page_on_front', 999999 );
+
+		$result = $this->setAbility()->execute(
+			array(
+				'show_on_front' => 'page',
+				'page_id'       => $new_home,
+			)
+		);
+
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'stale_write', $result->get_error_code() );
 	}
 
 	public function test_set_front_page_from_posts_to_static_sets_page_for_posts_in_one_write_and_leaves_old_front_page_untouched(): void {
@@ -85,6 +185,8 @@ final class FrontPageTest extends TestCase {
 
 		$before_modified = get_post( $old_front_page )->post_modified_gmt;
 
+		$this->readAbility()->execute();
+
 		$result = $this->setAbility()->execute(
 			array(
 				'show_on_front'     => 'page',
@@ -106,6 +208,8 @@ final class FrontPageTest extends TestCase {
 	}
 
 	public function test_set_front_page_refuses_an_unknown_page(): void {
+		$this->readAbility()->execute();
+
 		$result = $this->setAbility()->execute(
 			array(
 				'show_on_front' => 'page',
@@ -115,5 +219,44 @@ final class FrontPageTest extends TestCase {
 
 		$this->assertInstanceOf( \WP_Error::class, $result );
 		$this->assertSame( 'not_found', $result->get_error_code() );
+	}
+
+	public function test_set_front_page_may_keep_editing_after_its_own_write_without_re_reading(): void {
+		$home_a = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home A',
+			)
+		);
+		$home_b = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home B',
+			)
+		);
+
+		$this->readAbility()->execute();
+
+		$first = $this->setAbility()->execute(
+			array(
+				'show_on_front' => 'page',
+				'page_id'       => $home_a,
+			)
+		);
+		$this->assertIsArray( $first );
+
+		// A second write in the same run, with no intervening read, must
+		// succeed off the first write's own after-write re-record.
+		$second = $this->setAbility()->execute(
+			array(
+				'show_on_front' => 'page',
+				'page_id'       => $home_b,
+			)
+		);
+
+		$this->assertIsArray( $second );
+		$this->assertSame( $home_b, $second['page_on_front']['id'] );
 	}
 }

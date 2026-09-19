@@ -552,6 +552,10 @@ final class Plugin {
 		// 0.3 S7/S8: the site navigation registrar's stale-write compare reads
 		// and updates THIS run's tracker — same discipline as Content\Abilities.
 		\Specflux\SenroFlux\Packs\Site\Navigation::useRunContext( $run_id, $this->runner()->store() );
+		// 0.3 S8: the front-page registrar's own stale-write compare, scoped
+		// the same way — its own OBJECT_ID, so it never collides with
+		// Navigation's marker on the same run.
+		\Specflux\SenroFlux\Packs\Site\FrontPage::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
 			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
@@ -561,6 +565,7 @@ final class Plugin {
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\Navigation::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Site\FrontPage::forgetRunContext();
 		}
 	}
 

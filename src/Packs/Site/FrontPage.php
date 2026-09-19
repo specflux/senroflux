@@ -11,11 +11,11 @@
  * write (all three options land together); the OLD front page post itself is
  * never modified (S7 — only the option pointing at it changes).
  *
- * No stale-write check here (0.3 S8 names `read-navigation`/`update-navigation`
- * explicitly for the run-context marker mechanism; the front-page options are
- * a single small settings write with no vocabulary/markup race to protect
- * against, so this pack does not add one — documented deviation from S8's
- * more general "(and read-navigation, read-front-page)" phrasing).
+ * STALE WRITE (0.3 S8), same discipline as `Navigation`: a marker — a hash of
+ * `show_on_front|page_on_front|page_for_posts` — is recorded on the run's
+ * tracker at `read-front-page` time and compared at `set-front-page` time,
+ * fail closed on a mismatch or an unread front page. Scoped to one tick via
+ * {@see useRunContext()}, mirroring `Navigation::useRunContext()`.
  *
  * @package SenroFlux
  */
@@ -24,6 +24,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Site;
 
+use Specflux\SenroFlux\Run\RunStore;
+use Specflux\SenroFlux\Run\Tracker;
 use WP_Error;
 
 // Bail on direct access.
@@ -37,8 +39,22 @@ final class FrontPage {
 	/** The capability that gates both abilities. */
 	private const CAPABILITY = 'manage_options';
 
+	/**
+	 * The synthetic tracker id the run's `objects_json` map records the
+	 * front-page marker under (0.3 S8) — there is exactly one front-page
+	 * settings triple in play per run, so a fixed string key (never a
+	 * model-supplied argument) is enough.
+	 */
+	private const OBJECT_ID = 'site-front-page';
+
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
+
+	/** The ticking run's id, or null outside one (S8). */
+	private static ?int $current_run_id = null;
+
+	/** The store used to read/persist the current run's `objects_json` (S8). */
+	private static ?RunStore $store = null;
 
 	/**
 	 * Wire the ability registration hook (call once, from the composition
@@ -57,6 +73,83 @@ final class FrontPage {
 	/** Forget the per-request registered flag (test-only). */
 	public static function reset(): void {
 		self::$registered = false;
+	}
+
+	/**
+	 * Enter the run context for one tick (0.3 S8): mirrors
+	 * `Navigation::useRunContext()` — set by the composition root from the
+	 * ticking run's id, NEVER from the model.
+	 *
+	 * @param int|null      $run_id The ticking run's id, or null.
+	 * @param RunStore|null $store  The store backing that run, or null.
+	 */
+	public static function useRunContext( ?int $run_id, ?RunStore $store ): void {
+		self::$current_run_id = $run_id;
+		self::$store          = $store;
+	}
+
+	/** Leave the run context (mirrors {@see useRunContext()}). */
+	public static function forgetRunContext(): void {
+		self::$current_run_id = null;
+		self::$store          = null;
+	}
+
+	/**
+	 * The current run's `objects_json` map, or an empty set with no run
+	 * context resolved (fail closed).
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function currentObjects(): array {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return array();
+		}
+
+		$run = self::$store->getRun( self::$current_run_id );
+
+		return ( null !== $run && is_array( $run->objects ) ) ? $run->objects : array();
+	}
+
+	/**
+	 * Record the front page's modified marker on the current run's tracker
+	 * (0.3 S8). A no-op with no run context resolved.
+	 *
+	 * @param string $marker The front page's current marker.
+	 */
+	private static function recordReadMarker( string $marker ): void {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return;
+		}
+
+		$objects = Tracker::recordRead( self::currentObjects(), self::OBJECT_ID, $marker );
+		self::$store->updateRun( self::$current_run_id, array( 'objects_json' => $objects ) );
+	}
+
+	/**
+	 * Whether a `set-front-page` write must be refused as a stale write (0.3
+	 * S8). Fails CLOSED (true, i.e. refuse) with no run context.
+	 *
+	 * @param string $current_marker The front page's CURRENT marker, read fresh.
+	 */
+	private static function isStaleWrite( string $current_marker ): bool {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return true;
+		}
+
+		return Tracker::staleWrite( self::currentObjects(), self::OBJECT_ID, $current_marker );
+	}
+
+	/**
+	 * A hash of the three front-page options (0.3 S8 marker) — any of them
+	 * changing (including an external Reading Settings edit) invalidates it.
+	 *
+	 * @param array<string,mixed> $settings {@see self::currentSettings()}'s shape.
+	 */
+	private static function marker( array $settings ): string {
+		$page_on_front  = $settings['page_on_front']['id'] ?? 0;
+		$page_for_posts = $settings['page_for_posts']['id'] ?? 0;
+
+		return md5( $settings['show_on_front'] . '|' . $page_on_front . '|' . $page_for_posts );
 	}
 
 	/**
@@ -194,7 +287,10 @@ final class FrontPage {
 	 * @return array<string,mixed>
 	 */
 	private static function executeReadFrontPage(): array {
-		return self::currentSettings();
+		$settings = self::currentSettings();
+		self::recordReadMarker( self::marker( $settings ) );
+
+		return $settings;
 	}
 
 	/**
@@ -202,6 +298,18 @@ final class FrontPage {
 	 * @return array<string,mixed>|WP_Error
 	 */
 	private static function executeSetFrontPage( array $input ): array|WP_Error {
+		// 0.3 S8: fail closed on a mismatch or an unread front page. Compared
+		// against the settings as they stand RIGHT NOW, before this write —
+		// an external Reading Settings change between the read and this call
+		// must be caught.
+		if ( self::isStaleWrite( self::marker( self::currentSettings() ) ) ) {
+			return new WP_Error(
+				'stale_write',
+				__( 'The front page settings changed since this run last read them. Re-read them before writing again.', 'senroflux' ),
+				array( 'status' => 409 )
+			);
+		}
+
 		$show_on_front = (string) ( $input['show_on_front'] ?? '' );
 		if ( ! in_array( $show_on_front, array( 'page', 'posts' ), true ) ) {
 			return new WP_Error(
@@ -252,7 +360,13 @@ final class FrontPage {
 			update_option( 'show_on_front', 'posts' );
 		}
 
-		return self::currentSettings();
+		$settings = self::currentSettings();
+
+		// The write's own after-write re-record, so this run may keep editing
+		// without re-reading (same discipline as Navigation).
+		self::recordReadMarker( self::marker( $settings ) );
+
+		return $settings;
 	}
 
 	/**
