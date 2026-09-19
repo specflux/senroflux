@@ -38,14 +38,17 @@ final class Vocabulary extends PagesVocabulary {
 	public const RULES_MAX_PAGE_LINKS = 1;
 
 	/**
-	 * The nine pattern definitions: the inherited seven, then the two
-	 * homepage-only ones.
+	 * The nine CURATED pattern definitions: the inherited seven, then the two
+	 * homepage-only ones (0.3 S21: overrides `curated()`, not `all()`, so the
+	 * inherited `all()` still appends this theme's own eligible patterns
+	 * after these nine, and `register()` still registers only these nine —
+	 * never a theme's own pattern).
 	 *
 	 * @return list<array<string,mixed>>
 	 */
-	public function all(): array {
+	public function curated(): array {
 		return array_merge(
-			parent::all(),
+			parent::curated(),
 			array(
 				$this->pageLinks(),
 				$this->intro(),

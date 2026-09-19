@@ -90,7 +90,7 @@ final class Validator extends PagesValidator {
 			);
 		}
 
-		if ( 'hero' !== ( $slugs[0] ?? '' ) ) {
+		if ( ! $this->isHeroSlug( $slugs[0] ?? '' ) ) {
 			return new WP_Error(
 				'page_shape',
 				__( 'The first pattern on a page must be the hero.', 'senroflux' ),
@@ -102,7 +102,12 @@ final class Validator extends PagesValidator {
 		}
 
 		foreach ( self::ONCE_SLUGS as $once_slug ) {
-			$seen_once = count( array_filter( $slugs, static fn ( string $s ): bool => $once_slug === $s ) );
+			$seen_once = count(
+				array_filter(
+					$slugs,
+					fn ( string $s ): bool => 'cta' === $once_slug ? $this->isCtaSlug( $s ) : $once_slug === $s
+				)
+			);
 			if ( $seen_once > 1 ) {
 				return new WP_Error(
 					'page_shape',

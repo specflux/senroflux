@@ -68,6 +68,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Content;
 
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Run\RunStore;
 use Specflux\SenroFlux\Run\Tracker;
 use WP_Error;
@@ -585,15 +586,15 @@ final class Abilities {
 					'required'             => array( 'patterns' ),
 					'additionalProperties' => false,
 					'properties'           => array(
-						'patterns' => array(
+						'patterns'               => array(
 							'type'  => 'array',
 							'items' => array(
 								'type'       => 'object',
 								'properties' => array(
-									'name'        => array( 'type' => 'string' ),
-									'title'       => array( 'type' => 'string' ),
-									'description' => array( 'type' => 'string' ),
-									'constraints' => array(
+									'name'          => array( 'type' => 'string' ),
+									'title'         => array( 'type' => 'string' ),
+									'description'   => array( 'type' => 'string' ),
+									'constraints'   => array(
 										'type'       => 'object',
 										'properties' => array(
 											'slots'  => array( 'type' => 'object' ),
@@ -603,10 +604,21 @@ final class Abilities {
 											),
 										),
 									),
-									'markup'      => array( 'type' => 'string' ),
+									'markup'        => array( 'type' => 'string' ),
+									// 0.3 S21: present INSTEAD of `markup` for a
+									// theme-derived entry — the model sends
+									// `{pattern, slots}`, never markup, for these.
+									'theme_derived' => array( 'type' => 'boolean' ),
+									'slots'         => array(
+										'type'  => 'array',
+										'items' => array( 'type' => 'object' ),
+									),
 								),
 							),
 						),
+						// 0.3 S21: the count of the active theme's own
+						// patterns that did NOT qualify (never named).
+						'theme_patterns_skipped' => array( 'type' => 'integer' ),
 					),
 				),
 				'execute_callback'    => static function ( $input = array() ) {
@@ -791,6 +803,7 @@ final class Abilities {
 				),
 				'title'     => array( 'type' => 'string' ),
 				'content'   => array( 'type' => 'string' ),
+				'sections'  => self::sectionsSchema(),
 				'status'    => array(
 					'type' => 'string',
 					'enum' => array( 'draft' ),
@@ -798,6 +811,35 @@ final class Abilities {
 				'slug'      => array( 'type' => 'string' ),
 				'parent'    => array( 'type' => 'integer' ),
 				'excerpt'   => array( 'type' => 'string' ),
+			),
+		);
+	}
+
+	/**
+	 * 0.3 S21: the `sections` array shared by `create-post`/`update-post`/
+	 * `publish-post` — a model composes a write from a list of items, each
+	 * either curated markup or a theme pattern's name + filled slots. Only
+	 * offered to the running pack when {@see sectionsAllowed()} says so;
+	 * declared on every content-pack ability's schema regardless (there is
+	 * only one shared ability), and refused at execute time for a pack that
+	 * may not use it (S21: "the posts pack never sees theme patterns").
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function sectionsSchema(): array {
+		return array(
+			'type'  => 'array',
+			'items' => array(
+				'type'                 => 'object',
+				'additionalProperties' => false,
+				'properties'           => array(
+					'markup'  => array( 'type' => 'string' ),
+					'pattern' => array( 'type' => 'string' ),
+					'slots'   => array(
+						'type'  => 'array',
+						'items' => array( 'type' => 'string' ),
+					),
+				),
 			),
 		);
 	}
@@ -843,6 +885,7 @@ final class Abilities {
 				),
 				'title'     => array( 'type' => 'string' ),
 				'content'   => array( 'type' => 'string' ),
+				'sections'  => self::sectionsSchema(),
 				'status'    => array(
 					'type' => 'string',
 					'enum' => $status_enum,
@@ -986,6 +1029,129 @@ final class Abilities {
 		$source = self::currentSource();
 
 		return null !== $source ? $source['vocabulary'] : null;
+	}
+
+	/**
+	 * 0.3 S21: whether the RUNNING pack may accept a `sections` write item —
+	 * only pages and site ("the posts pack never sees theme patterns", and
+	 * more generally never offers the `sections` composition form at all).
+	 */
+	private static function sectionsAllowed(): bool {
+		return null !== self::$current_pack && in_array( self::$current_pack, array( 'pages', 'site' ), true );
+	}
+
+	/**
+	 * 0.3 S21: resolve a call's `content`, honouring the new `sections` form.
+	 * Returns null when the call sent no `sections` at all (the caller keeps
+	 * its own `content`-only handling unchanged); a WP_Error on any `sections`
+	 * refusal; else the joined markup string to validate exactly like
+	 * hand-authored `content` (S21 decision: one validation path).
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function resolveWriteContent( array $input ): string|WP_Error|null {
+		$sections = $input['sections'] ?? null;
+		if ( ! is_array( $sections ) || array() === $sections ) {
+			return null;
+		}
+
+		if ( ! self::sectionsAllowed() ) {
+			return new WP_Error(
+				'sections_not_supported',
+				__( 'This pack does not support the sections form of content.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( isset( $input['content'] ) && '' !== (string) $input['content'] ) {
+			return new WP_Error(
+				'sections_and_content',
+				__( 'Send either content or sections, not both.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return self::renderSections( array_values( $sections ) );
+	}
+
+	/**
+	 * 0.3 S21: render each `sections` item to markup, in array order, and
+	 * join with a blank line. A `markup` item is used verbatim; a
+	 * `pattern`/`slots` item is resolved against the running pack's
+	 * {@see ThemePatternSource} and filled via {@see ThemePatterns::fill()}.
+	 *
+	 * @param list<mixed> $sections The call's `sections` input.
+	 */
+	private static function renderSections( array $sections ): string|WP_Error {
+		$vocabulary = self::currentVocabulary();
+		$parts      = array();
+
+		foreach ( $sections as $index => $section ) {
+			if ( ! is_array( $section ) ) {
+				return new WP_Error(
+					'section_invalid',
+					__( 'Each section must be an object.', 'senroflux' ),
+					array(
+						'status' => 400,
+						'index'  => $index,
+					)
+				);
+			}
+
+			if ( isset( $section['markup'] ) ) {
+				$parts[] = (string) $section['markup'];
+				continue;
+			}
+
+			if ( isset( $section['pattern'] ) ) {
+				if ( ! $vocabulary instanceof ThemePatternSource ) {
+					return new WP_Error(
+						'theme_pattern_unavailable',
+						__( 'Theme patterns are not available for this pack.', 'senroflux' ),
+						array(
+							'status' => 400,
+							'index'  => $index,
+						)
+					);
+				}
+
+				$pattern = $vocabulary->resolveThemePattern( (string) $section['pattern'] );
+				if ( null === $pattern ) {
+					return new WP_Error(
+						'theme_pattern_unknown',
+						__( 'That theme pattern is not available.', 'senroflux' ),
+						array(
+							'status'  => 400,
+							'index'   => $index,
+							'pattern' => $section['pattern'],
+						)
+					);
+				}
+
+				$slots  = array_values( array_map( 'strval', (array) ( $section['slots'] ?? array() ) ) );
+				$filled = ThemePatterns::fill( (string) $pattern['markup'], $slots );
+				if ( ! $filled['ok'] ) {
+					/** @var WP_Error $error */
+					$error = $filled['wp_error'];
+
+					return $error;
+				}
+
+				$parts[] = $filled['content'];
+				continue;
+			}
+
+			return new WP_Error(
+				'section_invalid',
+				__( 'Each section must supply markup or a pattern.', 'senroflux' ),
+				array(
+					'status' => 400,
+					'index'  => $index,
+				)
+			);
+		}
+
+		return implode( "\n\n", $parts );
 	}
 
 	/**
@@ -1218,7 +1384,12 @@ final class Abilities {
 			return $collision;
 		}
 
-		$content = (string) ( $input['content'] ?? '' );
+		$section_content = self::resolveWriteContent( $input );
+		if ( is_wp_error( $section_content ) ) {
+			return $section_content;
+		}
+
+		$content = null !== $section_content ? $section_content : (string) ( $input['content'] ?? '' );
 		$clean   = $validator->clean( $content, array( 'post_type' => $post_type ) );
 		if ( ! $clean['ok'] ) {
 			/** @var WP_Error $error */
@@ -1402,7 +1573,12 @@ final class Abilities {
 		// model publishing with `{id, status:"publish", content:""}` was
 		// refused "A page needs 2 to 8 patterns; 0 given" four calls running.
 		// Any NON-empty content stays fully validated, whole-write refusal.
-		$new_content = isset( $input['content'] ) ? (string) $input['content'] : '';
+		$section_content = self::resolveWriteContent( $input );
+		if ( is_wp_error( $section_content ) ) {
+			return $section_content;
+		}
+
+		$new_content = null !== $section_content ? $section_content : ( isset( $input['content'] ) ? (string) $input['content'] : '' );
 		$post_type   = array( 'post_type' => (string) ( $post->post_type ?? 'page' ) );
 
 		if ( '' !== $new_content ) {
