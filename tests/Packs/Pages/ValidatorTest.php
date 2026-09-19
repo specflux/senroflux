@@ -23,6 +23,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Packs\Pages;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
 use WP_Error;
@@ -565,5 +566,57 @@ final class ValidatorTest extends TestCase {
 		$this->assertFalse( $result['ok'] );
 		$this->assertSame( 'disallowed_markup', $result['wp_error']->get_error_code() );
 		$this->assertSame( $content, $result['content'] );
+	}
+
+	// --- 0.3 S21: curated wins a shape tie against a theme pattern ---------
+
+	/**
+	 * A theme pattern structurally IDENTICAL to the curated `hero` (same
+	 * blockName tree, same layout-defining attrs — the only thing
+	 * {@see Validator::matchesShape()} keys on) still resolves to the
+	 * CURATED slug, because {@see Vocabulary::all()} appends theme-derived
+	 * patterns AFTER the curated seven and `matchPatternSchema()` returns the
+	 * first structural match it finds.
+	 */
+	public function test_curated_pattern_wins_a_shape_tie_against_a_theme_pattern(): void {
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
+
+		$hero_markup = $this->markup( 'hero' );
+
+		$GLOBALS['senroflux_test_theme_patterns'] = array(
+			array(
+				'name'        => 'twentytwentyfive/fake-hero',
+				'title'       => 'Fake hero',
+				'description' => 'A theme pattern with the exact same shape as the curated hero.',
+				// Same structure, different sample copy — matchesShape() never
+				// looks at rich-text content, only block names/layout attrs.
+				'content'     => str_replace(
+					array( 'A headline that states the promise', 'One supporting sentence saying who this is for and what they get.' ),
+					array( 'A totally different headline', 'A totally different supporting line here.' ),
+					$hero_markup
+				),
+				'filePath'    => dirname( __DIR__, 2 ) . '/ThemePatterns/fake-hero.php',
+				'categories'  => array( 'banner' ),
+			),
+		);
+		ThemePatterns::resetCache();
+		$GLOBALS['senroflux_test_stylesheet_dir'] = dirname( __DIR__, 2 ) . '/ThemePatterns';
+
+		// A fresh Vocabulary/Validator pair so `all()` picks up the stubbed
+		// theme pattern registered just above.
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$this->assertNotEmpty( $vocabulary->themeDerived(), 'the stub must actually register a theme pattern' );
+
+		$content = $hero_markup . "\n\n" . $this->markup( 'text-section' );
+		$result  = $validator->clean( $content );
+
+		$this->assertTrue( $result['ok'] );
+		$this->assertStringContainsString( '"name":"senroflux/hero"', $result['content'], 'the curated slug wins the tie' );
+		$this->assertStringNotContainsString( 'fake-hero', $result['content'] );
+
+		ThemePatterns::resetCache();
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'] );
 	}
 }

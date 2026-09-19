@@ -106,4 +106,25 @@ final class VocabularyTest extends TestCase {
 			$this->assertContains( $expected, $names );
 		}
 	}
+
+	/**
+	 * 0.3 S21: "the posts pack never sees theme patterns." The posts
+	 * vocabulary does not implement {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}
+	 * at all — there is no seam through which a theme pattern could ever
+	 * reach it, regardless of what the active theme registers.
+	 */
+	public function test_vocabulary_does_not_implement_theme_pattern_source(): void {
+		$this->assertNotInstanceOf(
+			\Specflux\SenroFlux\Packs\Content\ThemePatternSource::class,
+			new Vocabulary()
+		);
+	}
+
+	public function test_list_payload_never_carries_a_theme_derived_entry(): void {
+		$payload = ( new Vocabulary() )->listPayload();
+
+		foreach ( $payload['patterns'] as $pattern ) {
+			$this->assertArrayNotHasKey( 'theme_derived', $pattern );
+		}
+	}
 }

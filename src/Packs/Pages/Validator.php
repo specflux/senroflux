@@ -1262,8 +1262,8 @@ class Validator implements ContentValidator {
 			);
 		}
 
-		// Hero first.
-		if ( 'hero' !== ( $slugs[0] ?? '' ) ) {
+		// Hero first (0.3 S21: a theme pattern in the `banner` category counts).
+		if ( ! $this->isHeroSlug( $slugs[0] ?? '' ) ) {
 			return new WP_Error(
 				'page_shape',
 				$this->message( 'page_shape', array(), array( 'rule' => 'hero_first' ) ),
@@ -1274,8 +1274,8 @@ class Validator implements ContentValidator {
 			);
 		}
 
-		// At most one CTA.
-		$cta_count = count( array_filter( $slugs, static fn ( string $s ): bool => 'cta' === $s ) );
+		// At most one CTA (0.3 S21: a theme pattern in the `call-to-action` category counts).
+		$cta_count = count( array_filter( $slugs, fn ( string $s ): bool => $this->isCtaSlug( $s ) ) );
 		if ( $cta_count > Vocabulary::RULES_MAX_CTA ) {
 			return new WP_Error(
 				'page_shape',
@@ -1340,11 +1340,45 @@ class Validator implements ContentValidator {
 	}
 
 	/**
+	 * Whether a matched slug counts as a HERO for the S11/S21 "hero first"
+	 * rule: the curated `hero` slug itself, or a theme-derived pattern
+	 * carrying the `banner` category (0.3 S21: "core category `banner` counts
+	 * as a hero"). `protected` so {@see \Specflux\SenroFlux\Packs\Site\Validator}'s
+	 * own `checkPageShape()` override applies the same rule.
+	 */
+	protected function isHeroSlug( string $slug ): bool {
+		if ( 'hero' === $slug ) {
+			return true;
+		}
+
+		$pattern = $this->patternBySlug( $slug );
+
+		return null !== $pattern && ! empty( $pattern['is_hero'] );
+	}
+
+	/**
+	 * Whether a matched slug counts as a CALL TO ACTION for the S11/S21 "max
+	 * one cta" rule: the curated `cta` slug itself, or a theme-derived
+	 * pattern carrying the `call-to-action` category (0.3 S21: "`call-to-
+	 * action` counts toward the CTA cap"). `protected` for the same reason as
+	 * {@see isHeroSlug()}.
+	 */
+	protected function isCtaSlug( string $slug ): bool {
+		if ( 'cta' === $slug ) {
+			return true;
+		}
+
+		$pattern = $this->patternBySlug( $slug );
+
+		return null !== $pattern && ! empty( $pattern['is_cta'] );
+	}
+
+	/**
 	 * One pattern definition by slug.
 	 *
 	 * @return array<string,mixed>|null
 	 */
-	private function patternBySlug( string $slug ): ?array {
+	protected function patternBySlug( string $slug ): ?array {
 		foreach ( $this->vocabulary->all() as $pattern ) {
 			if ( $slug === $pattern['slug'] ) {
 				return $pattern;

@@ -42,6 +42,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\Content\ThemePatternSource;
 use Specflux\SenroFlux\Packs\Content\Vocabulary as ContentVocabulary;
 
 // Bail on direct access.
@@ -50,15 +51,26 @@ defined( 'ABSPATH' ) || exit;
 /**
  * The seven-page vocabulary. Implements the S4 {@see ContentVocabulary} seam
  * so `Packs\Content\Abilities` can answer `list-patterns` without knowing any
- * pack's concrete pattern set.
+ * pack's concrete pattern set, and the 0.3 S21 {@see ThemePatternSource} seam
+ * so the same registrar can resolve a `sections` write item naming a theme
+ * pattern.
  *
  * NOT final (0.3 S7): the site pack's {@see \Specflux\SenroFlux\Packs\Site\Vocabulary}
  * extends this to add its two homepage-only patterns on top of the same
  * seven, rather than re-authoring them. `all()`/`listPayload()`/`register()`
- * all dispatch through `$this->all()`, so the extension needs no other
- * override.
+ * all dispatch through `$this->all()`/`$this->curated()`, so the extension
+ * needs no other override.
+ *
+ * CURATED VS THEME-DERIVED (0.3 S21). `all()` is `curated()` plus
+ * `themeDerived()` — every consumer that needs BOTH (the Validator's
+ * structural match, `BlockShells`, `list-patterns`) keeps calling `all()`
+ * unchanged. `register()` — which puts patterns on the block editor's own
+ * inserter under this pack's OWN category — iterates `curated()` only: a
+ * theme's pattern is already registered by the theme itself, and
+ * re-registering it here would be a second, redundant registration under a
+ * category it doesn't belong to.
  */
-class Vocabulary implements ContentVocabulary {
+class Vocabulary implements ContentVocabulary, ThemePatternSource {
 
 	/**
 	 * The pattern category registered with the block editor.
@@ -100,7 +112,7 @@ class Vocabulary implements ContentVocabulary {
 	}
 
 	/**
-	 * All seven pattern definitions, in authoring order.
+	 * The seven curated pattern definitions, in authoring order.
 	 *
 	 * Each definition: { slug, name, title, description, markup, repeatable,
 	 * constraints }. `repeatable`: list<string> of the child block names this
@@ -109,7 +121,7 @@ class Vocabulary implements ContentVocabulary {
 	 *
 	 * @return list<array<string,mixed>>
 	 */
-	public function all(): array {
+	public function curated(): array {
 		return array(
 			$this->hero(),
 			$this->textSection(),
@@ -119,6 +131,55 @@ class Vocabulary implements ContentVocabulary {
 			$this->testimonials(),
 			$this->cta(),
 		);
+	}
+
+	/**
+	 * The active theme's own eligible patterns (0.3 S21), vocabulary-shaped
+	 * and appended AFTER the curated ones — the order every consumer of
+	 * `all()` relies on: {@see \Specflux\SenroFlux\Packs\Pages\Validator}
+	 * matches the FIRST structural hit, so a curated pattern wins a shape
+	 * tie against a theme one for free.
+	 *
+	 * @return list<array<string,mixed>>
+	 */
+	public function themeDerived(): array {
+		return ThemePatterns::eligible();
+	}
+
+	/**
+	 * The curated seven plus every eligible theme-derived pattern (0.3 S21).
+	 * Every consumer that needs the FULL matchable set — the Validator, the
+	 * `list-patterns` payload, {@see BlockShells} — calls this, never
+	 * `curated()` alone.
+	 *
+	 * @return list<array<string,mixed>>
+	 */
+	public function all(): array {
+		return array_merge( $this->curated(), $this->themeDerived() );
+	}
+
+	/**
+	 * The eligible theme pattern registered under `$name`, or null (0.3 S21,
+	 * {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}).
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function resolveThemePattern( string $name ): ?array {
+		foreach ( $this->themeDerived() as $pattern ) {
+			if ( $name === $pattern['name'] ) {
+				return $pattern;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The count of the active theme's own patterns that were NOT eligible
+	 * (0.3 S21, {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}).
+	 */
+	public function themePatternsSkippedCount(): int {
+		return ThemePatterns::skippedCount();
 	}
 
 	/**
@@ -132,29 +193,50 @@ class Vocabulary implements ContentVocabulary {
 	 * copy verbatim and always pass editor parity: `style.spacing.padding` is
 	 * optional (a model may drop it, add it, or keep it as shipped — see
 	 * {@see \Specflux\SenroFlux\Packs\Pages\BlockShells}), everything else in
-	 * the sample is load-bearing. Only this category is returned in 0.2/0.3
-	 * (theme patterns are a documented gap).
+	 * the sample is load-bearing.
 	 *
-	 * @return array<string,mixed> { patterns: list<array<string,mixed>> }
+	 * 0.3 S21: a theme-derived pattern carries `theme_derived: true` and
+	 * `slots` (its numbered text/url slots) INSTEAD of `markup` — the model
+	 * never authors its markup, it sends `{pattern, slots}`. The payload also
+	 * carries `theme_patterns_skipped`, the count this theme's patterns that
+	 * did not qualify.
+	 *
+	 * @return array<string,mixed> { patterns: list<array<string,mixed>>, theme_patterns_skipped: int }
 	 */
 	public function listPayload(): array {
 		$patterns = array();
 		foreach ( $this->all() as $pattern ) {
-			$patterns[] = array(
+			$entry = array(
 				'name'        => $pattern['name'],
 				'title'       => $pattern['title'],
 				'description' => $pattern['description'],
 				'constraints' => $pattern['constraints'],
-				'markup'      => $pattern['markup'],
 			);
+
+			if ( ! empty( $pattern['theme_derived'] ) ) {
+				$entry['theme_derived'] = true;
+				$entry['slots']         = $pattern['text_slots'] ?? array();
+			} else {
+				$entry['markup'] = $pattern['markup'];
+			}
+
+			$patterns[] = $entry;
 		}
 
-		return array( 'patterns' => $patterns );
+		return array(
+			'patterns'               => $patterns,
+			'theme_patterns_skipped' => $this->themePatternsSkippedCount(),
+		);
 	}
 
 	/**
-	 * Register all seven on WordPress (S11), guarded so a bare-PHPUnit run (or
-	 * a pre-Gutenberg load) is a no-op. Returns the count registered.
+	 * Register the curated seven on WordPress (S11), guarded so a bare-PHPUnit
+	 * run (or a pre-Gutenberg load) is a no-op. Returns the count registered.
+	 *
+	 * 0.3 S21: iterates {@see curated()}, never {@see all()} — a theme's own
+	 * pattern is already registered by the theme itself; re-registering it
+	 * here would be a second registration under a category it doesn't belong
+	 * to.
 	 */
 	public function register(): int {
 		if ( ! function_exists( 'register_block_pattern_category' ) ) {
@@ -174,7 +256,7 @@ class Vocabulary implements ContentVocabulary {
 		}
 
 		$registered = 0;
-		foreach ( $this->all() as $pattern ) {
+		foreach ( $this->curated() as $pattern ) {
 			register_block_pattern(
 				$pattern['name'],
 				array(
