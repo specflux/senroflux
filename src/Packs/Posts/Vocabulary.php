@@ -129,21 +129,33 @@ final class Vocabulary implements ContentVocabulary {
 	}
 
 	/**
-	 * The `senroflux/list-patterns` payload (S5): metadata + constraints only,
-	 * no markup. A prose entry's `name` is the bare core block name (there is
-	 * no wrapper pattern); a feature entry's `name` is `senroflux/<slug>`.
+	 * The `senroflux/list-patterns` payload (S5), same shape as the pages
+	 * pack's (0.3 S7 gap fix): metadata, constraints AND sample markup where
+	 * a pattern has any — the exact input a model can copy verbatim instead
+	 * of reconstructing structure from a prose summary. A prose entry's
+	 * `name` is the bare core block name (there is no wrapper pattern, so no
+	 * fixed markup either — `markup` is omitted for it); a feature entry's
+	 * `name` is `senroflux/<slug>` and always carries its shipped markup.
+	 * Posts do NOT run the pages pack's `BlockShells` editor-parity check
+	 * (S5 scope decision, {@see \Specflux\SenroFlux\Packs\Posts\Validator}),
+	 * so unlike the pages/site packs there is no optional-attribute rule to
+	 * document here.
 	 *
 	 * @return array<string,mixed> { patterns: list<array<string,mixed>> }
 	 */
 	public function listPayload(): array {
 		$patterns = array();
 		foreach ( $this->all() as $pattern ) {
-			$patterns[] = array(
+			$entry = array(
 				'name'        => $pattern['name'],
 				'title'       => $pattern['title'],
 				'description' => $pattern['description'],
 				'constraints' => $pattern['constraints'],
 			);
+			if ( isset( $pattern['markup'] ) && '' !== $pattern['markup'] ) {
+				$entry['markup'] = $pattern['markup'];
+			}
+			$patterns[] = $entry;
 		}
 
 		return array( 'patterns' => $patterns );

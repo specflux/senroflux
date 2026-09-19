@@ -166,6 +166,67 @@ HTML;
 	}
 
 	/**
+	 * REPRODUCTION (live, post-9c5e16a): the model called `list-patterns`,
+	 * got the real hero shape right (h1, centered/large-font paragraph, flex
+	 * buttons) but omitted the hero group's `style.spacing.padding` — pure
+	 * presentation the shipped pattern happens to carry, not something the
+	 * block editor needs to accept the write. This used to be refused with
+	 * `block_mismatch` ("attributes"); it must now validate.
+	 */
+	public function test_hero_without_padding_style_validates(): void {
+		$hero = <<<'HTML'
+<!-- wp:group {"metadata":{"name":"senroflux/hero"},"align":"full","layout":{"type":"constrained"}} -->
+<div class="wp-block-group alignfull">
+<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">Your neighborhood sourdough bakery</h1><!-- /wp:heading -->
+<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">Welcome to Crumb &amp; Co, a small sourdough bakery at 12 Mill Lane.</p><!-- /wp:paragraph -->
+<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="mailto:hello@crumbandco.example">Email us</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
+</div><!-- /wp:group -->
+HTML;
+
+		$text_section = <<<'HTML'
+<!-- wp:group {"metadata":{"name":"senroflux/text-section"},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group">
+<!-- wp:heading --><h2 class="wp-block-heading">Visit Crumb &amp; Co</h2><!-- /wp:heading -->
+<!-- wp:paragraph --><p>Find us at 12 Mill Lane, Tuesday through Sunday, 7am&#8211;3pm. We're closed on Mondays.</p><!-- /wp:paragraph -->
+</div><!-- /wp:group -->
+HTML;
+
+		$result = $this->validator->clean( $hero . "\n\n" . $text_section );
+
+		$this->assertTrue( $result['ok'], (string) ( $result['wp_error']?->get_error_message() ?? '' ) );
+	}
+
+	/**
+	 * The same hero WITH padding must still validate — this rule is optional,
+	 * not "always stripped".
+	 */
+	public function test_hero_with_padding_style_still_validates(): void {
+		$result = $this->validator->clean( $this->page( 'hero', 'text-section' ) );
+
+		$this->assertTrue( $result['ok'], (string) ( $result['wp_error']?->get_error_message() ?? '' ) );
+	}
+
+	/**
+	 * Adding a colour attribute (never optional) must still be refused even
+	 * without padding.
+	 */
+	public function test_hero_without_padding_but_with_added_colour_still_refused(): void {
+		$wrong = <<<'HTML'
+<!-- wp:group {"metadata":{"name":"senroflux/hero"},"align":"full","layout":{"type":"constrained"},"backgroundColor":"vivid-purple"} -->
+<div class="wp-block-group alignfull has-vivid-purple-background-color has-background">
+<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">Your neighborhood sourdough bakery</h1><!-- /wp:heading -->
+<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">Welcome to Crumb &amp; Co, a small sourdough bakery at 12 Mill Lane.</p><!-- /wp:paragraph -->
+<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="mailto:hello@crumbandco.example">Email us</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
+</div><!-- /wp:group -->
+HTML;
+
+		$result = $this->validator->clean( $wrong );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'decorative_color', $result['wp_error']->get_error_code() );
+	}
+
+	/**
 	 * A genuinely wrong shape (a paragraph swapped for a list inside hero)
 	 * must still be refused — the fix must not loosen matching.
 	 */

@@ -169,4 +169,22 @@ final class VocabularyTest extends TestCase {
 			$this->assertArrayHasKey( 'stated', $pattern['constraints'] );
 		}
 	}
+
+	/**
+	 * 0.3 S7 gap fix: the payload's `markup` must be the SAME markup
+	 * `all()`/the Validator ship — a copy would drift silently.
+	 */
+	public function test_list_payload_markup_matches_the_shipped_pattern_markup(): void {
+		$vocabulary = new Vocabulary();
+		$payload    = $vocabulary->listPayload();
+		$by_name    = array();
+		foreach ( $vocabulary->all() as $pattern ) {
+			$by_name[ $pattern['name'] ] = $pattern['markup'];
+		}
+
+		foreach ( $payload['patterns'] as $pattern ) {
+			$this->assertArrayHasKey( 'markup', $pattern );
+			$this->assertSame( $by_name[ $pattern['name'] ], $pattern['markup'] );
+		}
+	}
 }

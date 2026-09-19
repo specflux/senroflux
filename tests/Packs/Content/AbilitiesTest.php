@@ -1198,6 +1198,23 @@ final class AbilitiesTest extends TestCase {
 		$this->assertArrayHasKey( 'constraints', $result['patterns'][0] );
 	}
 
+	/**
+	 * 0.3 S7 gap fix: prose shape lines lost detail a live run needed
+	 * (`style.spacing.padding`) and was refused for omitting; the sample
+	 * markup is the exact input `BlockShells` matches against, so it is the
+	 * one thing a model can copy and always pass editor parity.
+	 */
+	public function test_list_patterns_includes_each_pattern_s_sample_markup(): void {
+		$this->grant( 'edit_pages' );
+
+		$result = $this->ability( 'senroflux/list-patterns' )->execute( array() );
+
+		foreach ( $result['patterns'] as $pattern ) {
+			$this->assertArrayHasKey( 'markup', $pattern );
+			$this->assertStringContainsString( '<!-- wp:', $pattern['markup'] );
+		}
+	}
+
 	public function test_list_patterns_refuses_a_model_supplied_pack_argument(): void {
 		$this->grant( 'edit_pages' );
 

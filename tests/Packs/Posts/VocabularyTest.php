@@ -47,6 +47,24 @@ final class VocabularyTest extends TestCase {
 		$this->assertContains( 'senroflux/pull-quote', $names );
 	}
 
+	/**
+	 * 0.3 S7 gap fix (same treatment as the pages pack): a feature entry
+	 * carries its shipped sample markup; a prose entry (no fixed markup to
+	 * ship) omits the key rather than sending an empty string.
+	 */
+	public function test_list_payload_includes_markup_only_for_feature_patterns(): void {
+		$payload = ( new Vocabulary() )->listPayload();
+
+		foreach ( $payload['patterns'] as $pattern ) {
+			if ( str_starts_with( (string) $pattern['name'], 'senroflux/' ) ) {
+				$this->assertArrayHasKey( 'markup', $pattern, $pattern['name'] );
+				$this->assertStringContainsString( '<!-- wp:', $pattern['markup'] );
+			} else {
+				$this->assertArrayNotHasKey( 'markup', $pattern, $pattern['name'] );
+			}
+		}
+	}
+
 	public function test_register_registers_only_the_two_feature_patterns(): void {
 		$count = ( new Vocabulary() )->register();
 

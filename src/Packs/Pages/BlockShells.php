@@ -16,10 +16,24 @@
  *     heading level, key order, and the SLUG of a preset (spacing
  *     `var:preset|spacing|<slug>`, `fontSize`), which may vary as long as
  *     slugs the vocabulary repeats stay equal;
+ *   - `style.spacing.padding`/`style.spacing.margin` are OPTIONAL: pure
+ *     presentation the vocabulary happens to ship, not something the block
+ *     editor needs to accept the write, so a block matches whether it
+ *     carries them or not (live run: the model got hero's real shape right
+ *     from `list-patterns` but dropped the padding preset, and was refused
+ *     anyway — that refusal cost the human another approval click for
+ *     nothing load-bearing). Every other attribute — block name, `align`,
+ *     `layout.type`, heading level, colour attrs (refused elsewhere, never
+ *     silently accepted) — stays strict;
  *   - the same HTML shell: tag sequence, inline style, attribute names and
  *     every class, with the preset slug substituted where the vocabulary has
- *     it. Rich-text content (inside p, h1–h6, li, summary, cite, a) is free.
- *     Extra classes are allowed: the editor keeps them as a custom class.
+ *     it. The optional spacing declarations above may be missing from the
+ *     rendered style entirely, but if present at all they must match the
+ *     vocabulary's tokenized form — a spacing value the comment attributes
+ *     and the rendered style disagree on is still a real editor-parity
+ *     break, not a decorative difference. Rich-text content (inside p,
+ *     h1–h6, li, summary, cite, a) is free. Extra classes are allowed: the
+ *     editor keeps them as a custom class.
  *
  * @package SenroFlux
  */
@@ -44,6 +58,30 @@ final class BlockShells {
 
 	/** A preset slug this check will substitute; anything else must match verbatim. */
 	private const SLUG = '#^(?:[a-z]+(?:-[a-z]+)*|[0-9]+)$#';
+
+	/**
+	 * `style.spacing.*` keys that are pure presentation (the vocabulary's
+	 * spacing presets) and therefore never required — a block matches with or
+	 * without them.
+	 */
+	private const OPTIONAL_SPACING_KEYS = array( 'padding', 'margin' );
+
+	/**
+	 * CSS properties emitted for {@see OPTIONAL_SPACING_KEYS} and therefore
+	 * dropped from the HTML shell's `style` fingerprint, present or not.
+	 */
+	private const OPTIONAL_STYLE_PROPERTIES = array(
+		'padding',
+		'padding-top',
+		'padding-bottom',
+		'padding-left',
+		'padding-right',
+		'margin',
+		'margin-top',
+		'margin-bottom',
+		'margin-left',
+		'margin-right',
+	);
 
 	/**
 	 * Block name => attribute key => list of shells.
@@ -144,8 +182,24 @@ final class BlockShells {
 			$slugs = array();
 			$key   = $this->attributeKey( $block, $slugs );
 			$shell = $this->shell( (string) ( $block['innerHTML'] ?? '' ), $slugs );
-			if ( ! in_array( $shell, $shells[ $name ][ $key ] ?? array(), true ) ) {
-				$shells[ $name ][ $key ][] = $shell;
+			$this->addShell( $shells, $name, $key, $shell );
+
+			// A vocabulary block carrying an optional spacing preset also
+			// registers the shape it takes when a run omits it entirely: the
+			// same key with that attribute stripped, matched against the same
+			// HTML shell with its (now absent) declarations stripped too. A
+			// block that never carried the preset in the first place produces
+			// the identical key/shell pair here, so `addShell()`'s dedupe
+			// makes this a no-op for it.
+			$original_attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+			$sparse_attrs   = $this->stripOptionalSpacing( $original_attrs );
+			if ( $sparse_attrs !== $original_attrs ) {
+				$sparse_slugs          = array();
+				$sparse_block          = $block;
+				$sparse_block['attrs'] = $sparse_attrs;
+				$sparse_key            = $this->attributeKey( $sparse_block, $sparse_slugs );
+				$sparse_shell          = $this->stripOptionalStyle( $shell );
+				$this->addShell( $shells, $name, $sparse_key, $sparse_shell );
 			}
 		}
 
@@ -154,6 +208,70 @@ final class BlockShells {
 		foreach ( $children as $child ) {
 			$this->collect( $child, $shells );
 		}
+	}
+
+	/**
+	 * @param array<string, array<string, list<list<array<string,mixed>>>>> $shells Out: shells collected so far.
+	 * @param list<array<string,mixed>>                                     $shell  One shape for `$name`/`$key`.
+	 */
+	private function addShell( array &$shells, string $name, string $key, array $shell ): void {
+		if ( ! in_array( $shell, $shells[ $name ][ $key ] ?? array(), true ) ) {
+			$shells[ $name ][ $key ][] = $shell;
+		}
+	}
+
+	/**
+	 * Removes `style.spacing.padding`/`style.spacing.margin` (and the
+	 * now-empty `spacing`/`style` wrappers they may leave behind) from a set
+	 * of RAW (not yet tokenized) comment attributes.
+	 *
+	 * @param array<string,mixed> $attrs Attributes.
+	 * @return array<string,mixed>
+	 */
+	private function stripOptionalSpacing( array $attrs ): array {
+		if ( is_array( $attrs['style']['spacing'] ?? null ) ) {
+			foreach ( self::OPTIONAL_SPACING_KEYS as $key ) {
+				unset( $attrs['style']['spacing'][ $key ] );
+			}
+			if ( array() === $attrs['style']['spacing'] ) {
+				unset( $attrs['style']['spacing'] );
+			}
+		}
+		if ( array() === ( $attrs['style'] ?? null ) ) {
+			unset( $attrs['style'] );
+		}
+
+		return $attrs;
+	}
+
+	/**
+	 * Drops {@see OPTIONAL_STYLE_PROPERTIES} declarations from every node's
+	 * `style` field — the HTML-shell equivalent of {@see stripOptionalSpacing()},
+	 * used to derive the shape a block takes when it omits the preset.
+	 *
+	 * @param list<array<string,mixed>> $shell A shell.
+	 * @return list<array<string,mixed>>
+	 */
+	private function stripOptionalStyle( array $shell ): array {
+		foreach ( $shell as &$node ) {
+			if ( ! isset( $node['style'] ) || '' === $node['style'] ) {
+				continue;
+			}
+
+			$declarations = array_filter(
+				explode( ';', (string) $node['style'] ),
+				static function ( string $declaration ): bool {
+					$property = strstr( $declaration, ':', true );
+
+					return false === $property || ! in_array( $property, self::OPTIONAL_STYLE_PROPERTIES, true );
+				}
+			);
+
+			$node['style'] = implode( ';', $declarations );
+		}
+		unset( $node );
+
+		return $shell;
 	}
 
 	/**

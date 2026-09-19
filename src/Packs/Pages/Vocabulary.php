@@ -122,9 +122,18 @@ class Vocabulary implements ContentVocabulary {
 	}
 
 	/**
-	 * The `senroflux/list-patterns` payload (S11): metadata + constraints only,
-	 * no markup. Only this category is returned in 0.2 (theme patterns are a
-	 * documented gap).
+	 * The `senroflux/list-patterns` payload (0.3 S7 gap fix): metadata,
+	 * constraints AND the pattern's shipped sample markup. Prose shape lines
+	 * (in the pack's `layout-rules`/`page-links` skill) are a lossy summary —
+	 * a live run got the shape right from the prose alone and was STILL
+	 * refused, because the prose never said the group also carries
+	 * `style.spacing.padding`. The markup is the exact block the Validator's
+	 * `BlockShells` check matches against, so it is the one input a model can
+	 * copy verbatim and always pass editor parity: `style.spacing.padding` is
+	 * optional (a model may drop it, add it, or keep it as shipped — see
+	 * {@see \Specflux\SenroFlux\Packs\Pages\BlockShells}), everything else in
+	 * the sample is load-bearing. Only this category is returned in 0.2/0.3
+	 * (theme patterns are a documented gap).
 	 *
 	 * @return array<string,mixed> { patterns: list<array<string,mixed>> }
 	 */
@@ -136,6 +145,7 @@ class Vocabulary implements ContentVocabulary {
 				'title'       => $pattern['title'],
 				'description' => $pattern['description'],
 				'constraints' => $pattern['constraints'],
+				'markup'      => $pattern['markup'],
 			);
 		}
 

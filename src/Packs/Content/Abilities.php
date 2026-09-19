@@ -603,6 +603,7 @@ final class Abilities {
 											),
 										),
 									),
+									'markup'      => array( 'type' => 'string' ),
 								),
 							),
 						),
