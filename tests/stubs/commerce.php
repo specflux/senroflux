@@ -41,11 +41,22 @@ if ( ! isset( $GLOBALS['senroflux_test_next_post_id'] ) ) {
 	$GLOBALS['senroflux_test_next_post_id'] = 1000;
 }
 
+if ( ! isset( $GLOBALS['senroflux_test_coupon_meta'] ) ) {
+	$GLOBALS['senroflux_test_coupon_meta'] = array();
+}
+
 if ( ! class_exists( 'WC_Coupon', false ) ) {
 	/**
 	 * Minimal stand-in: enough of WC_Coupon's setter/save surface for
 	 * {@see \Specflux\SenroFlux\Packs\Commerce\Abilities} to exercise for
 	 * real, backed by the shared in-memory post store.
+	 *
+	 * Stage 14 (AS-15/S19 approval cards) adds the READ side: the amount,
+	 * discount type, expiry and usage limit are persisted to a SEPARATE
+	 * `senroflux_test_coupon_meta` store on save() (never onto the post
+	 * store the code/status pair already use), and a FRESH `new
+	 * WC_Coupon($id)` reloads them for {@see \Specflux\SenroFlux\Packs\Commerce\CommerceSummary}
+	 * to read, mirroring real WooCommerce's own coupon meta storage.
 	 */
 	class WC_Coupon {
 
@@ -66,10 +77,38 @@ if ( ! class_exists( 'WC_Coupon', false ) ) {
 				$this->code   = (string) ( $existing->post_title ?? '' );
 				$this->status = (string) ( $existing->post_status ?? 'draft' );
 			}
+
+			$meta = $GLOBALS['senroflux_test_coupon_meta'][ $id ] ?? null;
+			if ( $id > 0 && is_object( $meta ) ) {
+				$this->discount_type = (string) ( $meta->discount_type ?? $this->discount_type );
+				$this->amount        = (string) ( $meta->amount ?? $this->amount );
+				$this->expires       = isset( $meta->expires ) ? (string) $meta->expires : null;
+				$this->usage_limit   = isset( $meta->usage_limit ) ? (int) $meta->usage_limit : null;
+			}
 		}
 
 		public function get_id(): int {
 			return $this->id;
+		}
+
+		public function get_code(): string {
+			return $this->code;
+		}
+
+		public function get_amount(): string {
+			return $this->amount;
+		}
+
+		public function get_discount_type(): string {
+			return $this->discount_type;
+		}
+
+		public function get_date_expires(): ?string {
+			return $this->expires;
+		}
+
+		public function get_usage_limit(): ?int {
+			return $this->usage_limit;
 		}
 
 		public function set_code( string $code ): void {
@@ -119,6 +158,12 @@ if ( ! class_exists( 'WC_Coupon', false ) ) {
 
 			$GLOBALS['senroflux_test_posts'][ $this->id ]                        = $post;
 			$GLOBALS['senroflux_test_coupon_codes'][ strtolower( $this->code ) ] = $this->id;
+			$GLOBALS['senroflux_test_coupon_meta'][ $this->id ]                  = (object) array(
+				'discount_type' => $this->discount_type,
+				'amount'        => $this->amount,
+				'expires'       => $this->expires,
+				'usage_limit'   => $this->usage_limit,
+			);
 
 			unset( $this->discount_type, $this->amount, $this->expires, $this->usage_limit, $this->product_ids );
 
@@ -190,6 +235,11 @@ if ( ! class_exists( 'WC_Order', false ) ) {
 			$row = $this->row();
 
 			return ( null !== $row && isset( $row->date_created ) ) ? (int) $row->date_created : null;
+		}
+
+		/** Stage 14 (AS-15/S19): the recipient a customer-visible note reaches. */
+		public function get_billing_email(): string {
+			return (string) ( $this->row()->billing_email ?? '' );
 		}
 	}
 }
@@ -426,6 +476,14 @@ if ( ! isset( $GLOBALS['senroflux_test_products'] ) ) {
 	$GLOBALS['senroflux_test_products'] = array();
 }
 
+// Stage 14 (AS-15/S19 approval cards): a SEPARATE store for a product's
+// name/price/status fields, keyed by the SAME id as `senroflux_test_posts`
+// (a product is a post) — `senroflux_test_products` above stays the
+// stock-only shape the store-report tests already seed.
+if ( ! isset( $GLOBALS['senroflux_test_product_rows'] ) ) {
+	$GLOBALS['senroflux_test_product_rows'] = array();
+}
+
 if ( ! class_exists( 'WC_Product', false ) ) {
 	class WC_Product {
 
@@ -435,9 +493,48 @@ if ( ! class_exists( 'WC_Product', false ) ) {
 			return $this->id;
 		}
 
+		private function row(): ?object {
+			$row = $GLOBALS['senroflux_test_product_rows'][ $this->id ] ?? null;
+
+			return is_object( $row ) ? $row : null;
+		}
+
 		public function get_stock_quantity(): ?int {
+			$row = $this->row();
+			if ( null !== $row && property_exists( $row, 'stock_quantity' ) ) {
+				return null === $row->stock_quantity ? null : (int) $row->stock_quantity;
+			}
+
 			return $this->stock_quantity;
 		}
+
+		public function get_name(): string {
+			return (string) ( $this->row()->name ?? '' );
+		}
+
+		public function get_regular_price(): string {
+			return (string) ( $this->row()->regular_price ?? '' );
+		}
+
+		public function get_sale_price(): string {
+			return (string) ( $this->row()->sale_price ?? '' );
+		}
+
+		public function get_status(): string {
+			return (string) ( $this->row()->status ?? 'publish' );
+		}
+	}
+}
+
+if ( ! function_exists( 'wc_get_product' ) ) {
+	function wc_get_product( int $id ): WC_Product|false {
+		if ( ! isset( $GLOBALS['senroflux_test_product_rows'][ $id ] ) && ! isset( $GLOBALS['senroflux_test_products'][ $id ] ) ) {
+			return false;
+		}
+
+		$stock = $GLOBALS['senroflux_test_products'][ $id ] ?? null;
+
+		return new WC_Product( $id, null === $stock ? null : (int) $stock );
 	}
 }
 

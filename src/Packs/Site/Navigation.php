@@ -163,6 +163,32 @@ final class Navigation {
 	}
 
 	/**
+	 * Stage 14 (AS-15/S19 approval cards): the resolved navigation's CURRENT
+	 * item list, for {@see \Specflux\SenroFlux\Packs\Site\ContentSummary} to
+	 * render beside an `update-navigation` call's proposed list. Read-only —
+	 * unlike {@see executeReadNavigation()} this never records a read marker,
+	 * because rendering an approval card is not the run "reading" the
+	 * navigation (S8's stale-write discipline is untouched by it).
+	 *
+	 * @return array{kind:string, items:list<array<string,mixed>>}
+	 */
+	public static function currentItemsForSummary(): array {
+		$target  = self::resolveTarget();
+		$payload = self::buildPayload( $target );
+		if ( is_wp_error( $payload ) ) {
+			return array(
+				'kind'  => 'items',
+				'items' => array(),
+			);
+		}
+
+		return array(
+			'kind'  => $payload['kind'],
+			'items' => $payload['items'],
+		);
+	}
+
+	/**
 	 * Register the category (must run before `wp_abilities_api_init`).
 	 */
 	public static function registerCategory(): void {
