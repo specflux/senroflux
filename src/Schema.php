@@ -32,9 +32,11 @@ final class Schema {
 	 * skills_disable_json, so every TICK can collect the run's skills exactly
 	 * as start() did (S8) instead of honouring the disable list only once; 4
 	 * adds `gate_mode` (0.3 S3) — existing rows default to `agent_safety`,
-	 * because 0.2 could only ever run under it.
+	 * because 0.2 could only ever run under it; 5 adds `withheld_roles_json`
+	 * (0.3 S6) — computed once at start() and, like `gate_mode`, never
+	 * updated afterwards; a NULL/missing value reads back as the empty list.
 	 */
-	public const DB_VERSION = 4;
+	public const DB_VERSION = 5;
 
 	/**
 	 * Runs table name for this site.
@@ -140,6 +142,8 @@ final class Schema {
 				'content_locale VARCHAR(20) NULL',
 				// 0.3 S3: pinned at start, never updated afterwards.
 				'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
+				// 0.3 S6: also pinned at start, never updated afterwards.
+				'withheld_roles_json TEXT NULL',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',

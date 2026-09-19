@@ -58,6 +58,14 @@ final class Run {
 		public readonly ?string $contentLocale = null,
 		/** 0.3 S3: pinned at start(), never changes afterwards. */
 		public readonly GateMode $gateMode = GateMode::AgentSafety,
+		/**
+		 * 0.3 S6: role names withheld from this run at start(), because the
+		 * starting user lacked the capability the pack named for them. Pinned
+		 * at start(), never changes afterwards — like {@see $gateMode}.
+		 *
+		 * @var list<string>
+		 */
+		public readonly array $withheldRoles = array(),
 	) {
 	}
 
@@ -67,14 +75,15 @@ final class Run {
 	 * @param array<string,mixed> $row Raw row.
 	 */
 	public static function fromRow( array $row ): self {
-		$allow   = json_decode( (string) ( $row['allow_json'] ?? '[]' ), true );
-		$budget  = json_decode( (string) ( $row['budget_json'] ?? '{}' ), true );
-		$error   = json_decode( (string) ( $row['error_json'] ?? 'null' ), true );
-		$status  = RunStatus::tryFrom( (string) ( $row['status'] ?? '' ) );
-		$skills  = json_decode( (string) ( $row['skills_json'] ?? 'null' ), true );
-		$disable = json_decode( (string) ( $row['skills_disable_json'] ?? 'null' ), true );
-		$result  = json_decode( (string) ( $row['result_json'] ?? 'null' ), true );
-		$objects = json_decode( (string) ( $row['objects_json'] ?? 'null' ), true );
+		$allow    = json_decode( (string) ( $row['allow_json'] ?? '[]' ), true );
+		$budget   = json_decode( (string) ( $row['budget_json'] ?? '{}' ), true );
+		$error    = json_decode( (string) ( $row['error_json'] ?? 'null' ), true );
+		$status   = RunStatus::tryFrom( (string) ( $row['status'] ?? '' ) );
+		$skills   = json_decode( (string) ( $row['skills_json'] ?? 'null' ), true );
+		$disable  = json_decode( (string) ( $row['skills_disable_json'] ?? 'null' ), true );
+		$result   = json_decode( (string) ( $row['result_json'] ?? 'null' ), true );
+		$objects  = json_decode( (string) ( $row['objects_json'] ?? 'null' ), true );
+		$withheld = json_decode( (string) ( $row['withheld_roles_json'] ?? 'null' ), true );
 
 		return new self(
 			id: (int) ( $row['id'] ?? 0 ),
@@ -100,6 +109,7 @@ final class Run {
 			conversationLocale: isset( $row['conversation_locale'] ) && is_string( $row['conversation_locale'] ) && '' !== $row['conversation_locale'] ? $row['conversation_locale'] : null,
 			contentLocale: isset( $row['content_locale'] ) && is_string( $row['content_locale'] ) && '' !== $row['content_locale'] ? $row['content_locale'] : null,
 			gateMode: GateMode::tryFrom( (string) ( $row['gate_mode'] ?? 'agent_safety' ) ) ?? GateMode::AgentSafety,
+			withheldRoles: is_array( $withheld ) ? array_values( array_filter( $withheld, 'is_string' ) ) : array(),
 		);
 	}
 
@@ -133,6 +143,7 @@ final class Run {
 			'conversation_locale'   => $this->conversationLocale,
 			'content_locale'        => $this->contentLocale,
 			'gate_mode'             => $this->gateMode->value,
+			'withheld_roles_json'   => (string) wp_json_encode( $this->withheldRoles ),
 		);
 	}
 }

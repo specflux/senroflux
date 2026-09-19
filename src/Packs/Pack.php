@@ -314,6 +314,36 @@ abstract class Pack {
 	}
 
 	/**
+	 * role => required WordPress capability (0.3 S6). A role absent from this
+	 * map, or mapped to `''`, needs no capability of its own beyond whatever
+	 * `runCapability()`/the ability's own permission callback already checks
+	 * — the base declares none, so a pack that never calls this out withholds
+	 * nothing (backward compatible with every pre-0.3 pack). No 0.3 pack
+	 * declares one yet; the posts pack (stage 5) is the first real caller,
+	 * naming `upload_files` for `media-upload`/`generate-image`.
+	 *
+	 * @return array<string,string>
+	 */
+	public function roleCapabilities(): array {
+		return array();
+	}
+
+	/**
+	 * The system-instruction line for a run that starts with roles withheld
+	 * (0.3 S6) — one line per withheld GROUP, in the pack's own words, so the
+	 * harness (which never learns what a role's ability actually does) stays
+	 * domain-agnostic. Null when the pack has nothing to say (the base
+	 * default, and a pack given an empty `$withheld`).
+	 *
+	 * @param list<string> $withheld The role names withheld from this run's start().
+	 */
+	public function withheldRoleNotice( array $withheld ): ?string {
+		unset( $withheld );
+
+		return null;
+	}
+
+	/**
 	 * PACK verb => tier (S10). Abstract on purpose: an empty default would let a
 	 * pack ship with no map at all and rely on VerbTier's fail-closed tier 2 for
 	 * every call, which reads as governance but is really an unfenced accident.

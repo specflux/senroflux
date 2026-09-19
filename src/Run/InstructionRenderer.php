@@ -32,12 +32,14 @@ final class InstructionRenderer {
 	 * Agent Safety, in either mode. One sentence shape, only the threshold
 	 * clause differs; both modes get the "prefer one create" instruction.
 	 *
-	 * @param list<Skill> $skills    The collected skills for this run, in order.
-	 * @param Tail        $tail      The run tail (budget + notes).
-	 * @param GateMode    $gate_mode The run's pinned gate mode.
+	 * @param list<Skill> $skills          The collected skills for this run, in order.
+	 * @param Tail        $tail            The run tail (budget + notes).
+	 * @param GateMode    $gate_mode       The run's pinned gate mode.
+	 * @param string|null $withheld_notice 0.3 S6: the pack's one-line notice for this
+	 *                                     run's withheld roles, or null for none.
 	 * @return string Plain-text instructions.
 	 */
-	public static function render( array $skills, Tail $tail, GateMode $gate_mode = GateMode::AgentSafety ): string {
+	public static function render( array $skills, Tail $tail, GateMode $gate_mode = GateMode::AgentSafety, ?string $withheld_notice = null ): string {
 		$sections = array(
 			SkillSource::Harness->value  => array(),
 			SkillSource::Pack->value     => array(),
@@ -56,6 +58,10 @@ final class InstructionRenderer {
 		}
 
 		$blocks[] = self::gateBlock( $gate_mode );
+
+		if ( null !== $withheld_notice && '' !== $withheld_notice ) {
+			$blocks[] = $withheld_notice;
+		}
 
 		$instructions = implode( "\n\n", $blocks );
 

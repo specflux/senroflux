@@ -309,7 +309,8 @@ final class Plugin {
 		// write. A caller-supplied $allow is IGNORED when a pack is given: the
 		// pack is the single source of the allow-list (the direct-allow path
 		// keeps working with $pack = null).
-		$pack_obj = null;
+		$pack_obj       = null;
+		$withheld_roles = array();
 		if ( null !== $pack ) {
 			$pack_obj = $this->packRegistry()->get( $pack );
 			if ( null === $pack_obj ) {
@@ -327,6 +328,23 @@ final class Plugin {
 			if ( is_wp_error( $preflight ) ) {
 				// Refused: skills_too_large (400) or pack_unbound (400).
 				return $preflight;
+			}
+
+			// 0.3 S6: roles whose declared capability the starting user lacks
+			// are WITHHELD — decided once, here, from who is starting the run
+			// (never per call, which is the gate's job). Their resolved
+			// abilities are dropped from the tool set the same way (S6: "the
+			// run's tool set"), never merely hidden by a later filter.
+			$withheld_roles = self::withheldRolesFor( $pack_obj, $user_id );
+			if ( array() !== $withheld_roles ) {
+				$resolved           = $pack_obj->resolveAbilities();
+				$withheld_abilities = array();
+				foreach ( $withheld_roles as $role ) {
+					if ( isset( $resolved[ $role ] ) ) {
+						$withheld_abilities[] = $resolved[ $role ];
+					}
+				}
+				$allow = array_values( array_diff( $allow, $withheld_abilities ) );
 			}
 		}
 
@@ -371,7 +389,8 @@ final class Plugin {
 			$pack,
 			$conversation_locale,
 			$content_locale,
-			$gate_mode
+			$gate_mode,
+			$withheld_roles
 		);
 
 		// S9: when a pack drove the allow-list, record that a caller-supplied
@@ -569,6 +588,8 @@ final class Plugin {
 				'pack'                => $run->pack,
 				// 0.3 S3: pinned at start(), rendered once by the run header.
 				'gate_mode'           => $run->gateMode->value,
+				// 0.3 S6: pinned at start(), rendered once by the run header.
+				'withheld_roles'      => $run->withheldRoles,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
 				// 0.2 S12: the harness-built report (result_json), surfaced on
@@ -724,10 +745,53 @@ final class Plugin {
 			// top of every tick/cancel/park resolution and compared with the
 			// one pinned on the run at start() -- a mismatch fails the run
 			// (gate_mode_changed) instead of silently switching enforcement.
-			static fn (): GateMode => self::currentGateMode()
+			static fn (): GateMode => self::currentGateMode(),
+			// S6: withheld roles' RESOLVED abilities, for the execution-time
+			// defence in depth — only the pack can map a role name back to
+			// its ability id.
+			static function ( \Specflux\SenroFlux\Run\Run $run ): array {
+				$pack = self::pack_for_run( $run );
+				if ( null === $pack || array() === $run->withheldRoles ) {
+					return array();
+				}
+
+				$resolved  = $pack->resolveAbilities();
+				$abilities = array();
+				foreach ( $run->withheldRoles as $role ) {
+					if ( isset( $resolved[ $role ] ) ) {
+						$abilities[] = $resolved[ $role ];
+					}
+				}
+
+				return $abilities;
+			}
 		);
 
 		return $this->runner;
+	}
+
+	/**
+	 * 0.3 S6: the role names a pack withholds from a starting user — those
+	 * whose declared {@see \Specflux\SenroFlux\Packs\Pack::roleCapabilities()}
+	 * capability `$user_id` lacks. A role the pack declares no capability for
+	 * is never withheld (the base's empty map means "nothing to check").
+	 *
+	 * @param \Specflux\SenroFlux\Packs\Pack $pack    The pack a run is starting with.
+	 * @param int                            $user_id The starting user.
+	 * @return list<string>
+	 */
+	private static function withheldRolesFor( \Specflux\SenroFlux\Packs\Pack $pack, int $user_id ): array {
+		$withheld = array();
+		foreach ( $pack->roleCapabilities() as $role => $capability ) {
+			if ( '' === $capability ) {
+				continue;
+			}
+			if ( ! function_exists( 'user_can' ) || ! user_can( $user_id, $capability ) ) {
+				$withheld[] = $role;
+			}
+		}
+
+		return $withheld;
 	}
 
 	/**

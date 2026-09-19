@@ -387,6 +387,45 @@ final class RunsScreenParkCardsTest extends TestCase {
 	}
 
 	// ------------------------------------------------------------------
+	// Withheld roles (0.3 S6)
+	// ------------------------------------------------------------------
+
+	public function test_the_detail_view_names_a_withheld_role(): void {
+		$this->seedRunnerGraph();
+		$run_id = ( new WpdbRunStore( $GLOBALS['wpdb'] ) )->createRun(
+			1,
+			'senroflux-admin',
+			'A goal',
+			array( 'senroflux/read-content' ),
+			array(
+				'max_steps'      => 5,
+				'max_tool_calls' => 5,
+				'max_tokens'     => 100,
+				'max_questions'  => 1,
+				'max_plans'      => 1,
+			),
+			null,
+			null,
+			null,
+			\Specflux\SenroFlux\Run\GateMode::AgentSafety,
+			array( 'generate' )
+		);
+
+		$html = $this->render( $run_id );
+
+		$this->assertStringContainsString( 'senroflux-withheld-roles', $html );
+		$this->assertStringContainsString( 'generate', $html );
+	}
+
+	public function test_the_detail_view_names_nothing_when_no_role_is_withheld(): void {
+		$run_id = $this->seedRun();
+
+		$html = $this->render( $run_id );
+
+		$this->assertStringNotContainsString( 'senroflux-withheld-roles', $html );
+	}
+
+	// ------------------------------------------------------------------
 	// Helpers
 	// ------------------------------------------------------------------
 

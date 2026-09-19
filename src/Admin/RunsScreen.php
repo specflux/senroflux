@@ -863,6 +863,21 @@ class RunsScreen {
 			)
 		);
 
+		// 0.3 S6: one line, next to the gate mode, when roles were withheld
+		// at start() — a user holding every capability sees nothing.
+		if ( ! empty( $run['withheld_roles'] ) && is_array( $run['withheld_roles'] ) ) {
+			printf(
+				'<p class="senroflux-withheld-roles">%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %s: comma-separated list of withheld role names. */
+						__( 'Some abilities are off for this run (your account is missing the capability they need): %s', 'senroflux' ),
+						implode( ', ', array_map( 'strval', $run['withheld_roles'] ) )
+					)
+				)
+			);
+		}
+
 		$this->renderRunErrorFlash();
 
 		if ( ! empty( $run['error'] ) && is_array( $run['error'] ) ) {

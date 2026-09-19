@@ -73,6 +73,8 @@ final class Runner {
 		private readonly mixed $grant_verb_resolver = null,
 		/** @var callable():GateMode|null S3: the environment's CURRENT gate mode; absent = always {@see GateMode::AgentSafety} (0.2 behaviour, never mismatches). */
 		private readonly mixed $gate_mode_probe = null,
+		/** @var callable(Run):list<string>|null S6: the concrete ability ids withheld from this run's execution (a role's resolved ability, for every role in `Run::$withheldRoles`); absent = none. Defence in depth alongside the tool-set drop at start() — this is re-checked on every call, never trusting the allow-list alone. */
+		private readonly mixed $withheld_abilities_resolver = null,
 	) {
 	}
 
@@ -1084,7 +1086,13 @@ final class Runner {
 			return $ceiling;
 		}
 
-		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode );
+		// S6: the pack's own words for its withheld roles — the harness
+		// itself never learns what a role's ability does (B0 rule 3).
+		$withheld_notice = ( null !== $pack && array() !== $run->withheldRoles )
+			? $pack->withheldRoleNotice( $run->withheldRoles )
+			: null;
+
+		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice );
 
 		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
@@ -1321,6 +1329,18 @@ final class Runner {
 	 */
 	private function executeCall( ToolRegistry $registry, Run $run, array $call, bool $approved = false ): ToolOutcome {
 		$name = ToolRegistry::abilityName( $call['name'] );
+
+		// S6 defence in depth: a withheld role's ability is refused here even
+		// if it somehow still reached the model (a stale allow-list, a
+		// hallucinated/injected call) — checked BEFORE the allow-list so the
+		// refusal names the real reason, never a generic unknown_tool.
+		if ( in_array( $name, $this->withheldAbilities( $run ), true ) ) {
+			return ToolOutcome::denied(
+				'role_withheld',
+				__( 'This run cannot use that ability: your account is missing the capability it needs.', 'senroflux' )
+			);
+		}
+
 		if ( ! $registry->admits( $name ) ) {
 			return ToolOutcome::unknownTool( $name );
 		}
@@ -1338,6 +1358,23 @@ final class Runner {
 			is_array( $args ) ? $args : null,
 			$this->builtinGateFor( $run, $name, is_array( $args ) ? $args : array(), (string) ( $call['id'] ?? '' ), $approved )
 		);
+	}
+
+	/**
+	 * The concrete ability ids withheld from this run's execution (0.3 S6),
+	 * via the injected resolver; an empty list when none are, or the resolver
+	 * is absent (a direct-allow run has no roles to withhold).
+	 *
+	 * @return list<string>
+	 */
+	private function withheldAbilities( Run $run ): array {
+		if ( ! is_callable( $this->withheld_abilities_resolver ) ) {
+			return array();
+		}
+
+		$abilities = ( $this->withheld_abilities_resolver )( $run );
+
+		return is_array( $abilities ) ? array_values( array_filter( $abilities, 'is_string' ) ) : array();
 	}
 
 	/**
@@ -2602,7 +2639,8 @@ final class Runner {
 			$this->latestModelText( $run_id ),
 			$objects,
 			$this->post_lookup,
-			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety
+			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety,
+			null !== $fresh ? $fresh->withheldRoles : array()
 		);
 
 		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );

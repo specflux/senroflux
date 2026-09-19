@@ -50,9 +50,10 @@ final class Report {
 	 * @param callable|null       $post_lookup (string|int $object_id): array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}.
 	 *                                         Null means the default wpAdapter.
 	 * @param GateMode            $gate_mode   The run's pinned gate mode (0.3 S3).
-	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string}
+	 * @param list<string>        $withheld_roles The run's withheld role names (0.3 S6).
+	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string,withheld_roles:list<string>}
 	 */
-	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety ): array {
+	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array() ): array {
 		$lookup  = $post_lookup ?? self::wpPostLookup();
 		$changes = array();
 
@@ -76,9 +77,11 @@ final class Report {
 		}
 
 		$report = array(
-			'summary'   => $summary,
-			'changes'   => $changes,
-			'gate_mode' => $gate_mode->value,
+			'summary'        => $summary,
+			'changes'        => $changes,
+			'gate_mode'      => $gate_mode->value,
+			// 0.3 S6: next to the gate mode, as the spec asks.
+			'withheld_roles' => array_values( array_filter( $withheld_roles, 'is_string' ) ),
 		);
 
 		if ( GateMode::BuiltIn === $gate_mode ) {

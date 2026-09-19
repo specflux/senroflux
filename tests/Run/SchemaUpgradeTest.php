@@ -1,7 +1,8 @@
 <?php
 /**
- * Schema tests (0.2 S4, plus the v3 skills_disable_json column): the new
- * columns exist, the version option is stamped, and the upgrade is idempotent.
+ * Schema tests (0.2 S4, plus the v3 skills_disable_json column, the v4
+ * gate_mode column, and the v5 withheld_roles_json column): the new columns
+ * exist, the version option is stamped, and the upgrade is idempotent.
  *
  * @package SenroFlux
  */
@@ -21,11 +22,11 @@ final class SchemaUpgradeTest extends TestCase {
 		$GLOBALS['senroflux_test_dbdelta_queries'] = array();
 	}
 
-	public function test_schema_version_is_four(): void {
-		$this->assertSame( 4, Schema::DB_VERSION );
+	public function test_schema_version_is_five(): void {
+		$this->assertSame( 5, Schema::DB_VERSION );
 	}
 
-	/** @return list<string> The 0.2 columns every current runs table carries. */
+	/** @return list<string> The 0.2-0.3 columns every current runs table carries. */
 	private function newColumnFragments(): array {
 		return array(
 			'pack VARCHAR(64) NULL',
@@ -37,6 +38,7 @@ final class SchemaUpgradeTest extends TestCase {
 			'conversation_locale VARCHAR(20) NULL',
 			'content_locale VARCHAR(20) NULL',
 			'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
+			'withheld_roles_json TEXT NULL',
 		);
 	}
 
@@ -57,13 +59,13 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 4, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 5, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'], 'runs + steps statements' );
 	}
 
 	public function test_maybe_upgrade_is_idempotent_at_the_current_version(): void {
 		$db = new wpdb();
-		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 4;
+		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 5;
 
 		Schema::maybe_upgrade( $db );
 
@@ -76,13 +78,14 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 4, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 5, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'] );
 
 		// dbDelta is idempotent by design: re-running the SAME statements is
-		// exactly how a v1 table gains the v2 columns.
+		// exactly how a v1 table gains the later columns.
 		$statements = implode( "\n", $GLOBALS['senroflux_test_dbdelta_queries'] );
 		$this->assertStringContainsString( 'accepted_plan_step_id', $statements );
 		$this->assertStringContainsString( 'skills_disable_json', $statements );
+		$this->assertStringContainsString( 'withheld_roles_json', $statements );
 	}
 }

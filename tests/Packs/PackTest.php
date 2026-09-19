@@ -55,6 +55,14 @@ final class PackTest extends TestCase {
 		$this->assertSame( '', $this->ordinaryPack()->runCapability() );
 	}
 
+	public function test_role_capabilities_defaults_to_empty(): void {
+		$this->assertSame( array(), $this->ordinaryPack()->roleCapabilities() );
+	}
+
+	public function test_withheld_role_notice_defaults_to_null(): void {
+		$this->assertNull( $this->ordinaryPack()->withheldRoleNotice( array( 'generate' ) ) );
+	}
+
 	public function test_a_pack_requiring_agent_safety_refuses_to_start_in_built_in_mode(): void {
 		Plugin::set_dependency_probe( false ); // Agent Safety absent => built-in mode.
 
