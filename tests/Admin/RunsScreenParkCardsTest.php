@@ -46,6 +46,11 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$GLOBALS['senroflux_test_transients']      = array();
 		$GLOBALS['senroflux_test_filters']         = array();
 		unset( $_POST, $_GET );
+		// 0.3 S10: the screen capability is now computed from the registered
+		// packs; this file is about the RENDERED CHROME, not that computation
+		// (covered by ScreenCapabilityTest/RunsScreenTest), so pin it back to
+		// the pre-0.3 fixed value with no pack fixtures needed.
+		add_filter( 'senroflux_runs_capability', static fn (): string => 'manage_options' );
 	}
 
 	protected function tearDown(): void {

@@ -66,6 +66,13 @@ function senroflux_activate(): void {
 	if ( isset( $wpdb ) ) {
 		Schema::maybe_upgrade( $wpdb );
 	}
+
+	// 0.3 S10: no redirect, no site-wide notice — one one-time notice on the
+	// Plugins screen only, rendered by RunsScreen::maybeRenderActivationNotice()
+	// and cleared the first time it shows.
+	if ( function_exists( 'set_transient' ) ) {
+		set_transient( \Specflux\SenroFlux\Admin\RunsScreen::ACTIVATION_NOTICE_TRANSIENT, 1, WEEK_IN_SECONDS );
+	}
 }
 
 // Runtime autoloader for THIS PLUGIN'S OWN CLASSES ONLY (S2): deliberately a

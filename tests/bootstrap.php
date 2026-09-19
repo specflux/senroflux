@@ -176,6 +176,38 @@ if ( ! function_exists( 'user_can' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_user_meta' ) ) {
+	$GLOBALS['senroflux_test_user_meta'] = array();
+
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_meta'][$user_id][$key] = mixed.
+	 * `$single` is always honoured (the harness never reads a meta array).
+	 */
+	function get_user_meta( int $user_id, string $key = '', bool $single = false ) {
+		unset( $single );
+
+		return $GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] ?? '';
+	}
+}
+
+if ( ! function_exists( 'update_user_meta' ) ) {
+	/** Test knob: records the write in $GLOBALS['senroflux_test_user_meta']. */
+	function update_user_meta( int $user_id, string $key, $value ) {
+		$GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] = $value;
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_user_meta' ) ) {
+	/** Test knob: clears one meta key for one user. */
+	function delete_user_meta( int $user_id, string $key ) {
+		unset( $GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] );
+
+		return true;
+	}
+}
+
 if ( ! function_exists( 'wp_trim_words' ) ) {
 	/** Truncate shim. */
 	function wp_trim_words( string $text, int $num_words = 55, string $more = '…' ): string {

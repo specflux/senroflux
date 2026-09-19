@@ -41,6 +41,8 @@ namespace Specflux\SenroFlux\Packs;
 
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Run\GateMode;
+use Specflux\SenroFlux\Setup\Checks;
+use Specflux\SenroFlux\Setup\SetupCheck;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\VerbTier;
@@ -527,38 +529,99 @@ abstract class Pack {
 			return $ceiling;
 		}
 
-		// 0.3 S3: preflight becomes gate-mode-aware. In AS mode the binding
-		// check (below) is the whole governance test, unchanged from 0.2. In
-		// built-in mode there is no binding to check — Agent Safety may not
-		// even be installed — so the run capability is the whole test, unless
-		// the pack itself refuses to run ungoverned by Agent Safety.
-		if ( GateMode::BuiltIn === Plugin::currentGateMode() ) {
-			if ( $this->requiresAgentSafety() ) {
-				return new WP_Error(
-					'pack_requires_agent_safety',
-					__( 'This pack requires the Agent Safety plugin to be active.', 'senroflux' ),
-					array( 'status' => 400 )
-				);
-			}
-
-			$capability = $this->runCapability();
-			if ( '' !== $capability && ! ( function_exists( 'user_can' ) && user_can( $user_id, $capability ) ) ) {
-				return new WP_Error(
-					'pack_unbound',
-					__( 'You do not have the capability this pack needs to start a run.', 'senroflux' ),
-					array( 'status' => 400 )
-				);
-			}
-
-			return true;
-		}
-
-		$unbound = $this->agentSafetyBindingError( $user_id );
-		if ( null !== $unbound ) {
-			return $unbound;
+		// 0.3 S11: preflight is now a THIN caller over {@see setupChecks()} —
+		// the same governance questions the setup panel renders, asked the
+		// same way, so the two can never disagree (never two rule sets).
+		$failure = Checks::firstBlockingFailure( $this->setupChecks( $user_id ) );
+		if ( null !== $failure ) {
+			return new WP_Error(
+				$failure->errorCode(),
+				$failure->messageFor( $user_id ),
+				array( 'status' => 400 )
+			);
 		}
 
 		return true;
+	}
+
+	/**
+	 * S11: this pack's own contributed setup checks — the SAME questions
+	 * {@see preflight()} asks, in the SAME order, so the setup panel and the
+	 * preflight refusal can never disagree.
+	 *
+	 * 0.3 S3 unchanged behind the scenes: in built-in mode the run capability
+	 * (or, when the pack refuses to run ungoverned, {@see requiresAgentSafety()})
+	 * is the whole test; in Agent Safety mode {@see agentSafetyBindingError()}
+	 * is the whole test — Agent Safety mode has never asked the WP capability
+	 * question here (a Capability Pack binding IS the governance seam there),
+	 * and 0.3 does not widen that (a fixture-pack regression test — S6's
+	 * withheld-roles worked example — pins a user bound but capability-less in
+	 * AS mode as a PASS).
+	 *
+	 * @param int $user_id The user the run would be started for.
+	 * @return list<SetupCheck>
+	 */
+	public function setupChecks( int $user_id ): array {
+		if ( GateMode::BuiltIn === Plugin::currentGateMode() ) {
+			if ( $this->requiresAgentSafety() ) {
+				return array( $this->agentSafetyRequiredCheck() );
+			}
+
+			return array( $this->capabilityCheck( $user_id ) );
+		}
+
+		return array( $this->bindingCheck( $user_id ) );
+	}
+
+	/** The `<pack>/capability` setup check (built-in mode's whole test). */
+	private function capabilityCheck( int $user_id ): SetupCheck {
+		$capability = $this->runCapability();
+		$passed     = '' === $capability || ( function_exists( 'user_can' ) && user_can( $user_id, $capability ) );
+		$message    = __( 'You do not have the capability this pack needs to start a run.', 'senroflux' );
+
+		return new SetupCheck(
+			$this->name() . '/capability',
+			SetupCheck::BLOCKING,
+			$passed,
+			$message,
+			null,
+			null,
+			$message,
+			'pack_unbound'
+		);
+	}
+
+	/** The `<pack>/binding` setup check (Agent Safety mode's whole test). */
+	private function bindingCheck( int $user_id ): SetupCheck {
+		$error   = $this->agentSafetyBindingError( $user_id );
+		$message = null !== $error ? (string) $error->get_error_message() : '';
+
+		return new SetupCheck(
+			$this->name() . '/binding',
+			SetupCheck::BLOCKING,
+			null === $error,
+			$message,
+			null,
+			null,
+			$message,
+			null !== $error ? (string) $error->get_error_code() : ''
+		);
+	}
+
+	/** The `<pack>/agent-safety-required` setup check (built-in mode, {@see requiresAgentSafety()}). */
+	private function agentSafetyRequiredCheck(): SetupCheck {
+		$message = __( 'This pack requires the Agent Safety plugin to be active.', 'senroflux' );
+
+		return new SetupCheck(
+			$this->name() . '/agent-safety-required',
+			SetupCheck::BLOCKING,
+			false,
+			$message,
+			null,
+			null,
+			$message,
+			'pack_requires_agent_safety'
+		);
 	}
 
 	/**

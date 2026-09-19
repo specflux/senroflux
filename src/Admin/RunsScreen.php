@@ -33,6 +33,8 @@ use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
+use Specflux\SenroFlux\Setup\Checks;
+use Specflux\SenroFlux\Setup\SetupCheck;
 use Specflux\SenroFlux\Tools\VerbTier;
 use WP_Error;
 
@@ -78,15 +80,22 @@ class RunsScreen {
 	/** The id the question card's rationale <p> carries for aria-describedby (S15). */
 	private const RATIONALE_ID = 'senroflux-rationale';
 
+	/** Transient set on activation, cleared the first time the Plugins-screen notice renders (S10). */
+	public const ACTIVATION_NOTICE_TRANSIENT = 'senroflux_activation_notice';
+
 	/** Register on admin_menu (+ posts + assets). */
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
+		add_action( 'admin_init', array( $this, 'redirectOldToolsUrl' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
 		add_action( 'admin_post_senroflux_cancel_run', array( $this, 'handleCancel' ) );
 		add_action( 'admin_post_senroflux_new_run', array( $this, 'handleNewRun' ) );
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
 		add_action( 'admin_post_senroflux_plan_decision', array( $this, 'handlePlanDecision' ) );
 		add_action( 'admin_post_senroflux_approval_decision', array( $this, 'handleApprovalDecision' ) );
+		add_action( 'wp_ajax_senroflux_setup_panel', array( $this, 'handleSetupPanel' ) );
+		add_action( 'wp_ajax_senroflux_dismiss_agent_safety_check', array( $this, 'handleDismissAgentSafetyCheck' ) );
+		add_action( 'admin_notices', array( $this, 'maybeRenderActivationNotice' ) );
 		add_filter( ConsumerPolicy::FILTER, array( $this, 'registerAdminConsumer' ) );
 	}
 
@@ -151,15 +160,61 @@ class RunsScreen {
 		return $consumers;
 	}
 
-	/** Add the Tools submenu. */
+	/**
+	 * The top-level "SenroFlux" menu (0.3 S10 — moved out of Tools).
+	 *
+	 * The capability is computed fresh on every `admin_menu` call
+	 * ({@see ScreenCapability::current()}: the first registered pack's run
+	 * capability the CURRENT viewer holds, else `do_not_allow`), so a
+	 * Subscriber never sees the menu item at all while an editor who can run
+	 * one pack does.
+	 */
 	public function menu(): void {
-		add_management_page(
-			__( 'SenroFlux Runs', 'senroflux' ),
-			__( 'SenroFlux Runs', 'senroflux' ),
+		add_menu_page(
+			__( 'SenroFlux', 'senroflux' ),
+			__( 'SenroFlux', 'senroflux' ),
 			$this->capability(),
 			self::SLUG,
-			array( $this, 'render' )
+			array( $this, 'render' ),
+			'dashicons-format-chat'
 		);
+	}
+
+	/**
+	 * 0.3 S10 `[assumed]`: the old Tools submenu URL
+	 * (`tools.php?page=senroflux-runs`) redirects to the new top-level one,
+	 * preserving `run_id`/`senroflux_filter` so a bookmarked review link keeps
+	 * working.
+	 */
+	public function redirectOldToolsUrl(): void {
+		global $pagenow;
+
+		if ( 'tools.php' !== $pagenow ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect, no state change.
+		$page = sanitize_key( wp_unslash( $_GET['page'] ?? '' ) );
+		if ( self::SLUG !== $page ) {
+			return;
+		}
+
+		$query = $_GET; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+		unset( $query['page'] );
+		$query = array_map( 'sanitize_text_field', wp_unslash( $query ) );
+		$query = array( 'page' => self::SLUG ) + $query;
+
+		$this->redirectAndExit( add_query_arg( $query, admin_url( 'admin.php' ) ) );
+	}
+
+	/**
+	 * The one place every redirect-then-stop goes through — a test subclass
+	 * overrides THIS, not `wp_safe_redirect()` + `exit` directly, so a test
+	 * can observe the destination without killing the PHPUnit process.
+	 */
+	protected function redirectAndExit( string $url ): void {
+		wp_safe_redirect( $url );
+		exit;
 	}
 
 	/** Enqueue the screen assets only on this page. */
@@ -516,7 +571,13 @@ class RunsScreen {
 		exit;
 	}
 
-	/** Render list or detail. */
+	/**
+	 * Render list or detail.
+	 *
+	 * 0.3 S11: a blocked setup state still renders the FULL screen (the setup
+	 * panel, then the empty state / example goals / palette command below it)
+	 * — the panel names what to fix, it never replaces the screen.
+	 */
 	public function render(): void {
 		if ( ! current_user_can( $this->capability() ) ) {
 			return;
@@ -529,6 +590,8 @@ class RunsScreen {
 		echo '<div class="wrap">';
 		printf( '<h1>%s</h1>', esc_html__( 'SenroFlux Runs', 'senroflux' ) );
 
+		echo $this->renderSetupPanel( get_current_user_id() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- pre-escaped fragment.
+
 		if ( $run_id > 0 ) {
 			$this->renderDetail( $run_id );
 		} else {
@@ -536,6 +599,144 @@ class RunsScreen {
 		}
 
 		echo '</div>';
+	}
+
+	// ------------------------------------------------------------------
+	// Setup panel (0.3 S11): the harness's own checks (provider, Agent
+	// Safety advisory). Pack-level checks (`<pack>/capability`,
+	// `<pack>/binding`) render inline in the new-run form's pack picker
+	// (stage 8's per-pack preflight notice) — this panel is the harness's
+	// half of the SAME evaluator ({@see Checks}).
+	// ------------------------------------------------------------------
+
+	/**
+	 * The setup panel markup: one notice per harness check that is either
+	 * failing (blocking) or showing (advisory, undismissed). Empty string
+	 * when everything is clear.
+	 */
+	private function renderSetupPanel( int $user_id ): string {
+		$checks = Checks::harnessChecks( $user_id );
+		if ( array() === $checks ) {
+			return '';
+		}
+
+		$html = '<div id="senroflux-setup-panel" class="senroflux-setup-panel">';
+		foreach ( $checks as $check ) {
+			if ( $check->isBlocking() && $check->passed() ) {
+				continue;
+			}
+			$html .= $this->renderSetupCheckNotice( $check, $user_id );
+		}
+		$html .= '</div>';
+
+		return $html;
+	}
+
+	/** One check's notice: an error for a failing blocking check, a dismissible warning for the advisory. */
+	private function renderSetupCheckNotice( SetupCheck $check, int $user_id ): string {
+		$css_class = $check->isBlocking() ? 'notice-error' : 'notice-warning';
+		$message   = $check->messageFor( $user_id );
+		$link      = '';
+
+		if ( $check->fixVisibleFor( $user_id ) && null !== $check->fixUrl() ) {
+			$link = sprintf(
+				' <a href="%s">%s</a>',
+				esc_url( $check->fixUrl() ),
+				esc_html__( 'Fix this', 'senroflux' )
+			);
+		}
+
+		// Only the Agent Safety advisory carries a dismissal (S11: "per-user
+		// dismissal in user meta"); no other check gets a Dismiss button.
+		$dismiss = 'senroflux/agent-safety' === $check->id() ? $this->renderDismissButton() : '';
+
+		return sprintf(
+			'<div class="notice %1$s senroflux-setup-check" data-check-id="%2$s"><p>%3$s%4$s</p>%5$s</div>',
+			esc_attr( $css_class ),
+			esc_attr( $check->id() ),
+			esc_html( $message ),
+			$link, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built from esc_url()/esc_html() above.
+			$dismiss // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built from esc_attr()/esc_html() below.
+		);
+	}
+
+	/** The Agent Safety advisory's own "Dismiss" button (nonce-protected, current user only). */
+	private function renderDismissButton(): string {
+		return sprintf(
+			'<p><button type="button" class="button senroflux-dismiss-check" data-nonce="%s">%s</button></p>',
+			esc_attr( wp_create_nonce( 'senroflux_dismiss_agent_safety_check' ) ),
+			esc_html__( 'Dismiss', 'senroflux' )
+		);
+	}
+
+	/**
+	 * admin-ajax: re-render the setup panel (S11 "refresh on window focus").
+	 * Nonce-protected; capability = the computed screen capability (the same
+	 * one that gates the whole screen).
+	 */
+	public function handleSetupPanel(): void {
+		check_ajax_referer( 'senroflux_run', 'nonce' );
+
+		if ( ! current_user_can( $this->capability() ) ) {
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'senroflux' ) ), 403 );
+		}
+
+		$user_id  = get_current_user_id();
+		$pack     = sanitize_text_field( wp_unslash( $_POST['pack'] ?? '' ) );
+		$pack_obj = '' !== $pack ? PackRegistry::fromFilters()->get( $pack ) : null;
+
+		$checks         = null !== $pack_obj ? Checks::forPack( $pack_obj, $user_id ) : Checks::harnessChecks( $user_id );
+		$start_disabled = null !== Checks::firstBlockingFailure( $checks );
+
+		wp_send_json_success(
+			array(
+				'html'          => $this->renderSetupPanel( $user_id ),
+				'start_enabled' => ! $start_disabled,
+			)
+		);
+	}
+
+	/**
+	 * admin-ajax: dismiss the Agent Safety advisory for the CURRENT user only
+	 * (S11: per-user dismissal, never re-arms).
+	 */
+	public function handleDismissAgentSafetyCheck(): void {
+		check_ajax_referer( 'senroflux_dismiss_agent_safety_check', 'nonce' );
+
+		if ( ! current_user_can( $this->capability() ) ) {
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'senroflux' ) ), 403 );
+		}
+
+		Checks::dismissAgentSafetyFor( get_current_user_id() );
+
+		wp_send_json_success( array( 'html' => $this->renderSetupPanel( get_current_user_id() ) ) );
+	}
+
+	/**
+	 * One-time notice on the Plugins screen only (S10 activation: no
+	 * redirect, no site-wide notice). The transient is set on activation
+	 * ({@see \Specflux\SenroFlux\senroflux_activate()}) and deleted the first
+	 * time this renders, so it never shows twice.
+	 */
+	public function maybeRenderActivationNotice(): void {
+		global $pagenow;
+
+		if ( 'plugins.php' !== $pagenow || ! function_exists( 'get_transient' ) ) {
+			return;
+		}
+
+		if ( ! get_transient( self::ACTIVATION_NOTICE_TRANSIENT ) ) {
+			return;
+		}
+
+		delete_transient( self::ACTIVATION_NOTICE_TRANSIENT );
+
+		printf(
+			'<div class="notice notice-success is-dismissible"><p>%s <a href="%s">%s</a></p></div>',
+			esc_html__( 'SenroFlux is active.', 'senroflux' ),
+			esc_url( admin_url( 'admin.php?page=' . self::SLUG ) ),
+			esc_html__( 'Start a run', 'senroflux' )
+		);
 	}
 
 	/** The run list: New-run form (with preflight gate) + the runs table. */

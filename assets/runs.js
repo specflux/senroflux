@@ -290,3 +290,88 @@
 		schedulePoll();
 	}
 }() );
+
+/**
+ * Setup panel (0.3 S11): refresh on window focus (no polling, no button), and
+ * the Agent Safety advisory's Dismiss button. Present on both the list and
+ * detail views, so this runs in its OWN scope — not gated on `#senroflux-run-detail`.
+ */
+( function () {
+	'use strict';
+
+	var settings = window.senrofluxRuns || {};
+	var panel = document.getElementById( 'senroflux-setup-panel' );
+
+	if ( ! panel || ! settings.ajaxUrl ) {
+		return;
+	}
+
+	/** Re-fetch the panel and swap it in place. */
+	function refreshPanel() {
+		var body = new URLSearchParams();
+		body.set( 'action', 'senroflux_setup_panel' );
+		body.set( 'nonce', settings.nonce || '' );
+
+		var select = document.getElementById( 'senroflux-pack' );
+		if ( select && select.value ) {
+			body.set( 'pack', select.value );
+		}
+
+		fetch( settings.ajaxUrl, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: body.toString(),
+		} )
+			.then( function ( response ) {
+				return response.json();
+			} )
+			.then( function ( json ) {
+				if ( json && json.success && json.data && typeof json.data.html === 'string' ) {
+					var next = document.getElementById( 'senroflux-setup-panel' );
+					if ( next ) {
+						next.outerHTML = json.data.html;
+					}
+				}
+			} )
+			.catch( function () {
+				// Silent: the server-rendered panel from page load stands.
+			} );
+	}
+
+	window.addEventListener( 'focus', refreshPanel );
+
+	// Delegated: the panel is replaced wholesale on refresh, so a
+	// live-bound listener on `document` survives that swap.
+	document.addEventListener( 'click', function ( event ) {
+		var button = event.target.closest && event.target.closest( '.senroflux-dismiss-check' );
+		if ( ! button ) {
+			return;
+		}
+
+		var body = new URLSearchParams();
+		body.set( 'action', 'senroflux_dismiss_agent_safety_check' );
+		body.set( 'nonce', button.getAttribute( 'data-nonce' ) || '' );
+
+		fetch( settings.ajaxUrl, {
+			method: 'POST',
+			credentials: 'same-origin',
+			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+			body: body.toString(),
+		} )
+			.then( function ( response ) {
+				return response.json();
+			} )
+			.then( function ( json ) {
+				if ( json && json.success && json.data && typeof json.data.html === 'string' ) {
+					var next = document.getElementById( 'senroflux-setup-panel' );
+					if ( next ) {
+						next.outerHTML = json.data.html;
+					}
+				}
+			} )
+			.catch( function () {
+				// Silent: worst case the dismissed notice stays until reload.
+			} );
+	} );
+}() );

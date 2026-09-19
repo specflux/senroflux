@@ -13,6 +13,15 @@
 
 declare ( strict_types = 1 );
 
+if ( ! function_exists( 'add_query_arg' ) ) {
+	/** Minimal shim: appends/overrides query args on a URL (S10 redirect). */
+	function add_query_arg( array $args, string $url ): string {
+		$separator = str_contains( $url, '?' ) ? '&' : '?';
+
+		return array() === $args ? $url : $url . $separator . http_build_query( $args );
+	}
+}
+
 if ( ! function_exists( 'wp_unslash' ) ) {
 	/** Identity shim (WP's slash-removal is a no-op on already-unslashed input). */
 	function wp_unslash( $value ) {
