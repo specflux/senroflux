@@ -29,11 +29,15 @@ final class ConsumerPolicy {
 	/**
 	 * Resolve the allow-list and budget for an HTTP start.
 	 *
-	 * @param string $consumer         Consumer id from the request.
-	 * @param mixed  $requested_budget Budget-ish input from the request.
+	 * @param string             $consumer              Consumer id from the request.
+	 * @param mixed              $requested_budget      Budget-ish input from the request.
+	 * @param array<string,int>  $pack_budget_overrides S7: the chosen pack's own
+	 *                                                   {@see \Specflux\SenroFlux\Packs\Pack::defaultBudget()},
+	 *                                                   when the start names one. Empty for a packless
+	 *                                                   start, which keeps this seam pack-agnostic.
 	 * @return array{allow:list<string>,budget:array{max_steps:int,max_tool_calls:int,max_tokens:int}}|WP_Error
 	 */
-	public static function resolve( string $consumer, mixed $requested_budget ): array|WP_Error {
+	public static function resolve( string $consumer, mixed $requested_budget, array $pack_budget_overrides = array() ): array|WP_Error {
 		/**
 		 * Filters the consumers allowed to start runs over HTTP.
 		 *
@@ -59,7 +63,13 @@ final class ConsumerPolicy {
 			);
 		}
 
-		$ceiling = Budget::sanitize( is_array( $policy ) ? ( $policy['budget'] ?? null ) : null );
+		// S7: a pack-driven start's ceiling is the pack's OWN (flat-and-high)
+		// defaults, never the registered consumer's generic policy budget —
+		// which would otherwise silently clamp the site pack straight back
+		// down to the shipped table.
+		$ceiling = array() !== $pack_budget_overrides
+			? Budget::defaults( $pack_budget_overrides )
+			: Budget::sanitize( is_array( $policy ) ? ( $policy['budget'] ?? null ) : null );
 
 		return array(
 			'allow'  => $allow,

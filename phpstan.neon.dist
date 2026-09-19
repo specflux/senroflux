@@ -95,3 +95,17 @@ parameters:
             message: '#^Call to method registry\(\) on an unknown class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver\.$#'
             path: src/Packs/Posts/PostsPack.php
             count: 1
+        -
+            # Same external-class situation as PagesPack's/PostsPack's binding
+            # check (S7's site pack duplicates the same S13 pattern).
+            message: '#^Method Specflux\\SenroFlux\\Packs\\Site\\SitePack::resolveAsPackForUser\(\) has invalid return type Specflux\\AgentSafety\\Packs\\Pack\.$#'
+            path: src/Packs/Site/SitePack.php
+            count: 2
+        -
+            message: '#^Instantiated class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver not found\.$#'
+            path: src/Packs/Site/SitePack.php
+            count: 1
+        -
+            message: '#^Call to method registry\(\) on an unknown class Specflux\\AgentSafety\\Plugin\\Support\\PackResolver\.$#'
+            path: src/Packs/Site/SitePack.php
+            count: 1

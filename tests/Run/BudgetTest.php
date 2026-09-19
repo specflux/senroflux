@@ -173,4 +173,82 @@ final class BudgetTest extends TestCase {
 		$this->assertSame( $ceiling['max_questions'], $lowered['max_questions'], 'a non-positive cap falls back to the ceiling' );
 		$this->assertSame( $ceiling['max_plans'], $lowered['max_plans'], 'a non-positive cap falls back to the ceiling' );
 	}
+
+	// ------------------------------------------------------------------
+	// 0.3 S7: Pack::defaultBudget() overrides.
+	// ------------------------------------------------------------------
+
+	private function sitePackOverrides(): array {
+		return array(
+			'max_steps'      => 200,
+			'max_tool_calls' => 120,
+			'max_tokens'     => 1000000,
+			'max_questions'  => 8,
+			'max_plans'      => 3,
+			'images'         => 0,
+		);
+	}
+
+	public function test_pack_overrides_apply_only_when_given(): void {
+		// No override: byte-for-byte the shipped table, exactly as before S7
+		// (pages/posts budgets are unaffected by the site pack's existence).
+		$this->assertSame( Budget::defaults(), Budget::defaults( array() ) );
+	}
+
+	public function test_pack_overrides_become_the_new_baseline(): void {
+		$this->assertSame( $this->sitePackOverrides(), Budget::defaults( $this->sitePackOverrides() ) );
+	}
+
+	public function test_the_default_budget_filter_may_only_lower_a_pack_override_never_raise_it(): void {
+		add_filter(
+			'senroflux_default_budget',
+			static fn ( array $defaults ): array => array_merge(
+				$defaults,
+				array(
+					'max_steps' => 999999, // an attempt to raise it.
+					'images'    => 5,      // an attempt to raise it above the pack's 0.
+				)
+			),
+			10,
+			1
+		);
+
+		$defaults = Budget::defaults( $this->sitePackOverrides() );
+
+		$this->assertSame( 200, $defaults['max_steps'], 'the filter cannot raise a pack default' );
+		$this->assertSame( 0, $defaults['images'], 'the filter cannot raise a pack default' );
+	}
+
+	public function test_the_default_budget_filter_may_still_lower_a_pack_override(): void {
+		add_filter(
+			'senroflux_default_budget',
+			static fn ( array $defaults ): array => array_merge( $defaults, array( 'max_steps' => 50 ) ),
+			10,
+			1
+		);
+
+		$this->assertSame( 50, Budget::defaults( $this->sitePackOverrides() )['max_steps'] );
+	}
+
+	public function test_a_pack_override_leaves_the_global_filter_free_to_raise_a_packless_run(): void {
+		// Pages/posts (no pack override) must see EXACTLY the pre-0.3 filter
+		// behaviour — a filter may still move a key either direction.
+		add_filter(
+			'senroflux_default_budget',
+			static fn ( array $defaults ): array => array_merge( $defaults, array( 'max_steps' => 999 ) ),
+			10,
+			1
+		);
+
+		$this->assertSame( 999, Budget::defaults()['max_steps'] );
+	}
+
+	public function test_sanitize_with_pack_overrides_is_also_lower_only(): void {
+		$sanitized = Budget::sanitize( array( 'max_steps' => 999999 ), $this->sitePackOverrides() );
+
+		$this->assertSame( 200, $sanitized['max_steps'], 'a caller override cannot raise a pack default either' );
+
+		$lowered = Budget::sanitize( array( 'max_steps' => 10 ), $this->sitePackOverrides() );
+		$this->assertSame( 10, $lowered['max_steps'], 'lowering still works' );
+	}
 }

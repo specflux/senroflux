@@ -273,10 +273,17 @@ class RunsScreen {
 			return;
 		}
 
+		// S7: the chosen pack's own default-budget overrides become the
+		// ceiling ConsumerPolicy clamps against, instead of the generic
+		// registered-consumer table — otherwise a pack asking for a flat,
+		// high budget (the site pack) would be clamped straight back down.
+		$pack_obj              = PackRegistry::fromFilters()->get( $pack );
+		$pack_budget_overrides = null !== $pack_obj ? $pack_obj->defaultBudget() : array();
+
 		// The one policy seam: the server owns the allow-list and the ceiling,
 		// the request may only lower the budget (S13 "lower-only" is exactly
 		// `Budget::clamp( $requested, $ceiling )` inside ConsumerPolicy).
-		$policy = ConsumerPolicy::resolve( self::CONSUMER, $this->rawBudgetInput() );
+		$policy = ConsumerPolicy::resolve( self::CONSUMER, $this->rawBudgetInput(), $pack_budget_overrides );
 		if ( is_wp_error( $policy ) ) {
 			$this->redirectList( (string) $policy->get_error_code() );
 

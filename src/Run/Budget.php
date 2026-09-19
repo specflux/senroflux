@@ -46,19 +46,36 @@ final class Budget {
 	 * S6/S7 — but the ceilings still bound how many park round-trips a run
 	 * may cause.
 	 *
+	 * @param array<string,int> $pack_overrides Pack-declared overrides (S7),
+	 *                                          applied over the shipped table
+	 *                                          BEFORE the site-wide filter.
 	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
-	public static function defaults(): array {
+	public static function defaults( array $pack_overrides = array() ): array {
+		// 0.3 S7: a pack's own default table (e.g. the site pack's flat-and-high
+		// budget) is applied over the shipped table BEFORE the site-wide filter
+		// runs, so the filter (and, below, a caller's per-run override) sees the
+		// pack's numbers as ITS baseline, not the generic shipped one.
+		$base = self::mergeOver( self::shipped(), $pack_overrides );
+
 		/**
 		 * Filters the default budget for new runs.
 		 *
 		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int} $defaults
 		 */
-		$filtered = apply_filters( 'senroflux_default_budget', self::shipped() );
+		$filtered = apply_filters( 'senroflux_default_budget', $base );
 
-		// Merge over the SHIPPED table, not over defaults(): the filter is what
-		// defines the defaults, so re-entering this method here would recurse.
-		return self::mergeOver( self::shipped(), $filtered );
+		if ( array() === $pack_overrides ) {
+			// Pre-0.3 behaviour, byte for byte: no pack in play, the filter may
+			// move a key either direction over the shipped table.
+			return self::mergeOver( $base, $filtered );
+		}
+
+		// S7: "the site filter and consumers may still only lower it" — once a
+		// pack has declared its own (flat and high) defaults, the filter may
+		// only pull a key DOWN from that pack baseline, never raise it back
+		// toward or past the pack's own ceiling.
+		return self::mergeOverCapped( $base, $filtered );
 	}
 
 	/**
@@ -110,15 +127,29 @@ final class Budget {
 	 * lowers `max_tokens` site-wide is honoured by every run that does not
 	 * override it.
 	 *
-	 * @param mixed $raw Raw budget-ish input.
+	 * @param mixed             $raw            Raw budget-ish input.
+	 * @param array<string,int> $pack_overrides Pack-declared overrides (S7).
 	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
-	public static function sanitize( mixed $raw ): array {
-		return self::mergeOver( self::defaults(), $raw );
+	public static function sanitize( mixed $raw, array $pack_overrides = array() ): array {
+		$base = self::defaults( $pack_overrides );
+		if ( array() === $pack_overrides ) {
+			return self::mergeOver( $base, $raw );
+		}
+
+		// S7: same lower-only rule as {@see defaults()}, applied to a caller's
+		// per-run override once a pack default is in play.
+		return self::mergeOverCapped( $base, $raw );
 	}
 
 	/**
-	 * Overlay the known keys of `$raw` onto `$base` as positive integers.
+	 * Overlay the known keys of `$raw` onto `$base` as positive integers —
+	 * EXCEPT `images` (S7), which may also be exactly zero. Every other key
+	 * genuinely cannot be zero (a zero step/tool-call/token/question/plan
+	 * ceiling would fail the run immediately); `images` is a clean-refusal
+	 * SPEND counter, not a run-ending ceiling, and the site pack's own
+	 * default (S7) is `images: 0` — "no image generation in this run" — which
+	 * a positive-only rule could never represent.
 	 *
 	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int} $base Starting table.
 	 * @param mixed                                                                                                       $raw  Raw budget-ish input.
@@ -130,17 +161,50 @@ final class Budget {
 		}
 
 		foreach ( array_keys( $base ) as $key ) {
-			if ( isset( $raw[ $key ] ) && is_int( $raw[ $key ] ) && $raw[ $key ] > 0 ) {
+			if ( isset( $raw[ $key ] ) && is_int( $raw[ $key ] ) && self::isAcceptableCap( $key, $raw[ $key ] ) ) {
 				$base[ $key ] = $raw[ $key ];
 				continue;
 			}
 			// Numeric strings arrive from JSON; accept them under the same rule.
 			if ( isset( $raw[ $key ] ) && is_string( $raw[ $key ] ) && preg_match( '/^\d+$/', $raw[ $key ] ) ) {
-				$base[ $key ] = (int) $raw[ $key ];
+				$int = (int) $raw[ $key ];
+				if ( self::isAcceptableCap( $key, $int ) ) {
+					$base[ $key ] = $int;
+				}
 			}
 		}
 
 		return $base;
+	}
+
+	/**
+	 * Whether `$value` is an acceptable cap for `$key`: positive for every
+	 * key, or zero-or-positive for `images` alone (see {@see mergeOver()}).
+	 */
+	private static function isAcceptableCap( string $key, int $value ): bool {
+		if ( self::IMAGES === $key ) {
+			return $value >= 0;
+		}
+
+		return $value > 0;
+	}
+
+	/**
+	 * Like {@see mergeOver()}, but every resulting key is also capped at
+	 * `$base`'s own value (S7 lower-only rule): `$raw` may only pull a key
+	 * DOWN from `$base`, never past it.
+	 *
+	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int} $base Ceiling table.
+	 * @param mixed                                                                                                       $raw  Raw budget-ish input.
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
+	 */
+	private static function mergeOverCapped( array $base, mixed $raw ): array {
+		$merged = self::mergeOver( $base, $raw );
+		foreach ( $base as $key => $ceiling_value ) {
+			$merged[ $key ] = min( $merged[ $key ], $ceiling_value );
+		}
+
+		return $merged;
 	}
 
 	/**

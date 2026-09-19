@@ -458,6 +458,20 @@ abstract class Pack {
 	}
 
 	/**
+	 * S7: key => value overrides applied over the SHIPPED budget table for
+	 * this pack's runs, BEFORE the `senroflux_default_budget` filter runs
+	 * (see {@see \Specflux\SenroFlux\Run\Budget::defaults()}). The base
+	 * returns an empty table — no override — which is what keeps every
+	 * pre-0.3 pack's budget byte-for-byte unchanged; the site pack (stage 7)
+	 * is the first to override this with its own flat-and-high table.
+	 *
+	 * @return array<string,int>
+	 */
+	public function defaultBudget(): array {
+		return array();
+	}
+
+	/**
 	 * The pack's guidance skills, source Pack, in render order. Base ships none;
 	 * the pages pack contributes `pages/copy-rules` (rendered), `pages/layout-rules`
 	 * and `pages/content-language` (S11/S15, stage 8).
