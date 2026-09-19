@@ -10,6 +10,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Run;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\InstructionRenderer;
 use Specflux\SenroFlux\Run\Tail;
 use Specflux\SenroFlux\Skills\Skill;
@@ -94,5 +95,45 @@ final class InstructionRendererTest extends TestCase {
 			'Your last write was refused: `not_in_plan` — stay inside the accepted plan or propose a new one.',
 			$text
 		);
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 S3: gate-mode awareness
+	// ------------------------------------------------------------------
+
+	public function test_neither_gate_mode_names_agent_safety(): void {
+		$tail = new Tail( 2, 1, 5, 3, 1000 );
+
+		foreach ( GateMode::cases() as $mode ) {
+			$text = InstructionRenderer::render( SkillSet::harnessSkills(), $tail, $mode );
+
+			$this->assertStringNotContainsStringIgnoringCase(
+				'agent safety',
+				$text,
+				"the {$mode->value} instruction must never name Agent Safety"
+			);
+		}
+	}
+
+	public function test_built_in_mode_states_every_write_stops_for_approval(): void {
+		$text = InstructionRenderer::render( SkillSet::harnessSkills(), new Tail( 2, 1, 5, 3, 1000 ), GateMode::BuiltIn );
+
+		$this->assertStringContainsString(
+			'Every call that changes the site stops for a person to approve it before it runs; reads do not.',
+			$text
+		);
+	}
+
+	public function test_both_modes_get_the_prefer_one_create_instruction(): void {
+		$tail = new Tail( 2, 1, 5, 3, 1000 );
+
+		foreach ( GateMode::cases() as $mode ) {
+			$text = InstructionRenderer::render( SkillSet::harnessSkills(), $tail, $mode );
+
+			$this->assertStringContainsString(
+				'prefer one create call with the full content over a create followed by several updates',
+				$text
+			);
+		}
 	}
 }

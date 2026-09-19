@@ -1,6 +1,7 @@
 <?php
 /**
- * Tests for the Agent Safety dependency gate (stage 2).
+ * Tests for the Agent Safety dependency probe (0.3 S3: no longer a hard
+ * dependency — its absence only decides the gate mode a run starts in).
  *
  * @package SenroFlux
  */
@@ -11,10 +12,12 @@ namespace Specflux\SenroFlux\Tests;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Run\GateMode;
 
 /**
- * The hard-dependency contract: without Agent Safety the plugin is inert —
- * available() is false, a notice is registered, and nothing else wires up.
+ * The 0.3 contract: `available()` still reports whether Agent Safety is
+ * present, but its absence no longer stops `boot()` from wiring the runtime —
+ * it only resolves {@see GateMode::BuiltIn} and shows an advisory notice.
  */
 final class DependencyCheckTest extends TestCase {
 
@@ -38,7 +41,16 @@ final class DependencyCheckTest extends TestCase {
 		$this->assertTrue( $plugin->available() );
 	}
 
-	public function test_boot_without_dependency_registers_only_the_notice(): void {
+	public function test_current_gate_mode_follows_availability(): void {
+		Plugin::set_dependency_probe( true );
+		$this->assertSame( GateMode::AgentSafety, Plugin::currentGateMode() );
+
+		Plugin::reset();
+		Plugin::set_dependency_probe( false );
+		$this->assertSame( GateMode::BuiltIn, Plugin::currentGateMode() );
+	}
+
+	public function test_boot_without_dependency_still_wires_the_runtime(): void {
 		$GLOBALS['senroflux_test_actions'] = array();
 
 		Plugin::set_dependency_probe( false );
@@ -46,15 +58,23 @@ final class DependencyCheckTest extends TestCase {
 		$plugin = Plugin::instance();
 		$plugin->boot();
 
-		$this->assertSame(
-			array( 'admin_notices' ),
+		// 0.3 S3: Agent Safety's absence is advisory, not fail-closed — the
+		// runtime wires up (HTTP surfaces, init hooks) exactly as it would
+		// with Agent Safety present, PLUS the advisory notice.
+		$this->assertContains(
+			'admin_notices',
 			array_keys( $GLOBALS['senroflux_test_actions'] ),
-			'an ungoverned harness must wire nothing beyond its warning notice'
+			'the advisory notice must still be registered'
+		);
+		$this->assertContains(
+			'rest_api_init',
+			array_keys( $GLOBALS['senroflux_test_actions'] ),
+			'the HTTP surface must wire up even without Agent Safety (built-in mode still runs)'
 		);
 		$this->assertFalse( $plugin->available() );
 	}
 
-	public function test_missing_notice_renders_the_ungoverned_warning(): void {
+	public function test_missing_notice_renders_the_advisory_warning(): void {
 		ob_start();
 		Plugin::instance()->render_missing_notice();
 		$html = (string) ob_get_clean();

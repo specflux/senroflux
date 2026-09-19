@@ -70,6 +70,13 @@ final class PagesPack extends Pack {
 	}
 
 	/**
+	 * @return string 'edit_pages' (S3/S7: the pages pack's run capability).
+	 */
+	public function runCapability(): string {
+		return 'edit_pages';
+	}
+
+	/**
 	 * The input-property keys this pack's client actually sends, per ability
 	 * template (S9 shape-compat seam). A core ability is adopted only when its
 	 * schema accepts every one of these.

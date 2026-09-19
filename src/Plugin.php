@@ -15,6 +15,7 @@ use Specflux\SenroFlux\Http\Rest;
 use Specflux\SenroFlux\Model\AiClientGateway;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\WpdbRunStore;
@@ -79,6 +80,17 @@ final class Plugin {
 	}
 
 	/**
+	 * The gate mode a run started right now would resolve to (0.3 S3):
+	 * {@see GateMode::AgentSafety} when its gate class is loaded, otherwise
+	 * {@see GateMode::BuiltIn}. Static so composition-root-adjacent code that
+	 * has no natural instance in hand (a pack's `preflight()`) can ask the
+	 * exact question `start()` asks, without duplicating the dependency probe.
+	 */
+	public static function currentGateMode(): GateMode {
+		return self::instance()->available() ? GateMode::AgentSafety : GateMode::BuiltIn;
+	}
+
+	/**
 	 * Test seam: force the dependency check outcome.
 	 *
 	 * @param bool|null $present Forced outcome, or null to restore reality.
@@ -136,13 +148,12 @@ final class Plugin {
 	 * Agent Safety's own priority-0 bootstrap so its classes exist).
 	 */
 	public function boot(): void {
-		if ( ! $this->dependency_present() ) {
-			add_action( 'admin_notices', array( $this, 'render_missing_notice' ) );
-
-			return;
-		}
-
-		$this->available = true;
+		// 0.3 S3: Agent Safety is no longer a hard dependency — its absence
+		// only decides the gate mode a run starts in (GateMode::BuiltIn), so
+		// boot wires the runtime either way. `available()` still reports
+		// whether AS is present, for the advisory notice below and for
+		// GateMode resolution at run start.
+		$this->available = $this->dependency_present();
 
 		// Schema v2 (0.2 S4): idempotent dbDelta, stamped by version option.
 		global $wpdb;
@@ -209,6 +220,12 @@ final class Plugin {
 		if ( function_exists( 'is_admin' ) && is_admin() ) {
 			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
 		}
+
+		// 0.3 S3/S11: advisory only — runs still start and tick without
+		// Agent Safety, in GateMode::BuiltIn.
+		if ( ! $this->available ) {
+			add_action( 'admin_notices', array( $this, 'render_missing_notice' ) );
+		}
 	}
 
 	/**
@@ -228,9 +245,9 @@ final class Plugin {
 	 */
 	public function render_missing_notice(): void {
 		printf(
-			'<div class="notice notice-error"><p>%s</p></div>',
+			'<div class="notice notice-warning"><p>%s</p></div>',
 			esc_html__(
-				'SenroFlux is inactive: it requires the Agent Safety plugin to govern every tool call. Install and activate Agent Safety, then reactivate SenroFlux.',
+				'SenroFlux is running without Agent Safety: every change-making call stops for your approval on the SenroFlux Runs screen instead. Install and activate Agent Safety for governance by another plugin on the site.',
 				'senroflux'
 			)
 		);
@@ -264,6 +281,13 @@ final class Plugin {
 		?array $skills_disable = null
 	): array|WP_Error {
 		if ( ! $this->ready() ) {
+			return $this->ungoverned_error();
+		}
+
+		// 0.3 S3: a third-party consumer may not drive a built-in-mode run —
+		// its approval park can only be resolved on SenroFlux's own Runs
+		// screen, which is the one consumer this refusal exempts.
+		if ( GateMode::BuiltIn === self::currentGateMode() && \Specflux\SenroFlux\Admin\RunsScreen::CONSUMER !== $consumer ) {
 			return $this->ungoverned_error();
 		}
 
@@ -321,6 +345,11 @@ final class Plugin {
 		}
 		$content_locale = function_exists( 'get_locale' ) ? get_locale() : '';
 
+		// 0.3 S3: resolve the gate mode ONCE, here, and pin it on the run row.
+		// It never changes afterwards, even if Agent Safety is later
+		// installed/removed while the run is in flight (S3's mismatch check).
+		$gate_mode = self::currentGateMode();
+
 		$store  = $this->runner()->store();
 		$run_id = $store->createRun(
 			$user_id,
@@ -330,7 +359,8 @@ final class Plugin {
 			Budget::sanitize( $budget ),
 			$pack,
 			$conversation_locale,
-			$content_locale
+			$content_locale,
+			$gate_mode
 		);
 
 		// S9: when a pack drove the allow-list, record that a caller-supplied
@@ -404,6 +434,15 @@ final class Plugin {
 		// scope is one tick, because several ticks share one PHP process under
 		// PHPUnit, WP-CLI and cron.
 		$run = $this->runner()->store()->getRun( $run_id );
+
+		// 0.3 S3: same third-party-consumer refusal as start(), re-checked on
+		// every tick — a run's consumer never changes after start(), but a
+		// consumer could still poll a run it never started (its own bug, but
+		// one that must not resolve a built-in park it cannot answer).
+		if ( null !== $run && GateMode::BuiltIn === $run->gateMode && \Specflux\SenroFlux\Admin\RunsScreen::CONSUMER !== $run->consumer ) {
+			return $this->ungoverned_error();
+		}
+
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::useRunContext( null !== $run ? $run->goal : null );
 
 		try {
@@ -434,6 +473,13 @@ final class Plugin {
 		}
 		if ( $run->status->isTerminal() ) {
 			return $this->get( $run_id ); // Already finished: state unchanged.
+		}
+
+		// 0.3 S3: the same mismatch check tick() runs, at the top of cancel
+		// too — a run whose gate mode no longer matches the environment fails
+		// with a partial report (gate_mode_changed) instead of a plain cancel.
+		if ( null !== $this->runner()->gateModeMismatch( $run ) ) {
+			return $this->get( $run_id );
 		}
 
 		$store->updateRun(
@@ -506,6 +552,8 @@ final class Plugin {
 				// on every read; remaining/skills/report land with the
 				// features that fill them (S8, S12, S17).
 				'pack'                => $run->pack,
+				// 0.3 S3: pinned at start(), rendered once by the run header.
+				'gate_mode'           => $run->gateMode->value,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
 				// 0.2 S12: the harness-built report (result_json), surfaced on
@@ -549,12 +597,17 @@ final class Plugin {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Is the plugin both available AND backed by a database handle?
+	 * Is the plugin backed by a database handle and the Runner class loaded?
+	 *
+	 * 0.3 S3: this used to also require {@see available()} (Agent Safety
+	 * present) — SenroFlux's hard dependency on Agent Safety is retired.
+	 * Agent Safety's absence now only decides the gate mode a run starts in
+	 * ({@see GateMode::BuiltIn}), never whether the plugin may run at all.
 	 */
 	private function ready(): bool {
 		global $wpdb;
 
-		return $this->available() && isset( $wpdb ) && class_exists( Runner::class );
+		return isset( $wpdb ) && class_exists( Runner::class );
 	}
 
 	/**
@@ -573,13 +626,17 @@ final class Plugin {
 	}
 
 	/**
-	 * The one ungoverned error every entry point returns while the hard
-	 * dependency is missing — fail closed, never half-run.
+	 * The `senroflux_ungoverned` (409) error every entry point returns when
+	 * this specific request cannot be governed at all — fail closed, never
+	 * half-run. 0.3 S3 narrows WHEN this fires to two cases: the plugin isn't
+	 * backed by a database/Runner ({@see ready()}), or a third-party consumer
+	 * tried to start or tick a built-in-mode run (its approval park can only
+	 * be resolved on SenroFlux's own Runs screen).
 	 */
 	private function ungoverned_error(): WP_Error {
 		return new WP_Error(
 			'senroflux_ungoverned',
-			__( 'SenroFlux requires the Agent Safety plugin to be active before any run can start.', 'senroflux' ),
+			__( 'SenroFlux cannot govern this run: either it is not fully installed, or a built-in-mode run may only be driven from the SenroFlux Runs screen.', 'senroflux' ),
 			array( 'status' => 409 )
 		);
 	}
@@ -647,7 +704,12 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->gateVerbFor( $pack_verb ) : $pack_verb;
-			}
+			},
+			// 0.3 S3: the environment's CURRENT gate mode, asked fresh at the
+			// top of every tick/cancel/park resolution and compared with the
+			// one pinned on the run at start() -- a mismatch fails the run
+			// (gate_mode_changed) instead of silently switching enforcement.
+			static fn (): GateMode => self::currentGateMode()
 		);
 
 		return $this->runner;

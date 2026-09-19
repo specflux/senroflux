@@ -30,9 +30,11 @@ final class Schema {
 	 * additive run columns (pack, skills_json, result_json, objects_json,
 	 * accepted_plan_step_id, conversation_locale, content_locale); 3 adds
 	 * skills_disable_json, so every TICK can collect the run's skills exactly
-	 * as start() did (S8) instead of honouring the disable list only once.
+	 * as start() did (S8) instead of honouring the disable list only once; 4
+	 * adds `gate_mode` (0.3 S3) — existing rows default to `agent_safety`,
+	 * because 0.2 could only ever run under it.
 	 */
-	public const DB_VERSION = 3;
+	public const DB_VERSION = 4;
 
 	/**
 	 * Runs table name for this site.
@@ -136,6 +138,8 @@ final class Schema {
 				'accepted_plan_step_id BIGINT(20) UNSIGNED NULL',
 				'conversation_locale VARCHAR(20) NULL',
 				'content_locale VARCHAR(20) NULL',
+				// 0.3 S3: pinned at start, never updated afterwards.
+				'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',

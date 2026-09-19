@@ -49,9 +49,10 @@ final class Report {
 	 * @param array<string,mixed> $objects     The objects_json map.
 	 * @param callable|null       $post_lookup (string|int $object_id): array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}.
 	 *                                         Null means the default wpAdapter.
-	 * @return array{summary:string,changes:list<array<string,mixed>>}
+	 * @param GateMode            $gate_mode   The run's pinned gate mode (0.3 S3).
+	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string}
 	 */
-	public static function build( string $summary, array $objects, ?callable $post_lookup = null ): array {
+	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety ): array {
 		$lookup  = $post_lookup ?? self::wpPostLookup();
 		$changes = array();
 
@@ -74,10 +75,17 @@ final class Report {
 			$changes[] = self::changeRow( $object_id, $is_verified, $lookup, $object_id );
 		}
 
-		return array(
-			'summary' => $summary,
-			'changes' => $changes,
+		$report = array(
+			'summary'   => $summary,
+			'changes'   => $changes,
+			'gate_mode' => $gate_mode->value,
 		);
+
+		if ( GateMode::BuiltIn === $gate_mode ) {
+			$report['gate_mode_note'] = __( 'Approvals for this run are recorded only on this page.', 'senroflux' );
+		}
+
+		return $report;
 	}
 
 	/**

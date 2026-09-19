@@ -25,14 +25,19 @@ final class InstructionRenderer {
 
 	/**
 	 * Render the skill sections (harness, pack, consumer) joined with a blank
-	 * line, then the tail after a "\n\n---\n\n" separator when the tail is
-	 * non-empty.
+	 * line, then the gate-mode block, then the tail after a "\n\n---\n\n"
+	 * separator when the tail is non-empty.
 	 *
-	 * @param list<Skill> $skills The collected skills for this run, in order.
-	 * @param Tail        $tail   The run tail (budget + notes).
+	 * 0.3 S3: gate-mode-aware, but stays unaware of PLUGINS — it never names
+	 * Agent Safety, in either mode. One sentence shape, only the threshold
+	 * clause differs; both modes get the "prefer one create" instruction.
+	 *
+	 * @param list<Skill> $skills    The collected skills for this run, in order.
+	 * @param Tail        $tail      The run tail (budget + notes).
+	 * @param GateMode    $gate_mode The run's pinned gate mode.
 	 * @return string Plain-text instructions.
 	 */
-	public static function render( array $skills, Tail $tail ): string {
+	public static function render( array $skills, Tail $tail, GateMode $gate_mode = GateMode::AgentSafety ): string {
 		$sections = array(
 			SkillSource::Harness->value  => array(),
 			SkillSource::Pack->value     => array(),
@@ -50,6 +55,8 @@ final class InstructionRenderer {
 			}
 		}
 
+		$blocks[] = self::gateBlock( $gate_mode );
+
 		$instructions = implode( "\n\n", $blocks );
 
 		$tail_render = $tail->render();
@@ -58,5 +65,17 @@ final class InstructionRenderer {
 		}
 
 		return $instructions;
+	}
+
+	/**
+	 * The one gate-mode sentence, plus the "prefer one create" instruction
+	 * that applies in both modes.
+	 */
+	private static function gateBlock( GateMode $gate_mode ): string {
+		$sentence = GateMode::BuiltIn === $gate_mode
+			? 'Every call that changes the site stops for a person to approve it before it runs; reads do not.'
+			: 'Every call above this site\'s configured risk threshold stops for a person to approve it before it runs; reads do not.';
+
+		return $sentence . ' When creating something that carries content, prefer one create call with the full content over a create followed by several updates.';
 	}
 }

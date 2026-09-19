@@ -21,8 +21,8 @@ final class SchemaUpgradeTest extends TestCase {
 		$GLOBALS['senroflux_test_dbdelta_queries'] = array();
 	}
 
-	public function test_schema_version_is_three(): void {
-		$this->assertSame( 3, Schema::DB_VERSION );
+	public function test_schema_version_is_four(): void {
+		$this->assertSame( 4, Schema::DB_VERSION );
 	}
 
 	/** @return list<string> The 0.2 columns every current runs table carries. */
@@ -36,6 +36,7 @@ final class SchemaUpgradeTest extends TestCase {
 			'accepted_plan_step_id BIGINT(20) UNSIGNED NULL',
 			'conversation_locale VARCHAR(20) NULL',
 			'content_locale VARCHAR(20) NULL',
+			'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
 		);
 	}
 
@@ -56,13 +57,13 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 3, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 4, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'], 'runs + steps statements' );
 	}
 
 	public function test_maybe_upgrade_is_idempotent_at_the_current_version(): void {
 		$db = new wpdb();
-		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 3;
+		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 4;
 
 		Schema::maybe_upgrade( $db );
 
@@ -75,7 +76,7 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 3, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 4, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'] );
 
 		// dbDelta is idempotent by design: re-running the SAME statements is

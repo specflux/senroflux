@@ -14,6 +14,7 @@ use Specflux\SenroFlux\Approval\GrantBridge;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\BuiltinGate;
 use Specflux\SenroFlux\Tools\HarnessTools;
 use Specflux\SenroFlux\Tools\PlanTools;
 use Specflux\SenroFlux\Tools\ToolExecutor;
@@ -70,6 +71,8 @@ final class Runner {
 		private readonly GrantBridge $grants = new GrantBridge(),
 		/** @var callable(Run,string):(string|null)|null Gate-verb resolver (S14): pack verb => the AGENT SAFETY verb (the resolved ability id) a grant must name; absent = the pack verb IS the ability id (direct-allow, S9). */
 		private readonly mixed $grant_verb_resolver = null,
+		/** @var callable():GateMode|null S3: the environment's CURRENT gate mode; absent = always {@see GateMode::AgentSafety} (0.2 behaviour, never mismatches). */
+		private readonly mixed $gate_mode_probe = null,
 	) {
 	}
 
@@ -211,6 +214,15 @@ final class Runner {
 
 			if ( $run->status->isTerminal() ) {
 				return $this->state( $run, array(), null );
+			}
+
+			// 0.3 S3: the environment's mode vs. the one pinned at start().
+			// Checked at the top, before any park resolution or fresh work —
+			// a mismatch fails the run with a partial report rather than
+			// silently switching enforcement under it.
+			$mismatch_report = $this->gateModeMismatch( $run );
+			if ( null !== $mismatch_report ) {
+				return $this->state( $this->refresh( $run ), array(), array( 'report' => $mismatch_report ) );
 			}
 
 			$new_steps = array();
@@ -388,7 +400,9 @@ final class Runner {
 			if ( null !== $refusal ) {
 				$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
 			} else {
-				$outcome = $this->executeCall( $registry, $call );
+				// 0.3 S3: this is the approved re-run — the built-in gate must
+				// not re-park the SAME call it already surfaced for approval.
+				$outcome = $this->executeCall( $registry, $run, $call, approved: true );
 
 				if ( 'approval_required' === $outcome->kind ) {
 					return array(
@@ -579,7 +593,7 @@ final class Runner {
 					continue;
 				}
 
-				$outcome = $this->executeCall( $registry, $call );
+				$outcome = $this->executeCall( $registry, $run, $call );
 				++$tool_calls_used;
 
 				if ( 'approval_required' === $outcome->kind ) {
@@ -798,13 +812,18 @@ final class Runner {
 	 * @return array{approval:array<string,mixed>}
 	 */
 	private function approvalUi( ToolOutcome $outcome, array $call ): array {
+		// 0.3 S3: a built-in park's synthetic id is the only signal this
+		// method has (it is never handed the run) — no tier badge and no
+		// "Agent Safety pending actions" link belong on a built-in card.
+		$built_in = str_starts_with( (string) $outcome->approvalId, 'builtin:' );
+
 		return array(
 			'approval' => array(
 				'approval_id'  => $outcome->approvalId,
 				'verb'         => $outcome->verb ?? $call['name'],
-				'tier'         => $outcome->tier,
+				'tier'         => $built_in ? null : $outcome->tier,
 				'args_preview' => $call['args'] ?? array(),
-				'review_url'   => function_exists( 'admin_url' )
+				'review_url'   => ( ! $built_in && function_exists( 'admin_url' ) )
 					? admin_url( 'tools.php?page=agent-safety-pending' )
 					: '',
 			),
@@ -1065,7 +1084,7 @@ final class Runner {
 			return $ceiling;
 		}
 
-		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ) );
+		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode );
 
 		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
@@ -1295,8 +1314,12 @@ final class Runner {
 	 * `unknown_tool` and never reaches the executor (S5).
 	 *
 	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param bool $approved 0.3 S3: true on the re-run of an already-approved
+	 *                       built-in park — skips the built-in gate's own
+	 *                       re-classification so the SAME call is never
+	 *                       parked twice.
 	 */
-	private function executeCall( ToolRegistry $registry, array $call ): ToolOutcome {
+	private function executeCall( ToolRegistry $registry, Run $run, array $call, bool $approved = false ): ToolOutcome {
 		$name = ToolRegistry::abilityName( $call['name'] );
 		if ( ! $registry->admits( $name ) ) {
 			return ToolOutcome::unknownTool( $name );
@@ -1312,7 +1335,32 @@ final class Runner {
 
 		return $this->executor->call(
 			$name,
-			is_array( $args ) ? $args : null
+			is_array( $args ) ? $args : null,
+			$this->builtinGateFor( $run, $name, is_array( $args ) ? $args : array(), (string) ( $call['id'] ?? '' ), $approved )
+		);
+	}
+
+	/**
+	 * 0.3 S3: the built-in gate's classification of one call, or null when the
+	 * run's pinned mode is {@see GateMode::AgentSafety} (nothing for
+	 * ToolExecutor to decide itself).
+	 *
+	 * @param array<string,mixed> $args Call args (already normalised to an array).
+	 */
+	private function builtinGateFor( Run $run, string $ability, array $args, string $call_id, bool $approved ): ?BuiltinGate {
+		if ( GateMode::BuiltIn !== $run->gateMode ) {
+			return null;
+		}
+
+		$verb = $this->verbFor( $run, $ability, $args );
+		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
+
+		return new BuiltinGate(
+			active: $tier > VerbTier::TIER_0,
+			tier: $tier,
+			verb: $verb,
+			approvalId: 'builtin:' . $run->id . ':' . $call_id,
+			approved: $approved
 		);
 	}
 
@@ -1353,6 +1401,8 @@ final class Runner {
 				'tokens_in'  => $run->tokensIn,
 				'tokens_out' => $run->tokensOut,
 				'error'      => $run->error,
+				// 0.3 S3: pinned at start(), rendered once by the run header.
+				'gate_mode'  => $run->gateMode->value,
 			),
 			'new_steps' => $new_steps,
 			'ui'        => $ui ?? array(),
@@ -2548,7 +2598,12 @@ final class Runner {
 	public function report( int $run_id ): array {
 		$fresh   = $this->store->getRun( $run_id );
 		$objects = ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
-		$report  = Report::build( $this->latestModelText( $run_id ), $objects, $this->post_lookup );
+		$report  = Report::build(
+			$this->latestModelText( $run_id ),
+			$objects,
+			$this->post_lookup,
+			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety
+		);
 
 		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );
 
@@ -2639,6 +2694,50 @@ final class Runner {
 		}
 
 		return ( is_string( $value ) && '' !== $value ) ? $value : null;
+	}
+
+	/**
+	 * The environment's gate mode right now, through the injected probe.
+	 * Absent (or a probe that misbehaves) is fail-safe to
+	 * {@see GateMode::AgentSafety}, the 0.2 (and pre-S3-test) behaviour — it
+	 * can never MISMATCH a run pinned to the same default.
+	 */
+	private function currentGateMode(): GateMode {
+		if ( ! is_callable( $this->gate_mode_probe ) ) {
+			return GateMode::AgentSafety;
+		}
+
+		$mode = ( $this->gate_mode_probe )();
+
+		return $mode instanceof GateMode ? $mode : GateMode::AgentSafety;
+	}
+
+	/**
+	 * S3: compare the run's pinned gate mode with the environment's current
+	 * one. A terminal run is never checked — nothing left to govern. A
+	 * mismatch fails the run (`gate_mode_changed`, partial report) and
+	 * returns that report; null means "carry on".
+	 *
+	 * Public so {@see \Specflux\SenroFlux\Plugin::cancel()} can run the same
+	 * check before a user-initiated cancel, which never passes through
+	 * {@see tick()}.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function gateModeMismatch( Run $run ): ?array {
+		if ( $run->status->isTerminal() ) {
+			return null;
+		}
+
+		if ( $this->currentGateMode() === $run->gateMode ) {
+			return null;
+		}
+
+		return $this->failError(
+			$run,
+			'gate_mode_changed',
+			__( 'The gate mode changed after this run started; it cannot continue safely.', 'senroflux' )
+		);
 	}
 
 	/**

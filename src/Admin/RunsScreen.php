@@ -64,8 +64,13 @@ class RunsScreen {
 
 	private const SLUG = 'senroflux-runs';
 
-	/** The consumer id label for admin-started runs (S13). */
-	private const CONSUMER = 'senroflux-admin';
+	/**
+	 * The consumer id label for admin-started runs (S13). Public (0.3 S3): the
+	 * only consumer allowed to drive a built-in-mode run — its approval park
+	 * can only be resolved on this screen, so a third-party consumer starting
+	 * or ticking one is refused (`senroflux_ungoverned`, Plugin::start/tick).
+	 */
+	public const CONSUMER = 'senroflux-admin';
 
 	/** Goal length cap (S13: required, ≤ 1000 chars). */
 	private const MAX_GOAL = 1000;
@@ -848,6 +853,16 @@ class RunsScreen {
 			esc_html( self::statusLabel( (string) $run['status'] ) )
 		);
 
+		// 0.3 S3: the run header states the gate mode ONCE — no per-park banner.
+		printf(
+			'<p class="senroflux-gate-mode">%s</p>',
+			esc_html(
+				'built_in' === (string) ( $run['gate_mode'] ?? '' )
+					? __( 'Approvals for this run are handled on this screen, without Agent Safety.', 'senroflux' )
+					: __( 'Approvals for this run are governed by Agent Safety.', 'senroflux' )
+			)
+		);
+
 		$this->renderRunErrorFlash();
 
 		if ( ! empty( $run['error'] ) && is_array( $run['error'] ) ) {
@@ -868,8 +883,10 @@ class RunsScreen {
 				default                     => null,
 			};
 
-			// The review link for approvals still lives with Agent Safety.
-			if ( RunStatus::AwaitingApproval === $status ) {
+			// The review link for approvals still lives with Agent Safety —
+			// 0.3 S3: never shown for a built-in-mode run, which has no such
+			// screen; its approval is answered right here.
+			if ( RunStatus::AwaitingApproval === $status && 'built_in' !== (string) ( $run['gate_mode'] ?? '' ) ) {
 				$this->renderApprovalReviewLinks( $state );
 			}
 		}
@@ -1045,8 +1062,11 @@ class RunsScreen {
 		$assumptions = is_array( $payload['assumptions'] ?? null ) ? $payload['assumptions'] : array();
 		// The Runner computes S15 preapprove_availability from the filter + the
 		// Agent Safety grants service; `Plugin::get()` does not carry ui, so the
-		// screen recomputes the SAME condition (S14/S15).
+		// screen recomputes the SAME condition (S14/S15). In built-in mode the
+		// grants service is never available, so this is already false there —
+		// "Accept and pre-approve" naturally never renders (0.3 S3).
 		$preapprove = $this->preapprovalAvailable();
+		$built_in   = 'built_in' === (string) ( $run['gate_mode'] ?? '' );
 
 		$action = admin_url( 'admin-post.php' );
 		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-plan-heading">';
@@ -1080,6 +1100,23 @@ class RunsScreen {
 			echo '</li>';
 		}
 		echo '</ol>';
+
+		if ( $built_in ) {
+			$needs_approval = 0;
+			foreach ( $steps as $step ) {
+				if ( $this->stepNeedsApproval( $step ) ) {
+					++$needs_approval;
+				}
+			}
+
+			echo '<p class="senroflux-plan-approval-count">';
+			printf(
+				/* translators: %d: number of approvals this plan will ask for. */
+				esc_html( _n( 'This plan will ask you to approve %d change.', 'This plan will ask you to approve %d changes.', $needs_approval, 'senroflux' ) ),
+				(int) $needs_approval
+			);
+			echo '</p>';
+		}
 
 		if ( array() !== $assumptions ) {
 			echo '<h4>' . esc_html__( 'Assumptions', 'senroflux' ) . '</h4>';
@@ -1129,10 +1166,11 @@ class RunsScreen {
 			return;
 		}
 
-		$payload = $approval['message'];
-		$verb    = (string) ( $payload['verb'] ?? '' );
-		$tier    = (int) ( $payload['tier'] ?? 0 );
-		$args    = is_array( $payload['args'] ?? null ) ? $payload['args'] : array();
+		$payload  = $approval['message'];
+		$verb     = (string) ( $payload['verb'] ?? '' );
+		$tier     = (int) ( $payload['tier'] ?? 0 );
+		$args     = is_array( $payload['args'] ?? null ) ? $payload['args'] : array();
+		$built_in = 'built_in' === (string) ( $run['gate_mode'] ?? '' );
 
 		$action = admin_url( 'admin-post.php' );
 		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-approval-heading">';
@@ -1152,9 +1190,13 @@ class RunsScreen {
 		// and NOT model-authored in the i18n sense: render verbatim, never __().
 		echo '<code>' . esc_html( $verb ) . '</code></p>';
 
-		echo '<p><strong>' . esc_html__( 'Tier', 'senroflux' ) . ':</strong> ';
-		echo esc_html( (string) $tier );
-		echo '</p>';
+		if ( ! $built_in ) {
+			// 0.3 S3: no tier badge on a built-in approval card — there is no
+			// Agent Safety threshold behind it, only "this call writes".
+			echo '<p><strong>' . esc_html__( 'Tier', 'senroflux' ) . ':</strong> ';
+			echo esc_html( (string) $tier );
+			echo '</p>';
+		}
 
 		if ( array() !== $args ) {
 			// S15 a11y: `.senroflux-args` scrolls once the payload is taller

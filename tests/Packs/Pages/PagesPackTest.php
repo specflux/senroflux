@@ -17,6 +17,7 @@ namespace Specflux\SenroFlux\Tests\Packs\Pages;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Pages\PagesPack;
+use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
 
@@ -30,6 +31,12 @@ final class PagesPackTest extends TestCase {
 		$this->loadShims();
 		remove_all_filters( 'senroflux_skills_max_tokens' );
 		remove_all_filters( 'senroflux_run_skills' );
+		Plugin::reset();
+	}
+
+	protected function tearDown(): void {
+		Plugin::reset();
+		unset( $GLOBALS['senroflux_test_user_caps_by_id'] );
 	}
 
 	public function test_name_is_pages(): void {
@@ -137,12 +144,34 @@ final class PagesPackTest extends TestCase {
 	}
 
 	public function test_preflight_fails_closed_without_agent_safety(): void {
-		// Agent Safety is absent in the test harness → pack_unbound (fail closed).
+		// 0.3 S3: Agent Safety absent resolves built-in mode, whose whole test
+		// is the run capability (edit_pages) — absent here too, so this still
+		// fails closed to pack_unbound, for a different reason than 0.2's
+		// unconditional AS-binding check.
 		$result = ( new PagesPack() )->preflight( 1 );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'pack_unbound', $result->get_error_code() );
 		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
+	public function test_preflight_passes_in_built_in_mode_when_edit_pages_is_held(): void {
+		Plugin::set_dependency_probe( false ); // Agent Safety absent => built-in mode.
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 7 => array( 'edit_pages' => true ) );
+
+		$result = ( new PagesPack() )->preflight( 7 );
+
+		$this->assertTrue( $result );
+	}
+
+	public function test_preflight_still_refuses_in_built_in_mode_without_edit_pages(): void {
+		Plugin::set_dependency_probe( false );
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 7 => array( 'edit_pages' => false ) );
+
+		$result = ( new PagesPack() )->preflight( 7 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'pack_unbound', $result->get_error_code() );
 	}
 
 	public function test_agent_safety_pack_is_null_when_class_absent(): void {

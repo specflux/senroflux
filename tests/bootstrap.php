@@ -155,6 +155,21 @@ if ( ! function_exists( 'current_user_can' ) ) {
 	}
 }
 
+if ( ! function_exists( 'user_can' ) ) {
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_caps_by_id'][$user_id][$cap] = bool.
+	 * Falls back to the current-user knob when no per-user entry exists, so
+	 * tests that only set current_user_can()'s knob keep working.
+	 */
+	function user_can( int $user_id, string $capability ): bool {
+		if ( isset( $GLOBALS['senroflux_test_user_caps_by_id'][ $user_id ][ $capability ] ) ) {
+			return (bool) $GLOBALS['senroflux_test_user_caps_by_id'][ $user_id ][ $capability ];
+		}
+
+		return (bool) ( $GLOBALS['senroflux_test_user_caps'][ $capability ] ?? false );
+	}
+}
+
 if ( ! function_exists( 'wp_trim_words' ) ) {
 	/** Truncate shim. */
 	function wp_trim_words( string $text, int $num_words = 55, string $more = '…' ): string {
@@ -229,6 +244,21 @@ if ( ! function_exists( 'wp_die' ) ) {
 	/** Throwing shim so tests can observe a death. */
 	function wp_die( string $message ): void {
 		throw new RuntimeException( $message );
+	}
+}
+
+if ( ! function_exists( '_n' ) ) {
+	/**
+	 * Identity shim: picks singular/plural by count, no actual translation.
+	 *
+	 * @param string $single Singular text.
+	 * @param string $plural Plural text.
+	 * @param int    $number Count.
+	 * @param string $domain Text domain.
+	 * @return string
+	 */
+	function _n( string $single, string $plural, int $number, string $domain = 'default' ): string {
+		return 1 === $number ? $single : $plural;
 	}
 }
 

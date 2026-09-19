@@ -27,6 +27,7 @@ interface RunStore {
 	 * @param string             $goal     Goal text.
 	 * @param list<string>       $allow    Ability allow-list.
 	 * @param array<string,int>  $budget   Sanitized budget.
+	 * @param GateMode           $gate_mode Resolved at start (0.3 S3); never changes afterwards.
 	 */
 	public function createRun(
 		int $user_id,
@@ -36,7 +37,8 @@ interface RunStore {
 		array $budget,
 		?string $pack = null,
 		?string $conversation_locale = null,
-		?string $content_locale = null
+		?string $content_locale = null,
+		GateMode $gate_mode = GateMode::AgentSafety
 	): int;
 
 	/**

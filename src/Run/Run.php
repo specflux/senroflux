@@ -56,6 +56,8 @@ final class Run {
 		public readonly ?int $acceptedPlanStepId = null,
 		public readonly ?string $conversationLocale = null,
 		public readonly ?string $contentLocale = null,
+		/** 0.3 S3: pinned at start(), never changes afterwards. */
+		public readonly GateMode $gateMode = GateMode::AgentSafety,
 	) {
 	}
 
@@ -97,6 +99,7 @@ final class Run {
 			acceptedPlanStepId: isset( $row['accepted_plan_step_id'] ) && '' !== (string) $row['accepted_plan_step_id'] ? (int) $row['accepted_plan_step_id'] : null,
 			conversationLocale: isset( $row['conversation_locale'] ) && is_string( $row['conversation_locale'] ) && '' !== $row['conversation_locale'] ? $row['conversation_locale'] : null,
 			contentLocale: isset( $row['content_locale'] ) && is_string( $row['content_locale'] ) && '' !== $row['content_locale'] ? $row['content_locale'] : null,
+			gateMode: GateMode::tryFrom( (string) ( $row['gate_mode'] ?? 'agent_safety' ) ) ?? GateMode::AgentSafety,
 		);
 	}
 
@@ -129,6 +132,7 @@ final class Run {
 			'accepted_plan_step_id' => $this->acceptedPlanStepId,
 			'conversation_locale'   => $this->conversationLocale,
 			'content_locale'        => $this->contentLocale,
+			'gate_mode'             => $this->gateMode->value,
 		);
 	}
 }

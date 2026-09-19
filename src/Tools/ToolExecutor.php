@@ -33,10 +33,29 @@ final class ToolExecutor {
 	/**
 	 * Run one tool call to its terminal outcome.
 	 *
-	 * @param string      $ability_name Ability id (ns/name form).
-	 * @param mixed|null  $args         Call arguments; null when argument-less.
+	 * 0.3 S3: in {@see \Specflux\SenroFlux\Run\GateMode::BuiltIn}, `$gate`
+	 * carries the Runner's classification of this call. When it is active
+	 * (tier above 0, or unmapped) and not yet approved, the call parks HERE —
+	 * BEFORE `check_permissions` — because SenroFlux never registers
+	 * permission filters of its own (that would change the ability for every
+	 * consumer on the site, not just this run). On the re-run of an approved
+	 * park, `$gate->approved` is true and this check is skipped entirely, so
+	 * the ability's OWN `check_permissions`/`execute()` run exactly as they
+	 * would in AS mode.
+	 *
+	 * @param string           $ability_name Ability id (ns/name form).
+	 * @param mixed|null       $args         Call arguments; null when argument-less.
+	 * @param BuiltinGate|null $gate         Built-in gate classification, or null in AS mode.
 	 */
-	public function call( string $ability_name, mixed $args = null ): ToolOutcome {
+	public function call( string $ability_name, mixed $args = null, ?BuiltinGate $gate = null ): ToolOutcome {
+		if ( null !== $gate && $gate->active && ! $gate->approved ) {
+			return ToolOutcome::approvalRequired(
+				$gate->approvalId,
+				'' !== $gate->verb ? $gate->verb : $ability_name,
+				(string) $gate->tier
+			);
+		}
+
 		if ( ! function_exists( 'wp_get_ability' ) ) {
 			return ToolOutcome::unknownTool( $ability_name );
 		}

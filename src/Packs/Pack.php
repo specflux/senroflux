@@ -39,6 +39,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs;
 
+use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\VerbTier;
@@ -478,12 +480,57 @@ abstract class Pack {
 			return $ceiling;
 		}
 
+		// 0.3 S3: preflight becomes gate-mode-aware. In AS mode the binding
+		// check (below) is the whole governance test, unchanged from 0.2. In
+		// built-in mode there is no binding to check — Agent Safety may not
+		// even be installed — so the run capability is the whole test, unless
+		// the pack itself refuses to run ungoverned by Agent Safety.
+		if ( GateMode::BuiltIn === Plugin::currentGateMode() ) {
+			if ( $this->requiresAgentSafety() ) {
+				return new WP_Error(
+					'pack_requires_agent_safety',
+					__( 'This pack requires the Agent Safety plugin to be active.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			$capability = $this->runCapability();
+			if ( '' !== $capability && ! ( function_exists( 'user_can' ) && user_can( $user_id, $capability ) ) ) {
+				return new WP_Error(
+					'pack_unbound',
+					__( 'You do not have the capability this pack needs to start a run.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			return true;
+		}
+
 		$unbound = $this->agentSafetyBindingError( $user_id );
 		if ( null !== $unbound ) {
 			return $unbound;
 		}
 
 		return true;
+	}
+
+	/**
+	 * The WordPress capability that gates STARTING a run with this pack. Tested
+	 * only in built-in mode (S3) — in AS mode {@see agentSafetyBindingError()}
+	 * is the whole test. Empty string means "nothing to check", which exists
+	 * only so pre-0.3 pack test fixtures keep compiling; every shipped pack
+	 * overrides this with its real run capability (e.g. `edit_pages`).
+	 */
+	public function runCapability(): string {
+		return '';
+	}
+
+	/**
+	 * Whether this pack refuses to start at all without Agent Safety (S3). No
+	 * 0.3 pack returns true; the hook exists for commerce at 0.5.
+	 */
+	public function requiresAgentSafety(): bool {
+		return false;
 	}
 
 	/**

@@ -35,7 +35,8 @@ final class WpdbRunStore implements RunStore {
 		array $budget,
 		?string $pack = null,
 		?string $conversation_locale = null,
-		?string $content_locale = null
+		?string $content_locale = null,
+		GateMode $gate_mode = GateMode::AgentSafety
 	): int {
 		$table = Schema::runsTable( $this->db );
 		$now   = gmdate( 'Y-m-d H:i:s' );
@@ -57,8 +58,9 @@ final class WpdbRunStore implements RunStore {
 				'pack'                => $pack,
 				'conversation_locale' => $conversation_locale,
 				'content_locale'      => $content_locale,
+				'gate_mode'           => $gate_mode->value,
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s' )
 		);
 
 		return (int) $this->db->insert_id;
