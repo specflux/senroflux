@@ -76,6 +76,26 @@ final class SkillSetTest extends TestCase {
 		}
 	}
 
+	public function test_workflow_skill_warns_a_reply_without_a_tool_call_ends_the_run(): void {
+		$workflow = null;
+		foreach ( SkillSet::harnessSkills() as $skill ) {
+			if ( 'harness/workflow' === $skill->id ) {
+				$workflow = $skill;
+			}
+		}
+
+		$this->assertNotNull( $workflow );
+		$this->assertStringContainsString(
+			'reply with no tool call ends the run immediately',
+			$workflow->body,
+			'the model must be told a text-only reply is treated as the final report'
+		);
+		$this->assertStringContainsString(
+			'never announce work you have not yet done',
+			$workflow->body
+		);
+	}
+
 	public function test_collect_builds_harness_then_pack_then_consumer(): void {
 		$pack = $this->packWith(
 			array(

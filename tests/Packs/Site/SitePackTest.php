@@ -91,4 +91,30 @@ final class SitePackTest extends TestCase {
 
 		$this->assertNull( SkillSet::ceilingError( $skills ) );
 	}
+
+	public function test_structure_rules_tell_the_model_to_propose_a_plan_right_after_clarify(): void {
+		$skills = ( new SitePack() )->skills();
+
+		$structure = null;
+		foreach ( $skills as $skill ) {
+			if ( 'site/structure-rules' === $skill->id ) {
+				$structure = $skill;
+			}
+		}
+
+		$this->assertNotNull( $structure );
+		$this->assertStringContainsString(
+			'senroflux/propose-plan',
+			$structure->body,
+			'the very next call after clarify must be propose-plan'
+		);
+		$this->assertStringContainsString(
+			'adopted object',
+			$structure->body
+		);
+		$this->assertStringContainsString(
+			'publish and navigation steps',
+			$structure->body
+		);
+	}
 }

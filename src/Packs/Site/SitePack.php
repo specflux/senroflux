@@ -306,6 +306,7 @@ final class SitePack extends Pack {
 			"\n",
 			array(
 				'At clarify, read the existing pages, the site navigation and the front-page settings before asking anything else.',
+				'Once clarify is done, your very next call is `senroflux/propose-plan` — never a plain-text reply describing what you intend to do. The plan must list every page you will create, every adopted object, and the publish and navigation steps that follow.',
 				'Your plan must list every EXISTING object it will touch — title, id and status — beside any new ones. Match an existing page by slug or title and ADOPT it as-is; never create a second page for something that already exists.',
 				'Rewrite an adopted page only when the human asked for a rewrite at clarify; a plain rewrite step still goes through the update/publish verbs. Publish an adopted draft only when the plan names it "publish existing draft".',
 				'If the navigation reports kind "page_list", say in plain words that publishing pages already changes the header automatically; only call update-navigation when the goal needs a specific order or a specific subset of pages.',
