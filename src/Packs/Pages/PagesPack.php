@@ -83,9 +83,9 @@ final class PagesPack extends Pack {
 	protected function inputProperties( string $template ): array {
 		return match ( $template ) {
 			'read-content'    => array( 'id', 'post_type', 'slug', 'status', 'author', 'parent', 'fields' ),
-			'create-post'     => array( 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
-			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
-			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
+			'create-post'     => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
+			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
+			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
 			'get-preview-url' => array( 'id' ),
 			'list-patterns'   => array(),
 			default           => array(),

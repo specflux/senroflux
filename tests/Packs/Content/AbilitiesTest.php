@@ -29,8 +29,11 @@ namespace Specflux\SenroFlux\Tests\Packs\Content;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Content\Abilities;
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
+use Specflux\SenroFlux\Packs\Posts\Validator as PostsValidator;
+use Specflux\SenroFlux\Packs\Posts\Vocabulary as PostsVocabulary;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Tracker;
 use Specflux\SenroFlux\Run\WpdbRunStore;
@@ -45,6 +48,7 @@ final class AbilitiesTest extends TestCase {
 
 	private function loadShims(): void {
 		require_once dirname( __DIR__, 2 ) . '/stubs/blocks.php';
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
 	}
 
 	protected function setUp(): void {
@@ -57,6 +61,11 @@ final class AbilitiesTest extends TestCase {
 		$GLOBALS['senroflux_test_users']              = array();
 		$GLOBALS['senroflux_test_ability_categories'] = array();
 		$GLOBALS['senroflux_test_user_caps']          = array();
+		// 0.3 S21: no theme patterns unless a test explicitly registers some.
+		$GLOBALS['senroflux_test_theme_patterns'] = array();
+		$GLOBALS['senroflux_test_stylesheet_dir'] = '/no-such-theme';
+		$GLOBALS['senroflux_test_template_dir']   = '/no-such-theme';
+		ThemePatterns::resetCache();
 
 		Abilities::reset();
 		Abilities::resetSources();
@@ -1274,5 +1283,196 @@ final class AbilitiesTest extends TestCase {
 
 		$this->assertIsArray( $annotations );
 		$this->assertTrue( $annotations['destructive'] ?? null );
+	}
+
+	// --- 0.3 S21: sections + theme patterns ---------------------------------
+
+	/**
+	 * Render a real fixture under `tests/ThemePatterns/` and register it as
+	 * the only theme-owned pattern the stub `WP_Block_Patterns_Registry`
+	 * answers, exactly as {@see \Specflux\SenroFlux\Tests\Packs\Pages\ThemePatternsTest}
+	 * does.
+	 */
+	private function registerThemeFixture( string $slug ): void {
+		$dir  = dirname( __DIR__, 2 ) . '/ThemePatterns';
+		$path = $dir . '/' . $slug . '.php';
+		$raw  = (string) file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local test fixture, not a remote URL.
+
+		$header = array();
+		foreach ( array( 'Title', 'Slug', 'Description', 'Categories', 'Inserter' ) as $key ) {
+			if ( preg_match( '/^\s*\*\s*' . preg_quote( $key, '/' ) . ':\s*(.+)$/mi', $raw, $m ) ) {
+				$header[ $key ] = trim( $m[1] );
+			}
+		}
+
+		ob_start();
+		include $path;
+		$content = trim( (string) ob_get_clean() );
+
+		$entry = array(
+			'name'        => $header['Slug'] ?? $slug,
+			'title'       => $header['Title'] ?? $slug,
+			'description' => $header['Description'] ?? '',
+			'content'     => $content,
+			'filePath'    => $path,
+			'categories'  => isset( $header['Categories'] ) ? array_map( 'trim', explode( ',', $header['Categories'] ) ) : array(),
+		);
+		if ( isset( $header['Inserter'] ) ) {
+			$entry['inserter'] = ! in_array( strtolower( $header['Inserter'] ), array( 'no', 'false' ), true );
+		}
+
+		$GLOBALS['senroflux_test_theme_patterns'] = array( $entry );
+		$GLOBALS['senroflux_test_stylesheet_dir'] = $dir;
+		ThemePatterns::resetCache();
+	}
+
+	public function test_list_patterns_reports_theme_patterns_skipped_count(): void {
+		// `hidden-blog-heading` is real but `Inserter: no` — it is this
+		// theme's own pattern, just not an ELIGIBLE one.
+		$this->registerThemeFixture( 'hidden-blog-heading' );
+		$this->grant( 'edit_pages' );
+
+		$result = $this->ability( 'senroflux/list-patterns' )->execute( array() );
+
+		$this->assertSame( 1, $result['theme_patterns_skipped'] );
+		$this->assertCount( 7, $result['patterns'], 'the ineligible theme pattern never joins the list' );
+	}
+
+	public function test_sections_composes_content_from_markup_items(): void {
+		$this->grant( 'edit_pages' );
+		$vocabulary = new Vocabulary();
+		$hero       = $vocabulary->resolveThemePattern( 'no-such-pattern' ); // null: sanity only.
+		$this->assertNull( $hero );
+
+		$hero_markup = $vocabulary->all()[0]['markup'];
+		$text_markup = $vocabulary->all()[1]['markup'];
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'page',
+				'title'     => 'Sectioned page',
+				'sections'  => array(
+					array( 'markup' => $hero_markup ),
+					array( 'markup' => $text_markup ),
+				),
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_code() : '' );
+		$this->assertSame( 'draft', $result['status'] );
+		$stored = $GLOBALS['senroflux_test_posts'][ $result['id'] ];
+		$this->assertStringContainsString( 'senroflux/hero', $stored->post_content );
+		$this->assertStringContainsString( 'senroflux/text-section', $stored->post_content );
+	}
+
+	public function test_sections_and_content_together_is_refused(): void {
+		$this->grant( 'edit_pages' );
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'page',
+				'title'     => 'T',
+				'content'   => $this->validContent(),
+				'sections'  => array( array( 'markup' => $this->validContent() ) ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'sections_and_content', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'] );
+	}
+
+	public function test_sections_unknown_theme_pattern_is_refused(): void {
+		$this->grant( 'edit_pages' );
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'page',
+				'title'     => 'T',
+				'sections'  => array(
+					array(
+						'pattern' => 'twentytwentyfive/no-such-pattern',
+						'slots'   => array( 'Some text' ),
+					),
+				),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'theme_pattern_unknown', $result->get_error_code() );
+	}
+
+	/**
+	 * 0.3 S21: the posts pack never sees theme patterns, and more broadly
+	 * never offers `sections` at all — the shared ability refuses it
+	 * outright rather than silently ignoring it.
+	 */
+	public function test_sections_not_supported_for_the_posts_pack(): void {
+		$posts_vocabulary = new PostsVocabulary();
+		Abilities::registerSource( 'posts', new PostsValidator( $posts_vocabulary ), $posts_vocabulary, 'edit_posts' );
+		Abilities::useRunPack( 'posts' );
+		$this->grant( 'edit_posts' );
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'post',
+				'title'     => 'T',
+				'sections'  => array( array( 'markup' => '<!-- wp:paragraph --><p>hi there today</p><!-- /wp:paragraph -->' ) ),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'sections_not_supported', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'] );
+	}
+
+	/**
+	 * The posts pack's OWN vocabulary/payload never carries a theme-derived
+	 * entry, even with theme patterns registered globally — `Posts\Vocabulary`
+	 * does not implement {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}
+	 * at all.
+	 */
+	public function test_posts_pack_vocabulary_never_carries_theme_derived_entries(): void {
+		$this->registerThemeFixture( 'banner-intro' );
+
+		$posts_vocabulary = new PostsVocabulary();
+		$this->assertNotInstanceOf( \Specflux\SenroFlux\Packs\Content\ThemePatternSource::class, $posts_vocabulary );
+
+		Abilities::registerSource( 'posts', new PostsValidator( $posts_vocabulary ), $posts_vocabulary, 'edit_posts' );
+		Abilities::useRunPack( 'posts' );
+		$this->grant( 'edit_posts' );
+
+		$result = $this->ability( 'senroflux/list-patterns' )->execute( array() );
+
+		foreach ( $result['patterns'] as $pattern ) {
+			$this->assertArrayNotHasKey( 'theme_derived', $pattern );
+		}
+	}
+
+	public function test_sections_fills_a_theme_pattern_and_persists_the_filled_markup(): void {
+		$this->registerThemeFixture( 'banner-intro' );
+		$this->grant( 'edit_pages' );
+
+		$vocabulary = new Vocabulary();
+		$theme      = $vocabulary->resolveThemePattern( 'twentytwentyfive/banner-intro' );
+		$this->assertNotNull( $theme, 'the fixture must be eligible' );
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'page',
+				'title'     => 'Themed page',
+				'sections'  => array(
+					array(
+						'pattern' => 'twentytwentyfive/banner-intro',
+						'slots'   => array( 'A brand new promise for this brand' ),
+					),
+					array( 'markup' => $vocabulary->all()[1]['markup'] ),
+				),
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_code() : '' );
+		$stored = $GLOBALS['senroflux_test_posts'][ $result['id'] ];
+		$this->assertStringContainsString( 'A brand new promise for this brand', $stored->post_content );
 	}
 }
