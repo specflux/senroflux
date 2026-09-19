@@ -510,6 +510,10 @@ final class Plugin {
 		// 0.3 S4: vocabulary-bearing content abilities resolve THIS run's pack
 		// for the scope of one tick — never a model-supplied `pack` argument.
 		\Specflux\SenroFlux\Packs\Content\Abilities::useRunPack( null !== $run ? $run->pack : null );
+		// 0.3 S8: the shared content registrar's stale-write compare reads
+		// and updates THIS run's tracker — never a model-supplied run id.
+		// Same discipline as useRunPack() above; scoped for one tick only.
+		\Specflux\SenroFlux\Packs\Content\Abilities::useRunContext( $run_id, $this->runner()->store() );
 		// 0.3 S5: the media registrar's images-budget spend count and
 		// attachment cap are both derived from THIS run's row/steps.
 		\Specflux\SenroFlux\Packs\Content\Media::useRunContext( $run_id, $this->runner()->store() );
@@ -519,6 +523,7 @@ final class Plugin {
 		} finally {
 			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
+			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 		}
 	}
