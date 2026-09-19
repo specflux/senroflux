@@ -1310,12 +1310,13 @@ class RunsScreen {
 		$action = admin_url( 'admin-post.php' );
 		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-question-heading">';
 
-		// CONTENT BOUNDARY — question text is MODEL-AUTHORED (S15): stored and
-		// rendered verbatim, NEVER wrapped in __()/esc_html__(). It is content,
-		// not harness chrome. (esc_html is applied for safety, not i18n.)
+		// Defect fix (S10): the heading names the PARK KIND ("Question for
+		// you"), harness chrome, translated normally. The model-authored
+		// question text itself is rendered exactly once below, in the
+		// <legend> — repeating it here duplicated it on screen.
 		printf(
 			'<h3 id="senroflux-park-question-heading" class="senroflux-park-card-heading" tabindex="-1">%s</h3>',
-			esc_html( $text )
+			esc_html__( 'Question for you', 'senroflux' )
 		);
 
 		echo '<form method="post" action="' . esc_url( $action ) . '">';

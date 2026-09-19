@@ -116,6 +116,33 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$this->assertStringContainsString( 'aria-controls="senroflux_answer_other"', $html );
 	}
 
+	/**
+	 * Defect fix (live evidence, S10): the heading must name the KIND
+	 * ("Question for you"), not repeat the model's question text — the
+	 * question itself appears exactly once, in the legend.
+	 */
+	public function test_question_card_shows_the_question_text_once_not_twice(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingUser,
+			StepKind::Question,
+			array( 'text' => 'Which tone?' )
+		);
+
+		$this->assertStringContainsString(
+			'<h3 id="senroflux-park-question-heading" class="senroflux-park-card-heading" tabindex="-1">Question for you</h3>',
+			$html
+		);
+
+		// Scope the duplicate-text check to the park card itself — the
+		// steps ledger below it separately dumps the raw step JSON for
+		// debugging, which is not part of this defect.
+		$start = strpos( $html, '<section class="senroflux-park-card"' );
+		$end   = strpos( $html, '</section>', $start );
+		$card  = substr( $html, $start, $end - $start );
+
+		$this->assertSame( 1, substr_count( $card, 'Which tone?' ), 'the question text must appear exactly once in the card' );
+	}
+
 	public function test_question_card_escapes_model_authored_text(): void {
 		$html = $this->renderPark(
 			RunStatus::AwaitingUser,
