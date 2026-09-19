@@ -215,6 +215,7 @@ final class Plugin {
 			5
 		);
 		\Specflux\SenroFlux\Packs\Content\Abilities::boot();
+		\Specflux\SenroFlux\Packs\Content\Media::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
 		// 0.3 S4: the pages pack's vocabulary/validator plug into the shared
 		// content registrar under its own slug — `list-patterns` and the write
@@ -509,12 +510,16 @@ final class Plugin {
 		// 0.3 S4: vocabulary-bearing content abilities resolve THIS run's pack
 		// for the scope of one tick — never a model-supplied `pack` argument.
 		\Specflux\SenroFlux\Packs\Content\Abilities::useRunPack( null !== $run ? $run->pack : null );
+		// 0.3 S5: the media registrar's images-budget spend count and
+		// attachment cap are both derived from THIS run's row/steps.
+		\Specflux\SenroFlux\Packs\Content\Media::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
 			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
 		} finally {
 			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
+			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 		}
 	}
 

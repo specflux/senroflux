@@ -21,6 +21,15 @@ defined( 'ABSPATH' ) || exit;
  * consumer may pass per-run overrides at start(), which are merged over the
  * (filtered) defaults and clamped to positive integers — a zero/negative cap
  * would make every run fail immediately.
+ *
+ * `images` (0.3 S5) is a different KIND of ceiling from the other five: it is
+ * spent by one pack ability (the posts pack's image generation), not derived
+ * from the tick loop itself, and its exhaustion is a clean ability-level
+ * refusal (`budget_exhausted`) rather than a run failure. This class stays
+ * domain-agnostic even so — it knows only the KEY NAME `images`, never that it
+ * means pictures; the ability asking "how much of this key is left" and
+ * "spend one" is a harness seam ({@see \Specflux\SenroFlux\Packs\Content\Media}),
+ * not this class's job.
  */
 final class Budget {
 
@@ -29,6 +38,7 @@ final class Budget {
 	public const MAX_TOKENS     = 'max_tokens';
 	public const MAX_QUESTIONS  = 'max_questions';
 	public const MAX_PLANS      = 'max_plans';
+	public const IMAGES         = 'images';
 
 	/**
 	 * The shipped defaults (S4 as amended by 0.2 S4). Exhausting questions or
@@ -36,13 +46,13 @@ final class Budget {
 	 * S6/S7 — but the ceilings still bound how many park round-trips a run
 	 * may cause.
 	 *
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
 	public static function defaults(): array {
 		/**
 		 * Filters the default budget for new runs.
 		 *
-		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int} $defaults
+		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int} $defaults
 		 */
 		$filtered = apply_filters( 'senroflux_default_budget', self::shipped() );
 
@@ -74,7 +84,7 @@ final class Budget {
 	 * scales to roughly 150k over 60, so 250000 leaves it non-binding while
 	 * still capping the damage.
 	 *
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
 	private static function shipped(): array {
 		return array(
@@ -83,6 +93,10 @@ final class Budget {
 			self::MAX_TOKENS     => 250000,
 			self::MAX_QUESTIONS  => 5,
 			self::MAX_PLANS      => 3,
+			// S5: shipped default 6, lower-only like every other key. Sized
+			// so a real "write and illustrate a post" run is not forced to
+			// budget_exhausted on its first image.
+			self::IMAGES         => 6,
 		);
 	}
 
@@ -97,7 +111,7 @@ final class Budget {
 	 * override it.
 	 *
 	 * @param mixed $raw Raw budget-ish input.
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
 	public static function sanitize( mixed $raw ): array {
 		return self::mergeOver( self::defaults(), $raw );
@@ -106,9 +120,9 @@ final class Budget {
 	/**
 	 * Overlay the known keys of `$raw` onto `$base` as positive integers.
 	 *
-	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int} $base Starting table.
-	 * @param mixed                                                                                          $raw  Raw budget-ish input.
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
+	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int} $base Starting table.
+	 * @param mixed                                                                                                       $raw  Raw budget-ish input.
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
 	private static function mergeOver( array $base, mixed $raw ): array {
 		if ( ! is_array( $raw ) ) {
@@ -134,9 +148,9 @@ final class Budget {
 	 * down. Untrusted callers (the HTTP surface) go through here so a request
 	 * cannot raise its own limits.
 	 *
-	 * @param mixed                                                    $requested Raw budget-ish input.
-	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int} $ceiling   Upper bound per key.
-	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int}
+	 * @param mixed                                                                 $requested Raw budget-ish input.
+	 * @param array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int} $ceiling   Upper bound per key.
+	 * @return array{max_steps: int, max_tool_calls: int, max_tokens: int, max_questions: int, max_plans: int, images: int}
 	 */
 	public static function clamp( mixed $requested, array $ceiling ): array {
 		$ceiling = self::sanitize( $ceiling );

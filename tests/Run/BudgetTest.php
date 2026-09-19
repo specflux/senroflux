@@ -26,6 +26,7 @@ final class BudgetTest extends TestCase {
 				'max_tokens'     => 250000,
 				'max_questions'  => 5,
 				'max_plans'      => 3,
+				'images'         => 6,
 			),
 			Budget::defaults()
 		);
@@ -71,6 +72,7 @@ final class BudgetTest extends TestCase {
 				'max_tokens'     => 250000,
 				'max_questions'  => 2,
 				'max_plans'      => 2,
+				'images'         => 6,
 			),
 			$sanitized
 		);
@@ -83,6 +85,7 @@ final class BudgetTest extends TestCase {
 			'max_tokens'     => 1000,
 			'max_questions'  => 5,
 			'max_plans'      => 3,
+			'images'         => 6,
 		);
 
 		$this->assertSame( $ceiling, Budget::clamp( 'junk', $ceiling ) );
@@ -93,6 +96,7 @@ final class BudgetTest extends TestCase {
 				'max_tokens'     => 1000,
 				'max_questions'  => 1,
 				'max_plans'      => 3,
+				'images'         => 1,
 			),
 			Budget::clamp(
 				array(
@@ -101,11 +105,18 @@ final class BudgetTest extends TestCase {
 					'max_tokens'     => '999999',
 					'max_questions'  => 1,
 					'max_plans'      => 9,
+					'images'         => 1,
 					'other'          => 1,
 				),
 				$ceiling
 			)
 		);
+	}
+
+	public function test_images_is_lower_only_like_every_other_cap(): void {
+		// The S5 check: a consumer may lower `images` and may not raise it.
+		$this->assertSame( 3, Budget::clamp( array( 'images' => 3 ), Budget::defaults() )['images'] );
+		$this->assertSame( 6, Budget::clamp( array( 'images' => 99 ), Budget::defaults() )['images'] );
 	}
 
 	public function test_sanitize_falls_back_to_the_filtered_defaults_not_the_shipped_ones(): void {

@@ -207,6 +207,8 @@ if ( ! function_exists( 'wp_insert_post' ) ) {
 		$post->post_name         = $postarr['post_name'] ?? '';
 		$post->post_parent       = (int) ( $postarr['post_parent'] ?? 0 );
 		$post->post_excerpt      = $postarr['post_excerpt'] ?? '';
+		$post->post_mime_type    = $postarr['post_mime_type'] ?? '';
+		$post->guid              = 'https://example.test/wp-content/uploads/' . ( $postarr['post_title'] ?? (string) $id );
 		$post->post_date         = '';
 		$post->post_modified     = '';
 		$post->post_modified_gmt = senroflux_test_next_modified_marker();

@@ -21,7 +21,7 @@ final class Run {
 
 	/**
 	 * @param list<string>   $allow      Ability-name allow-list (globs allowed).
-	 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int} $budget
+	 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int} $budget
 	 * @param array<string,mixed>|null $error Structured failure info (our own convention; code + message keys expected).
 	 *
 	 * 0.2 S4 additions: the pack name (null for direct-allow starts), the
