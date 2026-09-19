@@ -31,9 +31,17 @@ use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Content\Abilities;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
+use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Tracker;
+use Specflux\SenroFlux\Run\WpdbRunStore;
 use WP_Error;
+use wpdb;
 
 final class AbilitiesTest extends TestCase {
+
+	private WpdbRunStore $store;
+
+	private int $runId;
 
 	private function loadShims(): void {
 		require_once dirname( __DIR__, 2 ) . '/stubs/blocks.php';
@@ -58,11 +66,36 @@ final class AbilitiesTest extends TestCase {
 		$vocabulary = new Vocabulary();
 		Abilities::registerSource( 'pages', new Validator( $vocabulary ), $vocabulary, 'edit_pages' );
 		Abilities::useRunPack( 'pages' );
+
+		// 0.3 S8: every content-ability call runs inside a run context now —
+		// a real WpdbRunStore backed by the in-memory wpdb test double, exactly
+		// as the composition root wires it around one tick. Tests that need a
+		// write to succeed prime the tracker's read first via {@see primeRead()}.
+		$this->store = new WpdbRunStore( new wpdb() );
+		$this->runId = $this->store->createRun( 1, 'test', 'goal', array(), Budget::defaults() );
+		Abilities::useRunContext( $this->runId, $this->store );
 	}
 
 	protected function tearDown(): void {
+		Abilities::forgetRunContext();
 		Abilities::forgetRunPack();
 		Abilities::resetSources();
+	}
+
+	/**
+	 * S8 test helper: record that this run has already read `$id`, with its
+	 * CURRENT `post_modified_gmt` (or an explicit `$marker` to simulate an
+	 * external edit the run never saw).
+	 */
+	private function primeRead( int $id, ?string $marker = null ): void {
+		$post   = get_post( $id );
+		$marker = $marker ?? ( is_object( $post ) ? (string) ( $post->post_modified_gmt ?? '' ) : '' );
+
+		$run     = $this->store->getRun( $this->runId );
+		$objects = ( null !== $run && is_array( $run->objects ) ) ? $run->objects : array();
+		$objects = Tracker::recordRead( $objects, $id, $marker );
+
+		$this->store->updateRun( $this->runId, array( 'objects_json' => $objects ) );
 	}
 
 	// --- Helpers -----------------------------------------------------------
@@ -89,18 +122,19 @@ final class AbilitiesTest extends TestCase {
 	}
 
 	private function seedPost( int $id = 100, string $post_type = 'page', string $status = 'draft', string $title = 'Existing', string $slug = 'existing' ): \stdClass {
-		$post                = new \stdClass();
-		$post->ID            = $id;
-		$post->post_type     = $post_type;
-		$post->post_title    = $title;
-		$post->post_content  = '<!-- wp:paragraph --><p>original</p><!-- /wp:paragraph -->';
-		$post->post_status   = $status;
-		$post->post_name     = $slug;
-		$post->post_parent   = 0;
-		$post->post_excerpt  = '';
-		$post->post_author   = 7;
-		$post->post_date     = '2026-01-01 00:00:00';
-		$post->post_modified = '2026-01-01 00:00:00';
+		$post                    = new \stdClass();
+		$post->ID                = $id;
+		$post->post_type         = $post_type;
+		$post->post_title        = $title;
+		$post->post_content      = '<!-- wp:paragraph --><p>original</p><!-- /wp:paragraph -->';
+		$post->post_status       = $status;
+		$post->post_name         = $slug;
+		$post->post_parent       = 0;
+		$post->post_excerpt      = '';
+		$post->post_author       = 7;
+		$post->post_date         = '2026-01-01 00:00:00';
+		$post->post_modified     = '2026-01-01 00:00:00';
+		$post->post_modified_gmt = senroflux_test_next_modified_marker();
 
 		$GLOBALS['senroflux_test_posts'][ $id ] = $post;
 
@@ -533,6 +567,7 @@ final class AbilitiesTest extends TestCase {
 
 	public function test_update_post_draft_to_draft_writes_the_cleaned_content(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post' );
 
 		$result = $this->ability( 'senroflux/update-post' )->execute(
@@ -652,6 +687,7 @@ final class AbilitiesTest extends TestCase {
 
 	public function test_update_post_pending_is_allowed(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post' );
 
 		$result = $this->ability( 'senroflux/update-post' )->execute(
@@ -688,6 +724,7 @@ final class AbilitiesTest extends TestCase {
 	/** An empty content on a NON-publish update touches nothing and passes. */
 	public function test_update_post_empty_content_on_a_draft_update_leaves_the_stored_markup(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post' );
 
 		$result = $this->ability( 'senroflux/update-post' )->execute(
@@ -705,6 +742,7 @@ final class AbilitiesTest extends TestCase {
 
 	public function test_update_post_refuses_invalid_content_and_persists_nothing(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post' );
 
 		$result = $this->ability( 'senroflux/update-post' )->execute(
@@ -740,6 +778,7 @@ final class AbilitiesTest extends TestCase {
 
 	public function test_publish_post_publishes_when_the_publish_cap_is_held(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -794,6 +833,7 @@ final class AbilitiesTest extends TestCase {
 	public function test_publish_post_edits_an_already_public_post_without_a_status_change(): void {
 		$post               = $this->seedPost( 100, 'page', 'publish' );
 		$post->post_content = $this->validContent();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -832,6 +872,7 @@ final class AbilitiesTest extends TestCase {
 	public function test_publish_post_publishes_a_valid_draft_with_empty_content_and_leaves_the_markup(): void {
 		$post               = $this->seedPost();
 		$post->post_content = $this->validContent();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -852,6 +893,7 @@ final class AbilitiesTest extends TestCase {
 	public function test_publish_post_publishes_a_valid_draft_with_content_omitted(): void {
 		$post               = $this->seedPost();
 		$post->post_content = $this->validContent();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -875,6 +917,7 @@ final class AbilitiesTest extends TestCase {
 	 */
 	public function test_publish_post_refuses_publishing_a_draft_whose_stored_content_is_invalid(): void {
 		$post = $this->seedPost();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -895,6 +938,7 @@ final class AbilitiesTest extends TestCase {
 	public function test_publish_post_schedules_with_future_and_validates_stored_content(): void {
 		$post               = $this->seedPost();
 		$post->post_content = $this->validContent();
+		$this->primeRead( 100 );
 		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
 
 		$result = $this->ability( 'senroflux/publish-post' )->execute(
@@ -923,6 +967,113 @@ final class AbilitiesTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'pack_arg_refused', $result->get_error_code() );
+	}
+
+	// --- stale write (0.3 S8) -----------------------------------------------
+
+	public function test_update_post_refuses_a_write_with_no_prior_read(): void {
+		$post = $this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post' );
+		// Deliberately no primeRead(): this run never read the object.
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'      => 100,
+				'title'   => 'Sneaky edit',
+				'content' => $this->validContent(),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'stale_write', $result->get_error_code() );
+		$this->assertSame( 409, $result->get_error_data()['status'] );
+		$this->assertSame( 'Existing', $post->post_title, 'a stale-write refusal must persist nothing' );
+	}
+
+	public function test_update_post_refuses_a_write_after_an_external_edit(): void {
+		$post = $this->seedPost();
+		$this->primeRead( 100 );
+		// An edit the run never saw — e.g. a human editing the same page in
+		// the block editor between this run's read and its write.
+		$post->post_modified_gmt = 'external-edit';
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'    => 100,
+				'title' => 'Sneaky edit',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'stale_write', $result->get_error_code() );
+		$this->assertSame( 'Existing', $post->post_title );
+	}
+
+	public function test_update_post_succeeds_after_a_read(): void {
+		$post = $this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'    => 100,
+				'title' => 'Renamed after read',
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'Renamed after read', $post->post_title );
+	}
+
+	/** create-post's new object counts as read at creation — no separate read needed. */
+	public function test_create_then_update_without_a_read_succeeds(): void {
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$created = $this->ability( 'senroflux/create-post' )->execute(
+			array(
+				'post_type' => 'page',
+				'title'     => 'Fresh draft',
+				'content'   => $this->validContent(),
+			)
+		);
+		$this->assertIsArray( $created );
+		$id = $created['id'];
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'    => $id,
+				'title' => 'Fresh draft, edited',
+			)
+		);
+
+		$this->assertIsArray( $result, 'a create-post object is read-at-creation, so an immediate update must not be stale' );
+		$this->assertSame( 'Fresh draft, edited', get_post( $id )->post_title );
+	}
+
+	/** A run may keep editing its own write without re-reading in between. */
+	public function test_two_consecutive_writes_by_the_run_both_succeed(): void {
+		$post = $this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$first = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'    => 100,
+				'title' => 'First write',
+			)
+		);
+		$this->assertIsArray( $first, 'the first write must succeed' );
+
+		$second = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'    => 100,
+				'title' => 'Second write',
+			)
+		);
+
+		$this->assertIsArray( $second, 'a second write by the SAME run must not be stale, even without an intervening read' );
+		$this->assertSame( 'Second write', $post->post_title );
 	}
 
 	// --- read-content execute ---------------------------------------------

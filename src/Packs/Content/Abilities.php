@@ -37,9 +37,14 @@
  * closed (`pack_unresolved`) rather than falling back to any one pack's
  * rules.
  *
- * S8 SEAM (stage 4, not yet implemented): {@see executeUpdateLike()} marks
- * the single place the stale-write compare will run for every write ability
- * here.
+ * S8 STALE WRITE: {@see executeUpdateLike()} compares the target's CURRENT
+ * `post_modified_gmt` against the marker {@see useRunContext()}'s run last
+ * recorded for that id (via {@see Tracker::staleWrite()}) and refuses
+ * `stale_write` (409) on a mismatch or an unread object. `read-content`
+ * records the marker at read time ({@see recordReadMarker()}); a successful
+ * write updates it to the post's NEW `post_modified_gmt` so the same run may
+ * keep editing its own writes without re-reading. `create-post` has nothing
+ * to compare against, but records its new object as read-at-creation.
  *
  * CAPABILITIES. Every gate is applied in BOTH the `permission_callback` and
  * the execute callback — execute is reachable on its own, and a write must
@@ -63,6 +68,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Content;
 
+use Specflux\SenroFlux\Run\RunStore;
+use Specflux\SenroFlux\Run\Tracker;
 use WP_Error;
 use WP_Post;
 
@@ -171,6 +178,19 @@ final class Abilities {
 	private static ?string $current_pack = null;
 
 	/**
+	 * The ticking run's id, or null outside one (0.3 S8). Scoped per tick by
+	 * {@see useRunContext()} / {@see forgetRunContext()}, same discipline as
+	 * {@see $current_pack} — never a model-supplied argument.
+	 */
+	private static ?int $current_run_id = null;
+
+	/**
+	 * The store used to read/persist the current run's `objects_json` (S8).
+	 * Set together with {@see $current_run_id}; both null outside a tick.
+	 */
+	private static ?RunStore $store = null;
+
+	/**
 	 * Wire the category + ability registration hooks (call once, from the
 	 * composition root).
 	 */
@@ -234,6 +254,78 @@ final class Abilities {
 	 */
 	public static function forgetRunPack(): void {
 		self::$current_pack = null;
+	}
+
+	/**
+	 * Enter the run context for one tick (0.3 S8): which run's tracker the
+	 * stale-write compare reads/updates. Set by the composition root from the
+	 * ticking run's id, NEVER from the model — mirrors {@see useRunPack()}.
+	 * A call reached with no run context (no tick in flight, e.g. an ability
+	 * invoked directly by another Abilities API consumer) fails CLOSED: every
+	 * object looks unread, so every write is a stale write (§0 fail-closed).
+	 *
+	 * @param int|null    $run_id The ticking run's id, or null.
+	 * @param RunStore|null $store  The store backing that run, or null.
+	 */
+	public static function useRunContext( ?int $run_id, ?RunStore $store ): void {
+		self::$current_run_id = $run_id;
+		self::$store          = $store;
+	}
+
+	/**
+	 * Leave the run context (mirrors {@see forgetRunPack()}).
+	 */
+	public static function forgetRunContext(): void {
+		self::$current_run_id = null;
+		self::$store          = null;
+	}
+
+	/**
+	 * The current run's `objects_json` map, or an empty set with no run
+	 * context resolved (fail closed — see {@see useRunContext()}).
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function currentObjects(): array {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return array();
+		}
+
+		$run = self::$store->getRun( self::$current_run_id );
+
+		return ( null !== $run && is_array( $run->objects ) ) ? $run->objects : array();
+	}
+
+	/**
+	 * Record a read/write's modified marker on the current run's tracker
+	 * (0.3 S8). A no-op with no run context resolved.
+	 *
+	 * @param int    $object_id Object id (a post id).
+	 * @param string $marker    The object's `post_modified_gmt`.
+	 */
+	private static function recordReadMarker( int $object_id, string $marker ): void {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return;
+		}
+
+		$objects = Tracker::recordRead( self::currentObjects(), $object_id, $marker );
+		self::$store->updateRun( self::$current_run_id, array( 'objects_json' => $objects ) );
+	}
+
+	/**
+	 * Whether a write to `$object_id` must be refused as a stale write (0.3
+	 * S8): delegates to {@see Tracker::staleWrite()} over the current run's
+	 * tracker. Fails CLOSED (true, i.e. refuse) with no run context.
+	 *
+	 * @param int    $object_id      Object id (a post id).
+	 * @param string $current_marker The post's CURRENT `post_modified_gmt`.
+	 */
+	private static function isStaleWrite( int $object_id, string $current_marker ): bool {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return true;
+		}
+
+		return Tracker::staleWrite( self::currentObjects(), $object_id, $current_marker );
 	}
 
 	/**
@@ -1037,8 +1129,16 @@ final class Abilities {
 			}
 
 			$readable = self::readablePost( $post, $input );
+			if ( true !== $readable ) {
+				return $readable;
+			}
 
-			return true === $readable ? self::shapePost( $post, $fields ) : $readable;
+			// S8: a single-object read is the moment the run's tracker learns
+			// this object's CURRENT marker — never for the list-query mode
+			// below, which names no one object the run intends to write.
+			self::recordReadMarker( (int) $post->ID, (string) $post->post_modified_gmt );
+
+			return self::shapePost( $post, $fields );
 		}
 
 		if ( isset( $input['slug'] ) && function_exists( 'get_page_by_path' ) ) {
@@ -1053,8 +1153,13 @@ final class Abilities {
 			}
 
 			$readable = self::readablePost( $post, $input );
+			if ( true !== $readable ) {
+				return $readable;
+			}
 
-			return true === $readable ? self::shapePost( $post, $fields ) : $readable;
+			self::recordReadMarker( (int) $post->ID, (string) $post->post_modified_gmt );
+
+			return self::shapePost( $post, $fields );
 		}
 
 		if ( ! self::allowedPostType( (string) ( $input['post_type'] ?? 'page' ) ) ) {
@@ -1138,6 +1243,11 @@ final class Abilities {
 			return $id;
 		}
 
+		// S8: "an object the run CREATED counts as read at creation" — the
+		// run may update it in the same run without ever calling read-content.
+		$created = function_exists( 'get_post' ) ? get_post( (int) $id ) : null;
+		self::recordReadMarker( (int) $id, is_object( $created ) ? (string) $created->post_modified_gmt : '' );
+
 		return array(
 			'id'     => (int) $id,
 			'status' => 'draft',
@@ -1202,6 +1312,17 @@ final class Abilities {
 	}
 
 	/**
+	 * @return WP_Error stale_write (409) — S8.
+	 */
+	private static function staleWriteError(): WP_Error {
+		return new WP_Error(
+			'stale_write',
+			__( 'This content changed since the run last read it. Re-read it before writing again.', 'senroflux' ),
+			array( 'status' => 409 )
+		);
+	}
+
+	/**
 	 * @return WP_Error slug_collision (409).
 	 */
 	private static function slugCollisionError(): WP_Error {
@@ -1255,10 +1376,13 @@ final class Abilities {
 			return self::forbidden();
 		}
 
-		// S8 SEAM (stage 4, not yet implemented): this is the single place
-		// every write ability here will compare $post's `post_modified_gmt`
-		// against the run's tracker and refuse `stale_write` (409) on a
-		// mismatch or an unread object. Deliberately a no-op until then.
+		// S8: refuse when $post's CURRENT marker differs from what this run's
+		// tracker last recorded for it, or when the run never read it at all.
+		// Checked BEFORE content validation — a stale write is refused on
+		// staleness alone, never masked by an unrelated shape refusal.
+		if ( self::isStaleWrite( (int) ( $post->ID ?? 0 ), (string) ( $post->post_modified_gmt ?? '' ) ) ) {
+			return self::staleWriteError();
+		}
 
 		$validator = self::currentValidator();
 		if ( null === $validator ) {
@@ -1322,6 +1446,14 @@ final class Abilities {
 		if ( is_wp_error( $updated ) ) {
 			return $updated;
 		}
+
+		// S8: update the recorded marker to the post's NEW modified time —
+		// re-fetched fresh, never the stale `$post` in hand — so this run may
+		// keep editing its own writes without an intervening read-content
+		// call. A run parked mid-write and resumed still compares against the
+		// marker THIS write left, exactly as if it had re-read.
+		$fresh = function_exists( 'get_post' ) ? get_post( (int) ( $post->ID ?? 0 ) ) : null;
+		self::recordReadMarker( (int) ( $post->ID ?? 0 ), is_object( $fresh ) ? (string) $fresh->post_modified_gmt : '' );
 
 		return array(
 			'id'     => (int) ( $post->ID ?? 0 ),

@@ -172,6 +172,22 @@ if ( ! function_exists( 'serialize_blocks' ) ) {
 $GLOBALS['senroflux_test_posts']          = array();
 $GLOBALS['senroflux_test_inserted_posts'] = array();
 $GLOBALS['senroflux_test_next_post_id']   = 100;
+$GLOBALS['senroflux_test_modified_seq']   = 0;
+
+/**
+ * A deterministic, ever-increasing `post_modified_gmt` stand-in (0.3 S8):
+ * real WordPress bumps this on every insert/update, which is exactly the
+ * signal the stale-write compare needs. A counter (not `gmdate()`) keeps two
+ * writes in the same test process guaranteed distinct regardless of wall-clock
+ * resolution.
+ */
+if ( ! function_exists( 'senroflux_test_next_modified_marker' ) ) {
+	function senroflux_test_next_modified_marker(): string {
+		$GLOBALS['senroflux_test_modified_seq'] = (int) ( $GLOBALS['senroflux_test_modified_seq'] ?? 0 ) + 1;
+
+		return 'modified-' . $GLOBALS['senroflux_test_modified_seq'];
+	}
+}
 
 if ( ! function_exists( 'wp_insert_post' ) ) {
 	function wp_insert_post( array $postarr, bool $wp_error = false ): int|WP_Error {
@@ -182,17 +198,18 @@ if ( ! function_exists( 'wp_insert_post' ) ) {
 		$id                                     = (int) ( $GLOBALS['senroflux_test_next_post_id'] ?? 100 );
 		$GLOBALS['senroflux_test_next_post_id'] = $id + 1;
 
-		$post                = new stdClass();
-		$post->ID            = $id;
-		$post->post_type     = $postarr['post_type'] ?? 'page';
-		$post->post_title    = $postarr['post_title'] ?? '';
-		$post->post_content  = $postarr['post_content'] ?? '';
-		$post->post_status   = $postarr['post_status'] ?? 'draft';
-		$post->post_name     = $postarr['post_name'] ?? '';
-		$post->post_parent   = (int) ( $postarr['post_parent'] ?? 0 );
-		$post->post_excerpt  = $postarr['post_excerpt'] ?? '';
-		$post->post_date     = '';
-		$post->post_modified = '';
+		$post                    = new stdClass();
+		$post->ID                = $id;
+		$post->post_type         = $postarr['post_type'] ?? 'page';
+		$post->post_title        = $postarr['post_title'] ?? '';
+		$post->post_content      = $postarr['post_content'] ?? '';
+		$post->post_status       = $postarr['post_status'] ?? 'draft';
+		$post->post_name         = $postarr['post_name'] ?? '';
+		$post->post_parent       = (int) ( $postarr['post_parent'] ?? 0 );
+		$post->post_excerpt      = $postarr['post_excerpt'] ?? '';
+		$post->post_date         = '';
+		$post->post_modified     = '';
+		$post->post_modified_gmt = senroflux_test_next_modified_marker();
 
 		$GLOBALS['senroflux_test_posts'][ $id ] = $post;
 
@@ -220,6 +237,11 @@ if ( ! function_exists( 'wp_update_post' ) ) {
 					$post->{$key} = $value;
 				}
 			}
+			// 0.3 S8: every real update bumps the modified marker — a
+			// write's own after-write re-record (Content\Abilities) relies on
+			// this changing, and the "two consecutive writes" scenario would
+			// be untested if it never did.
+			$post->post_modified_gmt = senroflux_test_next_modified_marker();
 		}
 
 		return $id;
