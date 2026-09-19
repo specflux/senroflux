@@ -53,6 +53,9 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   semver promise from 1.0: the pack contract, the pack registration hook, pack skills, budget
   defaults and a pack's namespace preferences. Everything else is internal and may change in any
   release. A pack registered through it is governed exactly like a bundled one.
+- **Breaking change** — a change to the extension API that removes or renames part of it, changes
+  a signature or return shape, or changes what a hook's result means. Tightening the gate (a
+  higher tier, a new park, a newly withheld role) is never a breaking change, whatever it breaks.
 - **Add-on** — a separate plugin that adds packs through the extension API; SenroFlux itself
   never contains an add-on's code or checks its licence. **SenroFlux Pro** is Specflux's paid
   add-on, sold outside wordpress.org; paying for it never buys a weaker gate.
