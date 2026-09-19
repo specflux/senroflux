@@ -9,6 +9,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Model;
 
+use WordPress\AiClient\Providers\Http\DTO\RequestOptions;
 use WP_Error;
 
 // Bail on direct access.
@@ -31,6 +32,29 @@ defined( 'ABSPATH' ) || exit;
  */
 final class AiClientMediaGateway implements MediaGatewayInterface {
 
+	/**
+	 * Defect 2 (live run evidence): image generation routinely takes 30-90s;
+	 * with no per-request timeout set, the AI Client's HTTP call inherited
+	 * WordPress's own HTTP API default (~30s) and failed outright —
+	 * "cURL error 28: Operation timed out after 30002 milliseconds". Set
+	 * generously above the observed worst case.
+	 */
+	private const IMAGE_TIMEOUT_SECONDS = 120.0;
+
+	/**
+	 * Alt text is a short text completion, not a media render — a smaller
+	 * but still-explicit timeout so it never silently inherits the same
+	 * default the image path was found to be missing.
+	 */
+	private const ALT_TEXT_TIMEOUT_SECONDS = 60.0;
+
+	/**
+	 * The longest either call above may legitimately run, plus headroom —
+	 * used only to defensively raise PHP's OWN execution-time cap, which
+	 * would otherwise kill the request before the HTTP timeout does.
+	 */
+	private const TIME_LIMIT_SECONDS = 150;
+
 	/** {@inheritDoc} */
 	public function generateImage( string $prompt ): array|WP_Error {
 		if ( ! function_exists( 'wp_ai_client_prompt' ) ) {
@@ -40,8 +64,13 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 			);
 		}
 
+		$this->raiseExecutionTimeLimit();
+
+		$request_options = new RequestOptions();
+		$request_options->setTimeout( self::IMAGE_TIMEOUT_SECONDS );
+
 		try {
-			$result = wp_ai_client_prompt( $prompt )->generate_image_result();
+			$result = wp_ai_client_prompt( $prompt )->using_request_options( $request_options )->generate_image_result();
 		} catch ( \Throwable $e ) {
 			return new WP_Error( 'gateway_failed', $e->getMessage() );
 		}
@@ -73,13 +102,16 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 			);
 		}
 
+		$request_options = new RequestOptions();
+		$request_options->setTimeout( self::ALT_TEXT_TIMEOUT_SECONDS );
+
 		try {
 			$prompt = sprintf(
 				/* translators: %s: image URL. */
 				__( 'Write concise, descriptive alt text (under 125 characters) for the image at %s. Return only the alt text.', 'senroflux' ),
 				$image_url
 			);
-			$result = wp_ai_client_prompt( $prompt )->generate_text_result();
+			$result = wp_ai_client_prompt( $prompt )->using_request_options( $request_options )->generate_text_result();
 		} catch ( \Throwable $e ) {
 			return new WP_Error( 'gateway_failed', $e->getMessage() );
 		}
@@ -103,5 +135,18 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 		}
 
 		return trim( $text );
+	}
+
+	/**
+	 * Best-effort: raise PHP's own execution-time cap so it does not kill
+	 * a slow image generation before the HTTP client's own (longer) timeout
+	 * gets the chance to. `set_time_limit()` is commonly disabled on shared
+	 * hosts (removed via `disable_functions`, which makes `function_exists()`
+	 * return false rather than fatal) — a no-op there, by design.
+	 */
+	private function raiseExecutionTimeLimit(): void {
+		if ( function_exists( 'set_time_limit' ) ) {
+			set_time_limit( self::TIME_LIMIT_SECONDS );
+		}
 	}
 }

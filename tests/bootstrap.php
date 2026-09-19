@@ -40,6 +40,8 @@ require_once __DIR__ . '/stubs/agent-safety.php';
 require_once __DIR__ . '/stubs/agent-safety-context.php';
 // Runner test doubles (FakeGateway, RecordingBridge) — class_exists-guarded.
 require_once __DIR__ . '/stubs/run-doubles.php';
+// wp_ai_client_prompt() double (defect 2): AiClientMediaGateway's timeout tests.
+require_once __DIR__ . '/stubs/ai-client-prompt-builder.php';
 // Admin-screen shims (S13): nonce/fields/enqueue for the Runs screen handlers.
 require_once __DIR__ . '/stubs/admin.php';
 // HTTP-surface shims (S9/S17): wp_send_json_*, check_ajax_referer, REST doubles.
