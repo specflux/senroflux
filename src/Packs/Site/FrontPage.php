@@ -45,7 +45,7 @@ final class FrontPage {
 	 * settings triple in play per run, so a fixed string key (never a
 	 * model-supplied argument) is enough.
 	 */
-	private const OBJECT_ID = 'site-front-page';
+	public const OBJECT_ID = 'site-front-page';
 
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
@@ -411,6 +411,26 @@ final class FrontPage {
 		return array(
 			'annotations' => $annotations,
 			'senroflux'   => array( 'hidden' => false ),
+		);
+	}
+
+	/**
+	 * S12 (defect fix): the report lookup for {@see OBJECT_ID}, wired
+	 * through the composition root's `$post_lookup` dispatcher (Plugin.php)
+	 * so a `set-front-page` write resolves to a real "setting" row instead
+	 * of falling back to the default post lookup's "unknown". There is
+	 * exactly one front-page setting in play per run (S7), so this needs no
+	 * argument.
+	 *
+	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
+	 */
+	public static function reportLookup(): array {
+		return array(
+			'object_type' => 'setting',
+			'title'       => __( 'Front page', 'senroflux' ),
+			'status'      => '',
+			'edit_url'    => function_exists( 'admin_url' ) ? admin_url( 'options-reading.php' ) : null,
+			'preview_url' => null,
 		);
 	}
 }

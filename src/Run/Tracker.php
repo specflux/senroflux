@@ -167,6 +167,12 @@ final class Tracker {
 	 * An object is UNVERIFIED when it has no verification, or its verification
 	 * predates its most recent write. A corrupt entry is also unverified.
 	 *
+	 * A READ-ONLY entry (no `last_write_seq` — e.g. a marker recorded by
+	 * {@see recordRead()} for an object the run only ever read, defect fix)
+	 * is never unverified: nothing was written, so there is nothing to
+	 * re-read before finishing. Only an entry that has actually been WRITTEN
+	 * is eligible to be reported unverified.
+	 *
 	 * @param array<string,mixed> $objects The objects_json map.
 	 * @return list<string> Object ids, in map insertion order.
 	 */
@@ -181,9 +187,14 @@ final class Tracker {
 			}
 
 			$last_write = $entry['last_write_seq'] ?? null;
-			$verified   = $entry['verified_seq'] ?? null;
+			if ( null === $last_write ) {
+				// Read-only marker: never written, so never "unverified".
+				continue;
+			}
 
-			if ( null === $last_write || null === $verified || $verified < $last_write ) {
+			$verified = $entry['verified_seq'] ?? null;
+
+			if ( null === $verified || $verified < $last_write ) {
 				$ids[] = (string) $object_id;
 			}
 		}

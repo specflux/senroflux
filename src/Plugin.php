@@ -15,6 +15,8 @@ use Specflux\SenroFlux\Http\Rest;
 use Specflux\SenroFlux\Model\AiClientGateway;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Packs\Content\Media;
+use Specflux\SenroFlux\Packs\Site\FrontPage;
+use Specflux\SenroFlux\Packs\Site\Navigation;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Report;
@@ -863,6 +865,17 @@ final class Plugin {
 					return Media::attachmentLookup( (int) $attachment_id );
 				}
 
+				// S12 (defect fix): the site pack's two singleton objects —
+				// neither is a post, so wpPostLookup() would resolve them
+				// "unknown".
+				if ( Navigation::OBJECT_ID === $object_id ) {
+					return Navigation::reportLookup();
+				}
+
+				if ( FrontPage::OBJECT_ID === $object_id ) {
+					return FrontPage::reportLookup();
+				}
+
 				return ( Report::wpPostLookup() )( $object_id );
 			},
 			// S9: a run started with a pack is fenced/annotated by the PACK's
@@ -945,6 +958,16 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->objectIdPrefix( $verb ) : '';
+			},
+			// S12 (defect fix, live run 56): the id a Tier >= 1 write just
+			// wrote, for a pack verb whose ability output carries no id of
+			// its own (the site pack's navigation/front-page singletons) —
+			// only the pack knows the verb writes a fixed object; a
+			// direct-allow run has no pack and no opinion.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb, array $args, array $output ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->objectIdForWrite( $verb, $args, $output ) : null;
 			}
 		);
 

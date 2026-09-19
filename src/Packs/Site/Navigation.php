@@ -66,7 +66,7 @@ final class Navigation {
 	 * play per run, so a fixed string key (never a model-supplied argument)
 	 * is enough.
 	 */
-	private const OBJECT_ID = 'site-navigation';
+	public const OBJECT_ID = 'site-navigation';
 
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
@@ -791,6 +791,26 @@ final class Navigation {
 		return array(
 			'annotations' => $annotations,
 			'senroflux'   => array( 'hidden' => false ),
+		);
+	}
+
+	/**
+	 * S12 (defect fix): the report lookup for {@see OBJECT_ID}, wired
+	 * through the composition root's `$post_lookup` dispatcher (Plugin.php)
+	 * so an `update-navigation` write resolves to a real "navigation" row
+	 * instead of falling back to the default post lookup's "unknown". There
+	 * is exactly one navigation object in play per run (S7), so this needs
+	 * no argument.
+	 *
+	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
+	 */
+	public static function reportLookup(): array {
+		return array(
+			'object_type' => 'navigation',
+			'title'       => __( 'Site navigation', 'senroflux' ),
+			'status'      => '',
+			'edit_url'    => function_exists( 'admin_url' ) ? admin_url( 'site-editor.php?p=%2Fnavigation' ) : null,
+			'preview_url' => null,
 		);
 	}
 }

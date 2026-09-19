@@ -79,6 +79,20 @@ final class Runner {
 		private readonly mixed $ungrantable_verbs_resolver = null,
 		/** @var callable(Run,string):(string|null)|null Object-id PREFIX resolver (S12 defect fix): a per-verb string prepended to the id {@see $object_id_key_resolver} extracts, before it is tracked/verified/looked up — lets a pack keep two object kinds that share a raw id space (a post and an attachment can both be `63`) from colliding in one run's `objects_json`; absent/null = no prefix (every pre-existing pack's ids are unchanged). */
 		private readonly mixed $object_id_prefix_resolver = null,
+		/**
+		 * @var callable(Run,string,array<string,mixed>,array<string,mixed>):(string|null)|null
+		 * Write object-id resolver (S12 defect fix, live run 56): given the
+		 * run, the pack verb, the call's args and its output, answers the id
+		 * a Tier >= 1 write just wrote, or null to fall back to
+		 * {@see $object_id_key_resolver}'s output[key] extraction. A pack
+		 * verb whose write has no natural id in its own OUTPUT — a singleton
+		 * object like the site navigation or the front-page setting, whose
+		 * ability output schema carries no id at all — uses this instead of
+		 * adding a tracker-only field to a model-visible, schema-validated
+		 * ability response. Absent/null = every pre-existing pack keeps the
+		 * output[key] behaviour unchanged.
+		 */
+		private readonly mixed $write_object_id_resolver = null,
 	) {
 	}
 
@@ -2814,7 +2828,9 @@ final class Runner {
 		$prefix = $this->objectIdPrefixFor( $run, $verb );
 
 		if ( $tier >= VerbTier::TIER_1 ) {
-			$write_id = self::objectIdIn( $outcome->output ?? array(), $key );
+			$args     = $call['args'] ?? null;
+			$write_id = $this->writeObjectIdFor( $run, $verb, is_array( $args ) ? $args : array(), $outcome->output ?? array() )
+				?? self::objectIdIn( $outcome->output ?? array(), $key );
 			if ( null !== $write_id ) {
 				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq );
 			}
@@ -2847,6 +2863,25 @@ final class Runner {
 		$key = ( $this->object_id_key_resolver )( $run, $verb );
 
 		return is_string( $key ) && '' !== $key ? $key : 'id';
+	}
+
+	/**
+	 * The write object id for one verb (S12 defect fix): whatever the
+	 * injected resolver answers, else null (fall back to the output[key]
+	 * extraction, S12's pre-existing behaviour). A resolver that misbehaves
+	 * (a non-string, non-null return) is treated as null.
+	 *
+	 * @param array<string,mixed> $args   The call's args.
+	 * @param array<string,mixed> $output The call's output.
+	 */
+	private function writeObjectIdFor( Run $run, string $verb, array $args, array $output ): ?string {
+		if ( ! is_callable( $this->write_object_id_resolver ) ) {
+			return null;
+		}
+
+		$id = ( $this->write_object_id_resolver )( $run, $verb, $args, $output );
+
+		return ( is_string( $id ) && '' !== $id ) ? $id : null;
 	}
 
 	/**

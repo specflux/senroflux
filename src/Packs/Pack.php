@@ -373,6 +373,25 @@ abstract class Pack {
 	}
 
 	/**
+	 * S12 (defect fix): the id a Tier >= 1 write just wrote, for a pack verb
+	 * whose ability output carries no natural id of its own (a singleton
+	 * object such as a site's navigation or front-page setting — see
+	 * `Specflux\SenroFlux\Packs\Site\SitePack::objectIdForWrite()`). Null
+	 * (the base) means "no opinion": the harness falls back to
+	 * {@see objectIdKey()}'s output[key] extraction, S12's pre-existing
+	 * behaviour, for every pre-existing pack.
+	 *
+	 * @param string               $verb   The pack verb.
+	 * @param array<string,mixed>  $args   The call's args.
+	 * @param array<string,mixed>  $output The call's output.
+	 */
+	public function objectIdForWrite( string $verb, array $args, array $output ): ?string {
+		unset( $verb, $args, $output );
+
+		return null;
+	}
+
+	/**
 	 * role => required WordPress capability (0.3 S6). A role absent from this
 	 * map, or mapped to `''`, needs no capability of its own beyond whatever
 	 * `runCapability()`/the ability's own permission callback already checks

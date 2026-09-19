@@ -51,6 +51,29 @@ final class TrackerTest extends TestCase {
 		$this->assertSame( array( '1', '3' ), Tracker::unverified( $objects ) );
 	}
 
+	/**
+	 * Defect fix (live run 56): a READ marker alone (last_write_seq null,
+	 * e.g. Navigation/FrontPage's read-time recordRead()) must never be
+	 * reported unverified — nothing was ever written, so there is nothing to
+	 * re-read before finishing.
+	 */
+	public function test_a_read_only_marker_is_never_unverified(): void {
+		$objects = Tracker::recordRead( array(), 'site-navigation', 'marker-a' );
+
+		$this->assertSame( array(), Tracker::unverified( $objects ) );
+	}
+
+	/**
+	 * A corrupt entry stays fail-closed unverified regardless of the
+	 * read/write distinction above — there is no last_write_seq to trust
+	 * either way.
+	 */
+	public function test_a_corrupt_entry_is_still_unverified(): void {
+		$objects = array( 'x' => 'not-an-array' );
+
+		$this->assertSame( array( 'x' ), Tracker::unverified( $objects ) );
+	}
+
 	// --- S8: recordRead / staleWrite -----------------------------------------
 
 	public function test_a_never_read_object_is_a_stale_write(): void {

@@ -68,10 +68,17 @@ final class Report {
 				continue;
 			}
 
-			$last_write  = $entry['last_write_seq'] ?? null;
+			$last_write = $entry['last_write_seq'] ?? null;
+			if ( null === $last_write ) {
+				// Defect fix: a READ-ONLY marker (e.g. Navigation/FrontPage's
+				// read-time recordRead()) is not a change — nothing was
+				// written, so it must never open a report row.
+				continue;
+			}
+
 			$verified    = $entry['verified_seq'] ?? null;
 			$is_verified = is_int( $verified ) || is_numeric( $verified );
-			$is_verified = $is_verified && null !== $last_write && ( (int) $verified >= (int) $last_write );
+			$is_verified = $is_verified && ( (int) $verified >= (int) $last_write );
 
 			$changes[] = self::changeRow( $object_id, $is_verified, $lookup, $object_id );
 		}

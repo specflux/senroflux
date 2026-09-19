@@ -182,6 +182,29 @@ final class SitePack extends Pack {
 	}
 
 	/**
+	 * S12 (defect fix, live run 56): `update-navigation` and `set-front-page`
+	 * write a SINGLETON object that carries no natural id in its own output
+	 * (unlike a post/page write, and unlike {@see objectIdKey()}'s
+	 * output[key] extraction, which would need the ability's model-visible,
+	 * schema-validated response to carry tracker-only plumbing). Both verbs
+	 * always write exactly one fixed object, so the id is a constant the
+	 * pack names directly rather than extracts.
+	 *
+	 * @param string               $verb   The pack verb.
+	 * @param array<string,mixed>  $args   The call's args (unused: both ids are fixed).
+	 * @param array<string,mixed>  $output The call's output (unused: both ids are fixed).
+	 */
+	public function objectIdForWrite( string $verb, array $args, array $output ): ?string {
+		unset( $args, $output );
+
+		return match ( $verb ) {
+			'site/update-navigation' => Navigation::OBJECT_ID,
+			'site/set-front-page' => FrontPage::OBJECT_ID,
+			default => null,
+		};
+	}
+
+	/**
 	 * The S7 role => pack-verb split.
 	 *
 	 * @return array<string,list<string>>
