@@ -270,7 +270,9 @@ class Validator implements ContentValidator {
 
 			$slug = $this->matchPatternSchema( $block );
 			if ( null === $slug ) {
-				$nearest = $this->nearestPattern( $block );
+				$nearest_pattern = $this->nearestPatternDefinition( $block );
+				$nearest         = null !== $nearest_pattern ? (string) $nearest_pattern['name'] : 'unknown';
+				$shape           = null !== $nearest_pattern ? $this->describeShape( $nearest_pattern ) : '';
 
 				return $this->refuse(
 					new WP_Error(
@@ -281,12 +283,14 @@ class Validator implements ContentValidator {
 							array(
 								'index' => $position,
 								'name'  => $nearest,
+								'shape' => $shape,
 							)
 						),
 						array(
 							'status' => 400,
 							'index'  => $position,
 							'name'   => $nearest,
+							'shape'  => $shape,
 						)
 					)
 				);
@@ -939,12 +943,15 @@ class Validator implements ContentValidator {
 	/**
 	 * The closest pattern for an `unknown_pattern` message: the pattern whose
 	 * expected signature shares the longest leading run with the candidate.
+	 * Returns the full pattern definition (not just its name/slug) so its
+	 * shipped shape can be described back to the model.
 	 *
 	 * @param array<string,mixed> $block One parsed block.
+	 * @return array<string,mixed>|null
 	 */
-	private function nearestPattern( array $block ): string {
+	private function nearestPatternDefinition( array $block ): ?array {
 		$candidate = $this->signatureOf( $block );
-		$best      = '';
+		$best      = null;
 		$best_len  = -1;
 
 		foreach ( $this->vocabulary->all() as $pattern ) {
@@ -957,11 +964,86 @@ class Validator implements ContentValidator {
 			}
 			if ( $len > $best_len ) {
 				$best_len = $len;
-				$best     = (string) $pattern['name'];
+				$best     = $pattern;
 			}
 		}
 
-		return '' !== $best ? $best : 'unknown';
+		return $best;
+	}
+
+	/**
+	 * A plain-English restatement of a pattern's shipped block sequence — the
+	 * SAME structural facts {@see matchesShape()} matches on (block name,
+	 * align, layout type, heading level; decorative attrs never appear) — so
+	 * an `unknown_pattern` refusal names exactly what the nearest pattern
+	 * expects instead of just its slug. Fixes live run 57: a refusal that
+	 * only names the nearest pattern costs the model (and the human clicking
+	 * approval in built-in gate mode) a blind retry; this lets the very next
+	 * attempt match.
+	 *
+	 * @param array<string,mixed> $pattern One pattern definition.
+	 */
+	private function describeShape( array $pattern ): string {
+		$tree = $this->expectedTree( $pattern );
+		if ( null === $tree ) {
+			return (string) $pattern['slug'];
+		}
+
+		/** @var list<string> $repeatable */
+		$repeatable = $pattern['repeatable'] ?? array();
+
+		return $this->describeNode( $tree, $repeatable );
+	}
+
+	/**
+	 * @param array<string,mixed> $node       One expected-tree block.
+	 * @param list<string>        $repeatable Block names that may repeat.
+	 */
+	private function describeNode( array $node, array $repeatable ): string {
+		$name  = (string) ( $node['blockName'] ?? '' );
+		$short = str_starts_with( $name, 'core/' ) ? substr( $name, 5 ) : $name;
+		$label = '' === $short ? $this->localSignature( $node ) : $short;
+
+		$attrs = $node['attrs'] ?? array();
+		$bits  = array();
+		if ( isset( $attrs['align'] ) && is_string( $attrs['align'] ) && '' !== $attrs['align'] ) {
+			$bits[] = 'align=' . $attrs['align'];
+		}
+		if ( isset( $attrs['layout']['type'] ) && is_string( $attrs['layout']['type'] ) && 'default' !== $attrs['layout']['type'] ) {
+			$bits[] = 'layout=' . $attrs['layout']['type'];
+		}
+		if ( 'core/heading' === $name ) {
+			$level  = isset( $attrs['level'] ) && is_numeric( $attrs['level'] ) ? (int) $attrs['level'] : 2;
+			$bits[] = 'level ' . $level;
+		}
+		if ( array() !== $bits ) {
+			$label .= ' ' . implode( ' ', $bits );
+		}
+
+		$children = array_values( $node['innerBlocks'] ?? array() );
+		/** @var list<array<string,mixed>> $children */
+		if ( array() === $children ) {
+			return $label;
+		}
+
+		$parts = array();
+		$i     = 0;
+		$count = count( $children );
+		while ( $i < $count ) {
+			$child = $children[ $i ];
+			$run   = 1;
+			while ( $i + $run < $count && $this->matchesShape( $children[ $i + $run ], $child, $repeatable ) ) {
+				++$run;
+			}
+			$desc = $this->describeNode( $child, $repeatable );
+			if ( $run > 1 || in_array( (string) ( $child['blockName'] ?? '' ), $repeatable, true ) ) {
+				$desc .= ' (repeats)';
+			}
+			$parts[] = $desc;
+			$i      += $run;
+		}
+
+		return $label . ' > ' . implode( ', ', $parts );
 	}
 
 	/**
@@ -1325,12 +1407,20 @@ class Validator implements ContentValidator {
 				__( 'Unresolved placeholder "{{%s}}" must be filled before writing.', 'senroflux' ),
 				$data['placeholder'] ?? ''
 			),
-			'unknown_pattern'        => sprintf(
-				/* translators: %1$d: pattern index, %2$s: nearest pattern name. */
-				__( 'Pattern %1$d does not match any page pattern (nearest: %2$s).', 'senroflux' ),
-				$data['index'] ?? 0,
-				$data['name'] ?? 'unknown'
-			),
+			'unknown_pattern'        => '' !== ( $data['shape'] ?? '' )
+				? sprintf(
+					/* translators: %1$d: pattern index, %2$s: nearest pattern name, %3$s: nearest pattern's expected block sequence. */
+					__( 'Pattern %1$d does not match any page pattern (nearest: %2$s, expected shape: %3$s).', 'senroflux' ),
+					$data['index'] ?? 0,
+					$data['name'] ?? 'unknown',
+					$data['shape'] ?? ''
+				)
+				: sprintf(
+					/* translators: %1$d: pattern index, %2$s: nearest pattern name. */
+					__( 'Pattern %1$d does not match any page pattern (nearest: %2$s).', 'senroflux' ),
+					$data['index'] ?? 0,
+					$data['name'] ?? 'unknown'
+				),
 			'slot_count'             => sprintf(
 				/* translators: %1$s: slot, %2$d: min, %3$d: max. */
 				__( 'Slot "%1$s" must have %2$d to %3$d items.', 'senroflux' ),

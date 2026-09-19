@@ -1,0 +1,25 @@
+<!-- wp:group {"metadata":{"name":"senroflux/hero"},"layout":{"type":"constrained"},"align":"full"} -->
+<div class="wp-block-group alignfull"><!-- wp:heading -->
+<h2 class="wp-block-heading">Your neighborhood sourdough bakery</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Welcome to Crumb &amp; Co, a small sourdough bakery at 12 Mill Lane.</p>
+<!-- /wp:paragraph -->
+
+<!-- wp:buttons -->
+<div class="wp-block-buttons"><!-- wp:button -->
+<div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="mailto:hello@crumbandco.example">Email us</a></div>
+<!-- /wp:button --></div>
+<!-- /wp:buttons --></div>
+<!-- /wp:group -->
+
+<!-- wp:group {"metadata":{"name":"senroflux/text-section"},"layout":{"type":"constrained"}} -->
+<div class="wp-block-group"><!-- wp:heading -->
+<h2 class="wp-block-heading">Visit Crumb &amp; Co</h2>
+<!-- /wp:heading -->
+
+<!-- wp:paragraph -->
+<p>Find us at 12 Mill Lane, Tuesday through Sunday, 7am–3pm. We're closed on Mondays.</p>
+<!-- /wp:paragraph --></div>
+<!-- /wp:group -->

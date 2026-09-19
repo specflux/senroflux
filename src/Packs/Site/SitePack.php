@@ -284,6 +284,17 @@ final class SitePack extends Pack {
 	/**
 	 * The `site/layout-rules` body — the pages layout rules, extended with the
 	 * two homepage-only patterns and the site pack's own (longer) verb list.
+	 *
+	 * BUG FIX (live run 57): this used to describe the nine patterns by NAME
+	 * only and never restated the Validator's structural identity (the
+	 * `pages/layout-rules` "Shapes" lines a pages run gets), so a site run's
+	 * model had to guess each pattern's heading level / align / buttons
+	 * layout. Guessing the hero's headline as a plain h2 (the text-section
+	 * shape) produced a markup the shipped hero pattern's h1 could never
+	 * match, refused three times as `unknown_pattern` before the run gave up.
+	 * The shape lines below are the SAME content `pages/layout-rules` renders
+	 * for the shared seven, plus the two homepage-only ones, so a site run is
+	 * never worse-informed than a pages run.
 	 */
 	private function layoutRulesBody(): string {
 		return implode(
@@ -291,8 +302,18 @@ final class SitePack extends Pack {
 			array(
 				'Compose pages ONLY from the pattern vocabulary: hero, text-section, feature-grid, pricing-table, faq, testimonials, cta, page-links and intro. Put the hero first. Use at most one cta and at most one page-links. A page is 2–8 patterns. No pattern more than twice except text-section. No core/image anywhere. No colour attributes. Set spacing and typography only through the standard preset slugs. Re-read every object after writing.',
 				'A pattern is NOT a block: it is a core/group you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote.',
-				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				'page-links: a homepage grid of 2–6 cards, each a heading, a paragraph and a button linking to one of the site\'s other skeleton pages. intro: one heading, one paragraph and one button.',
+				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
+				'Give a block ONLY the attributes its shape names below. An attribute the shape does not name — an extra align, an extra layout — changes the pattern\'s identity and the write is refused as unknown_pattern. In particular only hero, cta and page-links give their buttons block `{"layout":{"type":"flex"}}`; a buttons block anywhere else carries no layout at all.',
+				'Shapes (">" = child, "(n–m)" = how many of that child):',
+				'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
+				'text-section: group > heading level 2, paragraph (1–4)',
+				'feature-grid: group > heading level 2, columns > column (2–3) each > heading level 3, paragraph',
+				'pricing-table: group > heading level 2, columns > column (1–3) each > heading level 3, paragraph, list (3–6 items), buttons > button',
+				'faq: group > heading level 2, details (2–8) each > paragraph',
+				'testimonials: group > heading level 2, quote (1–3)',
+				'cta: group align=full > heading level 2, paragraph align=center, buttons layout=flex > button (1)',
+				'page-links: group align=full > heading level 2, columns > column (2–6) each > heading level 3, paragraph, buttons > button (a card grid linking to the site\'s other skeleton pages; appears at most once per page)',
+				'intro: group > heading level 2, paragraph, buttons > button',
 				'When you propose a plan, spell each step\'s verbs exactly as one of: site/read, site/list-patterns, site/preview, site/create-draft, site/update-draft, site/update-live, site/publish, site/read-navigation, site/update-navigation, site/read-front-page, site/set-front-page. Any other word is refused as unknown_verb.',
 			)
 		);

@@ -92,6 +92,30 @@ final class SitePackTest extends TestCase {
 		$this->assertNull( SkillSet::ceilingError( $skills ) );
 	}
 
+	/**
+	 * Live run 57: the site pack's layout-rules skill named the nine
+	 * patterns but never restated their shipped SHAPE (heading level, align,
+	 * buttons layout), so the model guessed the hero's headline as a plain h2
+	 * and was refused three times. This proves the rendered skill body now
+	 * carries the same shape lines a pages run gets, for every pattern a site
+	 * run can write — including the two homepage-only ones.
+	 */
+	public function test_layout_rules_states_the_shape_of_every_pattern_including_hero_and_page_links(): void {
+		$layout = null;
+		foreach ( ( new SitePack() )->skills() as $skill ) {
+			if ( 'site/layout-rules' === $skill->id ) {
+				$layout = $skill;
+			}
+		}
+		$this->assertNotNull( $layout );
+
+		$body = $layout->body;
+		$this->assertStringContainsString( 'hero: group align=full > heading level 1', $body );
+		$this->assertStringContainsString( 'buttons layout=flex > button', $body );
+		$this->assertStringContainsString( 'page-links: group align=full > heading level 2', $body );
+		$this->assertStringContainsString( 'intro: group > heading level 2', $body );
+	}
+
 	public function test_structure_rules_tell_the_model_to_propose_a_plan_right_after_clarify(): void {
 		$skills = ( new SitePack() )->skills();
 
