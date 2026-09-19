@@ -1169,7 +1169,11 @@ class RunsScreen {
 		echo '<div id="senroflux-live-status" class="senroflux-sr-only" aria-live="polite"></div>';
 
 		printf(
-			'<h2>%s <span id="senroflux-status-badge" class="senroflux-badge senroflux-badge-%s" data-status="%s">%s</span></h2>',
+			// Defect E (live run): the goal is MODEL-AUTHORED (S15) and can
+			// be a long unbroken string; without a wrap rule it ran off the
+			// viewport instead of wrapping. `senroflux-run-heading` carries
+			// that rule (assets/runs.css).
+			'<h2 class="senroflux-run-heading">%s <span id="senroflux-status-badge" class="senroflux-badge senroflux-badge-%s" data-status="%s">%s</span></h2>',
 			esc_html( (string) $run['goal'] ),
 			esc_attr( (string) $run['status'] ),
 			esc_attr( (string) $run['status'] ),

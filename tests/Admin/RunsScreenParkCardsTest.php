@@ -537,6 +537,44 @@ final class RunsScreenParkCardsTest extends TestCase {
 		$this->assertStringContainsString( '&lt;script&gt;', $html );
 	}
 
+	/**
+	 * Defect E (live run): a long argument (e.g. a "prompt" string) ran off
+	 * the approval card horizontally instead of wrapping, so the approver
+	 * could not see the full call they were being asked to approve, and the
+	 * goal heading overflowed the viewport the same way. Both must carry a
+	 * real wrap rule — checked both in the rendered markup (the class hooks
+	 * are present) and in the actual stylesheet (the rule itself is there),
+	 * since a class with no matching CSS would pass a markup-only check
+	 * while still rendering unwrapped.
+	 */
+	public function test_the_approval_card_and_run_heading_carry_wrapping_markup(): void {
+		$html = $this->renderPark(
+			RunStatus::AwaitingApproval,
+			StepKind::Approval,
+			array(
+				'verb' => 'posts/generate-image',
+				'tier' => 1,
+				'args' => array( 'prompt' => str_repeat( 'a very long unbroken prompt word ', 20 ) ),
+			)
+		);
+
+		$this->assertStringContainsString( '<h2 class="senroflux-run-heading">', $html, 'the goal heading needs a class the stylesheet can hang a wrap rule on' );
+		$this->assertMatchesRegularExpression( '/<pre class="senroflux-args"/', $html );
+
+		$css = (string) file_get_contents( dirname( __DIR__, 2 ) . '/assets/runs.css' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local repo asset, not a remote URL.
+
+		$this->assertMatchesRegularExpression(
+			'/\.senroflux-args\s*\{[^}]*white-space:\s*pre-wrap;[^}]*overflow-wrap:\s*anywhere;/s',
+			$css,
+			'.senroflux-args must actually wrap long arguments, not just scroll'
+		);
+		$this->assertMatchesRegularExpression(
+			'/\.senroflux-run-heading\s*\{[^}]*overflow-wrap:\s*anywhere;/s',
+			$css,
+			'.senroflux-run-heading must wrap a long model-authored goal instead of overflowing the viewport'
+		);
+	}
+
 	// ------------------------------------------------------------------
 	// Detail chrome: status label, cancel link, report
 	// ------------------------------------------------------------------
