@@ -109,9 +109,18 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   always lives in SenroFlux's own namespace, never in one another plugin owns. Upstream is core where core is the natural home, and a canonical
   upstream plugin where it is not.
 - **Pattern vocabulary** — the curated set of core-block patterns a pack ships and the model
-  composes content from. Content is a sequence of pattern instances and nothing else; anything
+  composes content from, plus, for the pages and site packs, the active theme's theme-derived
+  patterns. Content is a sequence of pattern instances and nothing else; anything
   outside the vocabulary is refused, never trimmed. A vocabulary separates **prose patterns**,
   which may repeat without limit, from **feature patterns**, which carry per-vocabulary caps.
+  A theme-derived pattern is always a feature pattern.
+- **Theme-derived pattern** — a pattern the active theme (or its parent) registers that passes
+  the eligibility filter, with its shape, text slots and word limits derived from its own
+  markup rather than written by hand. The model never writes its markup: it supplies the text
+  slots and SenroFlux fills them into the theme's markup. A theme switch removes it from the
+  vocabulary, so instances left in a draft are refused like any unknown pattern.
+- **Text slot** — a rich-text element or link target in a theme-derived pattern. Every slot must
+  be supplied; an empty value, or the theme's shipped sample text, is refused.
 - **Pattern shape** — the structural definition of a pattern: which blocks nest in which, and
   how many of each repeated part are allowed. Shape is how the harness recognises a pattern
   in what the model wrote; the name the model gives it is only a hint.
