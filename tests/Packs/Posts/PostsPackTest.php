@@ -58,7 +58,7 @@ final class PostsPackTest extends TestCase {
 	public function test_verb_map_has_the_s5_tiers(): void {
 		$map = ( new PostsPack() )->verbMap();
 
-		foreach ( array( 'posts/read', 'posts/list-patterns', 'posts/preview', 'posts/media-search', 'posts/list-missing-alt', 'posts/generate-alt-text' ) as $verb ) {
+		foreach ( array( 'posts/read', 'posts/list-patterns', 'posts/preview', 'posts/media-search', 'posts/list-missing-alt', 'posts/generate-alt-text', 'posts/read-media' ) as $verb ) {
 			$this->assertSame( 0, $map[ $verb ], $verb );
 		}
 		foreach ( array( 'posts/create-draft', 'posts/update-draft', 'posts/set-terms', 'posts/create-term', 'posts/media-upload', 'posts/media-generate', 'posts/set-featured-image', 'posts/update-alt' ) as $verb ) {
@@ -70,20 +70,27 @@ final class PostsPackTest extends TestCase {
 	}
 
 	/**
-	 * S12 (defect fix): `update-alt`'s output carries the attachment id as
-	 * `attachment_id`, never `id` — the harness base's default would
-	 * silently track nothing for it, and a bare id could collide with a
-	 * post sharing the same number.
+	 * S12 (defect fix): `update-alt`'s write and `read-media`'s verification
+	 * must resolve the SAME id key + prefix, or the generic harness tracker
+	 * (Runner::trackObjects()) can never match one to the other.
 	 */
-	public function test_object_id_key_and_prefix_for_update_alt(): void {
+	public function test_object_id_key_and_prefix_for_attachment_verbs(): void {
 		$pack = new PostsPack();
 
-		$this->assertSame( 'attachment_id', $pack->objectIdKey( 'posts/update-alt' ) );
-		$this->assertSame( 'attachment:', $pack->objectIdPrefix( 'posts/update-alt' ) );
+		foreach ( array( 'posts/update-alt', 'posts/read-media' ) as $verb ) {
+			$this->assertSame( 'attachment_id', $pack->objectIdKey( $verb ), $verb );
+			$this->assertSame( 'attachment:', $pack->objectIdPrefix( $verb ), $verb );
+		}
 
 		// Every other verb keeps the harness base default: bare 'id', no prefix.
 		$this->assertSame( 'id', $pack->objectIdKey( 'posts/read' ) );
 		$this->assertSame( '', $pack->objectIdPrefix( 'posts/read' ) );
+	}
+
+	public function test_verb_for_maps_read_media(): void {
+		$pack = new PostsPack();
+
+		$this->assertSame( 'posts/read-media', $pack->verbFor( 'senroflux/read-media', array() ) );
 	}
 
 	public function test_role_capabilities_require_upload_files_for_media_roles_only(): void {

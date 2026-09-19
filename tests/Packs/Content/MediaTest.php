@@ -102,7 +102,7 @@ final class MediaTest extends TestCase {
 	// Registration + permission callbacks
 	// ------------------------------------------------------------------
 
-	public function test_all_nine_abilities_are_registered(): void {
+	public function test_all_ten_abilities_are_registered(): void {
 		foreach (
 			array(
 				'senroflux/media-search',
@@ -112,6 +112,7 @@ final class MediaTest extends TestCase {
 				'senroflux/generate-alt-text',
 				'senroflux/set-featured-image',
 				'senroflux/update-alt',
+				'senroflux/read-media',
 				'senroflux/set-terms',
 				'senroflux/create-term',
 			) as $name
@@ -144,7 +145,7 @@ final class MediaTest extends TestCase {
 		$this->seedAttachment( 5 );
 		$this->seedPost( 6 ); // Not an attachment.
 
-		foreach ( array( 'senroflux/update-alt', 'senroflux/generate-alt-text' ) as $name ) {
+		foreach ( array( 'senroflux/update-alt', 'senroflux/generate-alt-text', 'senroflux/read-media' ) as $name ) {
 			$ability = $this->ability( $name );
 
 			$this->grant( 'edit_post' );
@@ -364,5 +365,47 @@ final class MediaTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_alt', $result->get_error_code() );
+	}
+
+	// ------------------------------------------------------------------
+	// read-media (defect fix): the re-read path update-alt never had
+	// ------------------------------------------------------------------
+
+	public function test_read_media_returns_the_current_snapshot(): void {
+		$this->seedAttachment( 9, 'a red bicycle' );
+		$GLOBALS['senroflux_test_attachment_metadata'][9] = array(
+			'width'  => 640,
+			'height' => 480,
+		);
+
+		$result = $this->ability( 'senroflux/read-media' )->execute( array( 'attachment_id' => 9 ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 9, $result['attachment_id'] );
+		$this->assertSame( 'a red bicycle', $result['alt'] );
+		$this->assertSame( 640, $result['width'] );
+		$this->assertSame( 480, $result['height'] );
+		$this->assertSame( array(), $result['featured_on'] );
+	}
+
+	public function test_read_media_lists_posts_using_it_as_the_featured_image(): void {
+		$this->seedAttachment( 9 );
+		$this->seedPost( 20 );
+		$this->seedPost( 21 );
+		$GLOBALS['senroflux_test_postmeta'][20]['_thumbnail_id'] = 9;
+
+		$result = $this->ability( 'senroflux/read-media' )->execute( array( 'attachment_id' => 9 ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 20 ), $result['featured_on'] );
+	}
+
+	public function test_read_media_refuses_a_non_attachment(): void {
+		$this->seedPost( 6 );
+
+		$result = $this->ability( 'senroflux/read-media' )->execute( array( 'attachment_id' => 6 ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'not_found', $result->get_error_code() );
 	}
 }

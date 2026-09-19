@@ -106,18 +106,23 @@ if ( ! function_exists( 'wp_insert_attachment' ) ) {
 if ( ! function_exists( 'get_posts' ) ) {
 	/**
 	 * A minimal `get_posts()`: filters the in-memory post store by
-	 * `post_type`, an optional `post_mime_type` PREFIX, and an optional `s`
-	 * substring match against the title. `posts_per_page` -1 means no limit.
+	 * `post_type` (`'any'` matches every type), an optional `post_mime_type`
+	 * PREFIX, an optional `s` substring match against the title, and an
+	 * optional exact `meta_key`/`meta_value` pair (the `read-media`
+	 * "which posts use this as a featured image" lookup, defect fix).
+	 * `posts_per_page` -1 means no limit.
 	 */
 	function get_posts( array $args = array() ): array {
-		$post_type = $args['post_type'] ?? 'post';
-		$mime      = $args['post_mime_type'] ?? '';
-		$search    = isset( $args['s'] ) ? strtolower( (string) $args['s'] ) : '';
-		$limit     = (int) ( $args['posts_per_page'] ?? -1 );
+		$post_type  = $args['post_type'] ?? 'post';
+		$mime       = $args['post_mime_type'] ?? '';
+		$search     = isset( $args['s'] ) ? strtolower( (string) $args['s'] ) : '';
+		$limit      = (int) ( $args['posts_per_page'] ?? -1 );
+		$meta_key   = isset( $args['meta_key'] ) ? (string) $args['meta_key'] : '';
+		$meta_value = array_key_exists( 'meta_value', $args ) ? (string) $args['meta_value'] : null;
 
 		$matches = array();
 		foreach ( $GLOBALS['senroflux_test_posts'] ?? array() as $post ) {
-			if ( ( $post->post_type ?? '' ) !== $post_type ) {
+			if ( 'any' !== $post_type && ( $post->post_type ?? '' ) !== $post_type ) {
 				continue;
 			}
 			if ( '' !== $mime && ! str_starts_with( (string) ( $post->post_mime_type ?? '' ), $mime ) ) {
@@ -126,6 +131,16 @@ if ( ! function_exists( 'get_posts' ) ) {
 			if ( '' !== $search && ! str_contains( strtolower( (string) ( $post->post_title ?? '' ) ), $search ) ) {
 				continue;
 			}
+			if ( '' !== $meta_key ) {
+				$actual = $GLOBALS['senroflux_test_postmeta'][ $post->ID ][ $meta_key ] ?? null;
+				if ( null === $meta_value ) {
+					if ( null === $actual ) {
+						continue;
+					}
+				} elseif ( (string) $actual !== $meta_value ) {
+					continue;
+				}
+			}
 			$matches[] = $post;
 			if ( $limit > 0 && count( $matches ) >= $limit ) {
 				break;
@@ -133,6 +148,18 @@ if ( ! function_exists( 'get_posts' ) ) {
 		}
 
 		return $matches;
+	}
+}
+
+if ( ! function_exists( 'wp_get_attachment_metadata' ) ) {
+	/**
+	 * `read-media`'s dimensions source (defect fix): scripted per attachment
+	 * via `$GLOBALS['senroflux_test_attachment_metadata'][$id]`, empty array
+	 * (no width/height) otherwise — mirrors a real attachment with no
+	 * generated image sizes rather than guessing.
+	 */
+	function wp_get_attachment_metadata( int $attachment_id ): array {
+		return $GLOBALS['senroflux_test_attachment_metadata'][ $attachment_id ] ?? array();
 	}
 }
 

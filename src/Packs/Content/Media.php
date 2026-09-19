@@ -1,9 +1,10 @@
 <?php
 /**
  * The media/attachment/term registrar shared by every content pack (0.3 S5,
- * stage 6): `media-search`, `media-upload`, `generate-image`,
- * `generate-alt-text`, `set-featured-image`, `list-missing-alt`,
- * `update-alt`, `set-terms`, `create-term`.
+ * stage 6; `read-media` added by the report defect fix): `media-search`,
+ * `media-upload`, `generate-image`, `generate-alt-text`,
+ * `set-featured-image`, `list-missing-alt`, `update-alt`, `read-media`,
+ * `set-terms`, `create-term`.
  *
  * TARGET REPO PATH: src/Packs/Content/Media.php
  *
@@ -88,12 +89,12 @@ final class Media {
 	/**
 	 * The type-qualified id prefix an attachment carries in the S12
 	 * written-object set (defect fix): {@see \Specflux\SenroFlux\Packs\Pack::objectIdPrefix()}
-	 * for `posts/update-alt` names this, so the generic
-	 * {@see \Specflux\SenroFlux\Run\Runner} write/verify tracking never
-	 * collides an attachment id with a post id sharing the same number. The
-	 * composition root's report lookup (wired in Plugin.php) strips it back
-	 * off before calling {@see attachmentLookup()} — the harness itself
-	 * (`src/Run`) never parses it.
+	 * for `posts/update-alt` and `posts/read-media` names this, so the
+	 * generic {@see \Specflux\SenroFlux\Run\Runner} write/verify tracking
+	 * never collides an attachment id with a post id sharing the same
+	 * number. The composition root's report lookup (wired in Plugin.php)
+	 * strips it back off before calling {@see attachmentLookup()} — the
+	 * harness itself (`src/Run`) never parses it.
 	 */
 	public const OBJECT_ID_PREFIX = 'attachment:';
 
@@ -186,7 +187,7 @@ final class Media {
 	}
 
 	/**
-	 * Register the nine abilities. Idempotent per request.
+	 * Register the ten abilities. Idempotent per request.
 	 */
 	public static function register(): void {
 		if ( self::$registered ) {
@@ -205,6 +206,7 @@ final class Media {
 		self::registerGenerateAltText();
 		self::registerSetFeaturedImage();
 		self::registerUpdateAlt();
+		self::registerReadMedia();
 		self::registerSetTerms();
 		self::registerCreateTerm();
 	}
@@ -516,6 +518,68 @@ final class Media {
 		);
 	}
 
+	/**
+	 * `read-media` (defect fix, S12/S8): the Tier-0 read that lets the model
+	 * verify a write it just made through `update-alt`/`media-upload`/
+	 * `generate-image` — none of those abilities can be independently
+	 * re-confirmed today, which is exactly what left the live run's report
+	 * showing an attachment as "unchecked after the change" with no way to
+	 * clear it. A NEW ability (rather than overloading `media-search` with
+	 * an `id` branch) keeps that ability's `query`-only shape simple and
+	 * gives this one a clear, single-purpose name and schema.
+	 */
+	private static function registerReadMedia(): void {
+		wp_register_ability(
+			'senroflux/read-media',
+			array(
+				'label'               => __( 'Read attachment details', 'senroflux' ),
+				'description'         => __( 'Re-read one attachment by id: its alt text, title, file, dimensions, and which posts use it as a featured image. Use this to confirm an alt-text or upload change actually saved.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'required'             => array( 'attachment_id' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'attachment_id' => array( 'type' => 'integer' ),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'attachment_id' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'attachment_id' => array( 'type' => 'integer' ),
+						'alt'           => array( 'type' => 'string' ),
+						'title'         => array( 'type' => 'string' ),
+						'mime_type'     => array( 'type' => 'string' ),
+						'url'           => array( 'type' => 'string' ),
+						'width'         => array( 'type' => array( 'integer', 'null' ) ),
+						'height'        => array( 'type' => array( 'integer', 'null' ) ),
+						'featured_on'   => array(
+							'type'  => 'array',
+							'items' => array( 'type' => 'integer' ),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeReadMedia( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					$input = is_array( $input ) ? $input : array();
+
+					return self::mayEditAttachment( (int) ( $input['attachment_id'] ?? 0 ) );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
+						'destructive' => false,
+						'idempotent'  => true,
+					)
+				),
+			)
+		);
+	}
+
 	private static function registerSetTerms(): void {
 		wp_register_ability(
 			'senroflux/set-terms',
@@ -816,11 +880,109 @@ final class Media {
 	}
 
 	/**
+	 * `read-media` (defect fix): re-read one attachment. The generic S12
+	 * write/verify tracking (wired through {@see \Specflux\SenroFlux\Packs\Posts\PostsPack::objectIdKey()}
+	 * / `objectIdPrefix()`) marks the attachment verified automatically once
+	 * this succeeds — this method only has to return the fresh snapshot.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeReadMedia( array $input ): array|WP_Error {
+		$id = (int) ( $input['attachment_id'] ?? 0 );
+		if ( 'attachment' !== self::postType( $id ) ) {
+			return new WP_Error( 'not_found', __( 'Attachment not found.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		// Optional S8-style marker (defect fix): cheap to record, not yet
+		// enforced anywhere — update-alt/media-upload/set-featured-image
+		// deliberately do NOT compare against it (see the class docblock:
+		// none of them touch post_content, so there is nothing to reproduce
+		// S8's stale_write refusal against). Recording it here only makes a
+		// future refusal possible without another schema change.
+		if ( null !== self::$current_run_id && null !== self::$store ) {
+			$objects = \Specflux\SenroFlux\Run\Tracker::recordRead(
+				self::currentObjects(),
+				self::OBJECT_ID_PREFIX . $id,
+				self::altText( $id )
+			);
+			self::$store->updateRun( self::$current_run_id, array( 'objects_json' => $objects ) );
+		}
+
+		return self::attachmentSnapshot( $id );
+	}
+
+	/**
+	 * The `read-media` output shape, also reused (minus the harness-opaque
+	 * `attachment_id` framing) by {@see attachmentLookup()} for the S12
+	 * report.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private static function attachmentSnapshot( int $id ): array {
+		$post = function_exists( 'get_post' ) ? get_post( $id ) : null;
+
+		return array(
+			'attachment_id' => $id,
+			'alt'           => self::altText( $id ),
+			'title'         => function_exists( 'get_the_title' ) ? (string) get_the_title( $id ) : '',
+			'mime_type'     => is_object( $post ) ? (string) $post->post_mime_type : '',
+			'url'           => self::attachmentUrl( $id ),
+			'width'         => self::attachmentDimension( $id, 'width' ),
+			'height'        => self::attachmentDimension( $id, 'height' ),
+			'featured_on'   => self::featuredOnPostIds( $id ),
+		);
+	}
+
+	/**
+	 * One dimension from `wp_get_attachment_metadata()`; null when the
+	 * function or the metadata is absent (fail closed to "unknown", never a
+	 * guessed 0).
+	 */
+	private static function attachmentDimension( int $id, string $dimension ): ?int {
+		if ( ! function_exists( 'wp_get_attachment_metadata' ) ) {
+			return null;
+		}
+		$metadata = wp_get_attachment_metadata( $id );
+
+		return ( is_array( $metadata ) && isset( $metadata[ $dimension ] ) && is_numeric( $metadata[ $dimension ] ) )
+			? (int) $metadata[ $dimension ]
+			: null;
+	}
+
+	/**
+	 * Every post id whose `_thumbnail_id` meta points at this attachment.
+	 *
+	 * @return list<int>
+	 */
+	private static function featuredOnPostIds( int $attachment_id ): array {
+		if ( ! function_exists( 'get_posts' ) ) {
+			return array();
+		}
+
+		$posts = get_posts(
+			array(
+				'post_type'      => 'any',
+				'posts_per_page' => -1,
+				'meta_key'       => '_thumbnail_id',
+				'meta_value'     => (string) $attachment_id,
+			)
+		);
+
+		return array_values(
+			array_map(
+				static fn ( $post ): int => (int) $post->ID,
+				self::asAttachmentList( $posts )
+			)
+		);
+	}
+
+	/**
 	 * The S12 report lookup for one attachment (defect fix): the shape
-	 * {@see \Specflux\SenroFlux\Run\Report::LOOKUP_KEYS} needs — never taught
-	 * to the harness by name (wired through the composition root's
-	 * `$post_lookup`, Plugin.php, which strips {@see OBJECT_ID_PREFIX}
-	 * before calling this).
+	 * {@see \Specflux\SenroFlux\Run\Report::LOOKUP_KEYS} needs, resolved from
+	 * the SAME attachment data `read-media` returns — never taught to the
+	 * harness by name (wired through the composition root's `$post_lookup`,
+	 * Plugin.php, which strips {@see OBJECT_ID_PREFIX} before calling this).
 	 *
 	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
 	 */

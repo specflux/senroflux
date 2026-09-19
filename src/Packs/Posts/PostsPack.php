@@ -49,6 +49,7 @@ final class PostsPack extends Pack {
 				'alt-text'    => 'generate-alt-text',
 				'featured'    => 'set-featured-image',
 				'alt'         => 'update-alt',
+				'read-media'  => 'read-media',
 				'terms'       => 'set-terms',
 				'new-term'    => 'create-term',
 			)
@@ -104,6 +105,7 @@ final class PostsPack extends Pack {
 			'generate-alt-text'  => array( 'attachment_id' ),
 			'set-featured-image' => array( 'post_id', 'attachment_id' ),
 			'update-alt'         => array( 'attachment_id', 'alt' ),
+			'read-media'         => array( 'attachment_id' ),
 			'set-terms'          => array( 'post_id', 'taxonomy', 'term_ids' ),
 			'create-term'        => array( 'taxonomy', 'name' ),
 			default              => array(),
@@ -153,6 +155,7 @@ final class PostsPack extends Pack {
 			'generate-alt-text'  => 'posts/generate-alt-text',
 			'set-featured-image' => 'posts/set-featured-image',
 			'update-alt'         => 'posts/update-alt',
+			'read-media'         => 'posts/read-media',
 			'set-terms'          => 'posts/set-terms',
 			'create-term'        => 'posts/create-term',
 			default              => $ability,
@@ -196,6 +199,7 @@ final class PostsPack extends Pack {
 			'posts/media-search'       => 0,
 			'posts/list-missing-alt'   => 0,
 			'posts/generate-alt-text'  => 0,
+			'posts/read-media'         => 0,
 			'posts/create-draft'       => 1,
 			'posts/update-draft'       => 1,
 			'posts/set-terms'          => 1,
@@ -237,38 +241,39 @@ final class PostsPack extends Pack {
 			'alt-text'    => array( 'posts/generate-alt-text' ),
 			'featured'    => array( 'posts/set-featured-image' ),
 			'alt'         => array( 'posts/update-alt' ),
+			'read-media'  => array( 'posts/read-media' ),
 			'terms'       => array( 'posts/set-terms' ),
 			'new-term'    => array( 'posts/create-term' ),
 		);
 	}
 
 	/**
-	 * S12 (defect fix): `update-alt`'s output carries the attachment id as
-	 * `attachment_id`, never `id` — the base's default would silently track
-	 * nothing for it.
+	 * S12 (defect fix): `update-alt`'s output and `read-media`'s input both
+	 * carry the attachment id as `attachment_id`, never `id` — the base's
+	 * default would silently track/verify nothing for either.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdKey( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt' => 'attachment_id',
+			'posts/update-alt', 'posts/read-media' => 'attachment_id',
 			default => parent::objectIdKey( $verb ),
 		};
 	}
 
 	/**
 	 * S12 (defect fix): an attachment and a post can share the same numeric
-	 * id, so `update-alt`'s write qualifies it with
-	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it — the
-	 * same prefix {@see Media::attachmentLookup()} expects, stripped back
-	 * off by the composition root's report lookup (Plugin.php). Every other
-	 * verb here keeps a bare id (posts never collide with themselves).
+	 * id, so the two verbs above qualify it with {@see Media::OBJECT_ID_PREFIX}
+	 * before the harness ever sees it — the same prefix
+	 * {@see Media::attachmentLookup()} expects, stripped back off by the
+	 * composition root's report lookup (Plugin.php). Every other verb here
+	 * keeps a bare id (posts never collide with themselves).
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdPrefix( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt' => Media::OBJECT_ID_PREFIX,
+			'posts/update-alt', 'posts/read-media' => Media::OBJECT_ID_PREFIX,
 			default => parent::objectIdPrefix( $verb ),
 		};
 	}
@@ -354,7 +359,7 @@ final class PostsPack extends Pack {
 				'Never write a block whose name starts with senroflux/. A closing call to action is a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button. A pull quote is a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.',
 				'Every core/image MUST carry non-empty, descriptive alt text in its attributes; an image with no alt text is refused.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				'When you propose a plan, spell each step\'s verbs exactly as one of: posts/read, posts/list-patterns, posts/preview, posts/media-search, posts/list-missing-alt, posts/create-draft, posts/update-draft, posts/set-terms, posts/create-term, posts/media-upload, posts/media-generate, posts/generate-alt-text, posts/set-featured-image, posts/update-alt, posts/update-live, posts/publish, posts/schedule. Any other word is refused as unknown_verb.',
+				'When you propose a plan, spell each step\'s verbs exactly as one of: posts/read, posts/list-patterns, posts/preview, posts/media-search, posts/list-missing-alt, posts/create-draft, posts/update-draft, posts/set-terms, posts/create-term, posts/media-upload, posts/media-generate, posts/generate-alt-text, posts/set-featured-image, posts/update-alt, posts/read-media, posts/update-live, posts/publish, posts/schedule. Any other word is refused as unknown_verb.',
 			)
 		);
 	}
@@ -379,8 +384,10 @@ final class PostsPack extends Pack {
 	}
 
 	/**
-	 * The `posts/media-rules` body (S5): search before generating, alt text
-	 * is mandatory, generation costs real money.
+	 * The `posts/media-rules` body (S5, extended by the defect fix): search
+	 * before generating, alt text is mandatory, generation costs real money,
+	 * and — since nothing else re-reads an attachment for you — re-read it
+	 * with `read-media` after changing it.
 	 */
 	private function mediaRulesBody(): string {
 		return implode(
@@ -389,6 +396,7 @@ final class PostsPack extends Pack {
 				'Before generating a new image, search the existing media library; only generate one when nothing suitable already exists.',
 				'Every image needs non-empty, descriptive alt text — write it yourself with generate-alt-text or your own words, then save it with update-alt.',
 				'Generating an image costs real money and a limited run budget; do not generate more than the goal actually needs.',
+				'After update-alt, media-upload or generate-image, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
 			)
 		);
 	}
