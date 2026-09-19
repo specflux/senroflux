@@ -51,8 +51,14 @@ defined( 'ABSPATH' ) || exit;
  * The seven-page vocabulary. Implements the S4 {@see ContentVocabulary} seam
  * so `Packs\Content\Abilities` can answer `list-patterns` without knowing any
  * pack's concrete pattern set.
+ *
+ * NOT final (0.3 S7): the site pack's {@see \Specflux\SenroFlux\Packs\Site\Vocabulary}
+ * extends this to add its two homepage-only patterns on top of the same
+ * seven, rather than re-authoring them. `all()`/`listPayload()`/`register()`
+ * all dispatch through `$this->all()`, so the extension needs no other
+ * override.
  */
-final class Vocabulary implements ContentVocabulary {
+class Vocabulary implements ContentVocabulary {
 
 	/**
 	 * The pattern category registered with the block editor.

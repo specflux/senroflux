@@ -64,8 +64,17 @@ defined( 'ABSPATH' ) || exit;
  * Validates and cleans pages-pack block markup. Implements the S4
  * {@see ContentValidator} seam so `Packs\Content\Abilities` can validate a
  * write without knowing any pack's concrete vocabulary.
+ *
+ * NOT final (0.3 S7): {@see \Specflux\SenroFlux\Packs\Site\Validator} extends
+ * this to validate the two extra homepage-only patterns on top of the same
+ * seven-pattern shape rules, rather than re-authoring ~1000 lines of generic
+ * block-shape/markup-safety checking. `countSlots()`, `columns()` and
+ * `checkPageShape()` are `protected` for exactly that seam; every other
+ * method stays `private` because the site pack's two new patterns need
+ * nothing else overridden (`matchPatternSchema()`/`BlockShells` already
+ * dispatch through `$this->vocabulary->all()`, generically).
  */
-final class Validator implements ContentValidator {
+class Validator implements ContentValidator {
 
 	/**
 	 * The ONLY HTML tags the seven patterns can legitimately contain, each
@@ -1006,7 +1015,7 @@ final class Validator implements ContentValidator {
 	 * @param array<string,mixed> $block One parsed block.
 	 * @return array<string, list<int>>
 	 */
-	private function countSlots( string $slug, array $block ): array {
+	protected function countSlots( string $slug, array $block ): array {
 		$children = $block['innerBlocks'] ?? array();
 		/** @var list<array<string,mixed>> $children */
 
@@ -1055,7 +1064,7 @@ final class Validator implements ContentValidator {
 	 * @param list<array<string,mixed>> $children Parsed child blocks.
 	 * @return list<array<string,mixed>>
 	 */
-	private function columns( array $children ): array {
+	protected function columns( array $children ): array {
 		$columns = $this->firstByBlockName( $children, 'core/columns' );
 		if ( null === $columns ) {
 			return array();
@@ -1142,7 +1151,7 @@ final class Validator implements ContentValidator {
 	 *
 	 * @param array<int,string> $identities parse offset => slug, in page order.
 	 */
-	private function checkPageShape( array $identities ): ?WP_Error {
+	protected function checkPageShape( array $identities ): ?WP_Error {
 		$slugs = array_values( $identities );
 		$count = count( $slugs );
 
