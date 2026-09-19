@@ -200,6 +200,31 @@ if ( ! function_exists( 'wp_safe_redirect' ) ) {
 	}
 }
 
+if ( ! function_exists( 'is_multisite' ) ) {
+	/** Toggle shim: tests set $GLOBALS['senroflux_test_multisite']. */
+	function is_multisite(): bool {
+		return ! empty( $GLOBALS['senroflux_test_multisite'] );
+	}
+}
+
+if ( ! function_exists( 'plugin_basename' ) ) {
+	/** Identity-ish shim: strips nothing, tests don't depend on the shape. */
+	function plugin_basename( string $file ): string {
+		return basename( dirname( $file ) ) . '/' . basename( $file );
+	}
+}
+
+if ( ! function_exists( 'deactivate_plugins' ) ) {
+	$GLOBALS['senroflux_test_deactivated_plugins'] = array();
+
+	/** Recording shim: $GLOBALS['senroflux_test_deactivated_plugins'][]. */
+	function deactivate_plugins( $plugins ): void {
+		foreach ( (array) $plugins as $plugin ) {
+			$GLOBALS['senroflux_test_deactivated_plugins'][] = $plugin;
+		}
+	}
+}
+
 if ( ! function_exists( 'wp_die' ) ) {
 	/** Throwing shim so tests can observe a death. */
 	function wp_die( string $message ): void {

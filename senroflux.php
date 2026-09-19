@@ -25,6 +25,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux;
 
+use Specflux\SenroFlux\MultisiteGuard;
 use Specflux\SenroFlux\Plugin;
 
 // Bail on direct access (must precede any other runtime code so static
@@ -48,6 +49,15 @@ register_activation_hook( __FILE__, __NAMESPACE__ . '\senroflux_activate' );
  * @return void
  */
 function senroflux_activate(): void {
+	// Multisite is refused (0.3 S2). Checked inline as well as through the
+	// guard class so a broken autoloader cannot let activation through.
+	if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+		if ( class_exists( MultisiteGuard::class ) ) {
+			MultisiteGuard::refuse_activation( __FILE__ );
+		}
+		wp_die( esc_html__( 'SenroFlux does not support WordPress multisite. It was not activated.', 'senroflux' ) );
+	}
+
 	if ( ! class_exists( Schema::class ) || ! function_exists( 'dbDelta' ) ) {
 		return;
 	}
@@ -92,7 +102,7 @@ require_once __DIR__ . '/src/api.php';
 add_action(
 	'plugins_loaded',
 	static function (): void {
-		if ( class_exists( Plugin::class ) ) {
+		if ( class_exists( Plugin::class ) && ! MultisiteGuard::refused() ) {
 			Plugin::instance()->govern();
 		}
 	},
@@ -118,6 +128,12 @@ add_action(
 					);
 				}
 			);
+
+			return;
+		}
+
+		if ( MultisiteGuard::refused() ) {
+			MultisiteGuard::refuse_runtime( __FILE__ );
 
 			return;
 		}
