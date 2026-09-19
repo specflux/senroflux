@@ -491,7 +491,9 @@ final class PackRegistryTest extends TestCase {
 		$map = $this->applyAgentSafetyFilter( 'agent_safety_verb_map', array() );
 		$this->assertSame( 0, $map['senroflux/read-content'] ?? null );
 		$this->assertSame( 1, $map['senroflux/create-post'] ?? null );
-		// update-post can publish, so Agent Safety must see it as irreversible.
-		$this->assertSame( 2, $map['senroflux/update-post'] ?? null );
+		// 0.3 S4: update-post is draft-state edits only now (Tier 1); the
+		// publish transition moved to its own ability, publish-post (Tier 2).
+		$this->assertSame( 1, $map['senroflux/update-post'] ?? null );
+		$this->assertSame( 2, $map['senroflux/publish-post'] ?? null );
 	}
 }

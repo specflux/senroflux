@@ -44,6 +44,7 @@ final class PagesPack extends Pack {
 				'read'     => 'read-content',
 				'create'   => 'create-post',
 				'update'   => 'update-post',
+				'publish'  => 'publish-post',
 				'preview'  => 'get-preview-url',
 				'patterns' => 'list-patterns',
 			)
@@ -89,6 +90,7 @@ final class PagesPack extends Pack {
 			'read-content'    => array( 'id', 'post_type', 'slug', 'status', 'author', 'parent', 'fields' ),
 			'create-post'     => array( 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
 			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
+			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
 			'get-preview-url' => array( 'id' ),
 			'list-patterns'   => array(),
 			default           => array(),
@@ -124,6 +126,10 @@ final class PagesPack extends Pack {
 	 * resolved to `senroflux/update-post` or a shape-compatible `core/update-post`
 	 * (S9: for a core-filled role the pack still names the verb).
 	 *
+	 * 0.3 S4: `update-post` is draft-state edits only, so it is always
+	 * `pages/update-draft` regardless of args — the publish/update-live split
+	 * that used to live on ONE ability now lives on `publish-post`.
+	 *
 	 * @param string              $ability The concrete ability id.
 	 * @param array<string,mixed> $input   Call input.
 	 */
@@ -133,7 +139,8 @@ final class PagesPack extends Pack {
 			'list-patterns'   => 'pages/list-patterns',
 			'get-preview-url' => 'pages/preview',
 			'create-post'     => 'pages/create-draft',
-			'update-post'     => $this->updateVerb( $input ),
+			'update-post'     => 'pages/update-draft',
+			'publish-post'    => $this->publishVerb( $input ),
 			// S9: an ability this pack does not name keeps the ability id as
 			// its verb, which no entry of verbMap() answers — the fence then
 			// fails closed on it.
@@ -142,30 +149,22 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The update-post predicate (S10): a transition to publish is
-	 * `pages/publish` (tier 2); a publish target with the status unchanged is
-	 * `pages/update-live` (tier 2); a draft|pending target (or no status at
-	 * all) is `pages/update-draft` (tier 1).
+	 * The publish-post predicate (0.3 S4): a transition to publish or future is
+	 * `pages/publish` (tier 2); any other call reaching this ability — editing
+	 * an already-public target, or re-asserting its current public status — is
+	 * `pages/update-live` (tier 2).
 	 *
 	 * @param array<string,mixed> $input Call input.
 	 */
-	private function updateVerb( array $input ): string {
+	private function publishVerb( array $input ): string {
 		$desired = $input['status'] ?? null;
-		if ( ! is_string( $desired ) || '' === $desired ) {
-			return 'pages/update-draft';
-		}
-
 		$current = $this->currentStatus( $input );
 
-		if ( 'publish' === $desired && $desired !== $current ) {
-			return 'pages/publish';
-		}
+		$transitioning = is_string( $desired )
+			&& in_array( $desired, array( 'publish', 'future' ), true )
+			&& $desired !== $current;
 
-		if ( 'publish' === $desired ) {
-			return 'pages/update-live';
-		}
-
-		return 'pages/update-draft';
+		return $transitioning ? 'pages/publish' : 'pages/update-live';
 	}
 
 	/**
@@ -187,10 +186,13 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The S10 role => pack-verb split. `update` is the one role that spans more
-	 * than one verb, which is exactly what {@see Pack::agentSafetyVerbMap()}
-	 * collapses (upwards) into the single tier Agent Safety can carry for
-	 * `senroflux/update-post`.
+	 * The S10 role => pack-verb split. 0.3 S4: `update` and `publish` are now
+	 * SEPARATE roles/abilities, each spanning the verbs its own ability can
+	 * produce — `update` (Tier 1, `update-post`) never spans a Tier-2 verb any
+	 * more, which is exactly what keeps {@see Pack::agentSafetyVerbMap()} from
+	 * collapsing a draft edit up to Tier 2 (0.2's bug: one ability spanning
+	 * both draft and publish verbs forced every draft edit to Agent Safety's
+	 * irreversible classification).
 	 *
 	 * @return array<string,list<string>>
 	 */
@@ -199,7 +201,8 @@ final class PagesPack extends Pack {
 		return array(
 			'read'     => array( 'pages/read' ),
 			'create'   => array( 'pages/create-draft' ),
-			'update'   => array( 'pages/update-draft', 'pages/update-live', 'pages/publish' ),
+			'update'   => array( 'pages/update-draft' ),
+			'publish'  => array( 'pages/update-live', 'pages/publish' ),
 			'preview'  => array( 'pages/preview' ),
 			'patterns' => array( 'pages/list-patterns' ),
 		);

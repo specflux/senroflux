@@ -54,15 +54,18 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
 use WP_Error;
 
 // Bail on direct access.
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Validates and cleans pages-pack block markup.
+ * Validates and cleans pages-pack block markup. Implements the S4
+ * {@see ContentValidator} seam so `Packs\Content\Abilities` can validate a
+ * write without knowing any pack's concrete vocabulary.
  */
-final class Validator {
+final class Validator implements ContentValidator {
 
 	/**
 	 * The ONLY HTML tags the seven patterns can legitimately contain, each

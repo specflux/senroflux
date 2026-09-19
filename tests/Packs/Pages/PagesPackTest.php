@@ -51,6 +51,7 @@ final class PagesPackTest extends TestCase {
 				'read'     => 'read-content',
 				'create'   => 'create-post',
 				'update'   => 'update-post',
+				'publish'  => 'publish-post',
 				'preview'  => 'get-preview-url',
 				'patterns' => 'list-patterns',
 			),
@@ -81,17 +82,9 @@ final class PagesPackTest extends TestCase {
 		$this->assertSame( 'pages/preview', $pack->verbFor( 'senroflux/get-preview-url', array( 'id' => 1 ) ) );
 		$this->assertSame( 'pages/create-draft', $pack->verbFor( 'senroflux/create-post', array( 'status' => 'draft' ) ) );
 
-		// No current status (no post id) → a publish request is a transition.
-		$this->assertSame(
-			'pages/publish',
-			$pack->verbFor(
-				'senroflux/update-post',
-				array(
-					'id'     => 1,
-					'status' => 'publish',
-				)
-			)
-		);
+		// 0.3 S4: update-post is draft-state edits only, so it is ALWAYS
+		// pages/update-draft regardless of args — the split moved every
+		// publish-adjacent verb onto publish-post.
 		$this->assertSame(
 			'pages/update-draft',
 			$pack->verbFor(
@@ -99,6 +92,18 @@ final class PagesPackTest extends TestCase {
 				array(
 					'id'     => 1,
 					'status' => 'draft',
+				)
+			)
+		);
+
+		// No current status (no post id) → a publish request is a transition.
+		$this->assertSame(
+			'pages/publish',
+			$pack->verbFor(
+				'senroflux/publish-post',
+				array(
+					'id'     => 1,
+					'status' => 'publish',
 				)
 			)
 		);
@@ -119,12 +124,31 @@ final class PagesPackTest extends TestCase {
 		$this->assertSame(
 			'pages/update-live',
 			$pack->verbFor(
-				'senroflux/update-post',
+				'senroflux/publish-post',
 				array(
 					'id'     => 9,
 					'status' => 'publish',
 				)
 			)
+		);
+	}
+
+	/** Editing an already-public post through publish-post with NO status change is also update-live. */
+	public function test_verb_for_publish_post_editing_a_public_post_with_no_status_is_update_live(): void {
+		$post                                = new \stdClass();
+		$post->ID                            = 10;
+		$post->post_type                     = 'page';
+		$post->post_title                    = 'Live';
+		$post->post_status                   = 'publish';
+		$post->post_name                     = '';
+		$post->post_parent                   = 0;
+		$post->post_excerpt                  = '';
+		$GLOBALS['senroflux_test_posts'][10] = $post;
+
+		$pack = new PagesPack();
+		$this->assertSame(
+			'pages/update-live',
+			$pack->verbFor( 'senroflux/publish-post', array( 'id' => 10 ) )
 		);
 	}
 
@@ -212,8 +236,8 @@ final class PagesPackTest extends TestCase {
 	public function test_gate_verb_maps_a_pack_verb_onto_its_resolved_ability(): void {
 		$pack = new PagesPack();
 
-		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/publish' ) );
-		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/update-live' ) );
+		$this->assertSame( 'senroflux/publish-post', $pack->gateVerbFor( 'pages/publish' ) );
+		$this->assertSame( 'senroflux/publish-post', $pack->gateVerbFor( 'pages/update-live' ) );
 		$this->assertSame( 'senroflux/update-post', $pack->gateVerbFor( 'pages/update-draft' ) );
 		$this->assertSame( 'senroflux/create-post', $pack->gateVerbFor( 'pages/create-draft' ) );
 		$this->assertSame( 'senroflux/read-content', $pack->gateVerbFor( 'pages/read' ) );
@@ -227,15 +251,17 @@ final class PagesPackTest extends TestCase {
 	/**
 	 * The Agent Safety verb map is keyed on ABILITY IDS, because that is what
 	 * the gate seam passes to the pipeline as the verb — never on `pages/*`.
-	 * update-post collapses UP to tier 2: it can publish, and Agent Safety
-	 * carries one tier per verb.
+	 * 0.3 S4: `update-post` and `publish-post` are now separate abilities, each
+	 * spanning only the verbs its own role can produce, so a draft edit no
+	 * longer collapses up to Tier 2 (0.2's bug).
 	 */
 	public function test_agent_safety_verb_map_is_ability_ids_at_the_highest_reachable_tier(): void {
 		$this->assertSame(
 			array(
 				'senroflux/read-content'    => 0,
 				'senroflux/create-post'     => 1,
-				'senroflux/update-post'     => 2,
+				'senroflux/update-post'     => 1,
+				'senroflux/publish-post'    => 2,
 				'senroflux/get-preview-url' => 0,
 				'senroflux/list-patterns'   => 0,
 			),

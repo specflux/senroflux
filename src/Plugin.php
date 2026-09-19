@@ -194,8 +194,19 @@ final class Plugin {
 			},
 			5
 		);
-		\Specflux\SenroFlux\Packs\Pages\Abilities::boot();
+		\Specflux\SenroFlux\Packs\Content\Abilities::boot();
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::boot();
+		// 0.3 S4: the pages pack's vocabulary/validator plug into the shared
+		// content registrar under its own slug — `list-patterns` and the write
+		// abilities resolve THIS pair only while a 'pages' run is ticking (see
+		// the useRunPack()/forgetRunPack() scoping in tick() below).
+		$pages_vocabulary = new \Specflux\SenroFlux\Packs\Pages\Vocabulary();
+		\Specflux\SenroFlux\Packs\Content\Abilities::registerSource(
+			'pages',
+			new \Specflux\SenroFlux\Packs\Pages\Validator( $pages_vocabulary ),
+			$pages_vocabulary,
+			'edit_pages'
+		);
 		// S14: object binding for pre-approval grants. Registered
 		// unconditionally and answering FALSE until a tick opens a run context
 		// — a missing hook would mean "no grant applies", never "every grant
@@ -444,11 +455,15 @@ final class Plugin {
 		}
 
 		\Specflux\SenroFlux\Packs\Pages\PublishSummary::useRunContext( null !== $run ? $run->goal : null );
+		// 0.3 S4: vocabulary-bearing content abilities resolve THIS run's pack
+		// for the scope of one tick — never a model-supplied `pack` argument.
+		\Specflux\SenroFlux\Packs\Content\Abilities::useRunPack( null !== $run ? $run->pack : null );
 
 		try {
 			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
 		} finally {
 			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
 		}
 	}
 
@@ -675,8 +690,8 @@ final class Plugin {
 				return null !== $pack ? $pack->verbMap() : null;
 			},
 			// S7/S10: the fence tiers a call by its PACK VERB, not by the
-			// ability that carries it — `senroflux/update-post` is
-			// `pages/update-draft` or `pages/publish` depending on the args,
+			// ability that carries it — `senroflux/publish-post` is
+			// `pages/update-live` or `pages/publish` depending on the args,
 			// and only the pack can tell them apart. A direct-allow run has no
 			// pack, so its verb stays the ability id (S9).
 			static function ( \Specflux\SenroFlux\Run\Run $run, string $ability, array $args ): string {

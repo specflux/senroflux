@@ -282,3 +282,69 @@ if ( ! function_exists( 'get_userdata' ) ) {
 		return $GLOBALS['senroflux_test_users'][ $id ] ?? false;
 	}
 }
+
+// --- WP_Query shim (0.3 S4: read-content list mode + slug-collision) -------
+
+if ( ! class_exists( 'WP_Query', false ) ) {
+	/**
+	 * Minimal in-memory stand-in over `$GLOBALS['senroflux_test_posts']`.
+	 * Supports exactly the args this codebase's own queries use: post_type,
+	 * post_status (array or string), author, post_parent, post__in, paged and
+	 * posts_per_page (-1 = all). Not a general WP_Query re-implementation.
+	 */
+	class WP_Query {
+
+		/** @var list<object> */
+		public array $posts = array();
+
+		public int $found_posts = 0;
+
+		public int $max_num_pages = 1;
+
+		/**
+		 * @param array<string,mixed> $args Query args.
+		 */
+		public function __construct( array $args = array() ) {
+			$post_type = (string) ( $args['post_type'] ?? 'post' );
+			$statuses  = $args['post_status'] ?? array( 'publish' );
+			$statuses  = is_array( $statuses ) ? $statuses : array( $statuses );
+
+			$matches = array();
+			foreach ( (array) ( $GLOBALS['senroflux_test_posts'] ?? array() ) as $post ) {
+				if ( ! is_object( $post ) ) {
+					continue;
+				}
+				if ( (string) ( $post->post_type ?? '' ) !== $post_type ) {
+					continue;
+				}
+				if ( ! in_array( (string) ( $post->post_status ?? '' ), $statuses, true ) ) {
+					continue;
+				}
+				if ( isset( $args['author'] ) && (int) ( $post->post_author ?? 0 ) !== (int) $args['author'] ) {
+					continue;
+				}
+				if ( isset( $args['post_parent'] ) && (int) ( $post->post_parent ?? 0 ) !== (int) $args['post_parent'] ) {
+					continue;
+				}
+				if ( isset( $args['post__in'] ) && is_array( $args['post__in'] )
+					&& ! in_array( (int) ( $post->ID ?? 0 ), array_map( 'intval', $args['post__in'] ), true )
+				) {
+					continue;
+				}
+
+				$matches[] = $post;
+			}
+
+			$per_page          = (int) ( $args['posts_per_page'] ?? -1 );
+			$this->found_posts = count( $matches );
+
+			if ( $per_page > 0 ) {
+				$this->max_num_pages = (int) ceil( $this->found_posts / $per_page );
+				$page                = max( 1, (int) ( $args['paged'] ?? 1 ) );
+				$matches             = array_slice( $matches, ( $page - 1 ) * $per_page, $per_page );
+			}
+
+			$this->posts = array_values( $matches );
+		}
+	}
+}

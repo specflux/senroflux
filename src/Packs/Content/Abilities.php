@@ -1,28 +1,53 @@
 <?php
 /**
- * Registers the five pages-pack polyfill abilities (S10) on the Abilities API.
+ * The shared content registrar (0.3 S4): registers the six content-pack
+ * abilities on the Abilities API, and owns the permission predicates + post
+ * shaping every content pack shares.
  *
- * TARGET REPO PATH: src/Packs/Pages/Abilities.php
+ * TARGET REPO PATH: src/Packs/Content/Abilities.php
  *
- * Categories are registered on `wp_abilities_api_categories_init` (the API
- * requires the category to exist BEFORE an ability references it — registry
- * returns null otherwise), then the five abilities on `wp_abilities_api_init`.
- * Both are guarded with `function_exists` so a bare-PHPUnit run (or a site
- * without the Abilities API) is a clean no-op.
+ * Moved out of `Packs\Pages\Abilities` (0.2/0.3-stage-2): the pages pack now
+ * keeps only its OWN concerns (Vocabulary, Validator, PublishSummary,
+ * PagesPack); this class is pack-agnostic and every content pack (pages
+ * today, posts and site later) registers a {@see Vocabulary}/{@see Validator}
+ * pair here under its own slug.
  *
- * All WRITE abilities (`create-post`, `update-post`) route their `content`
- * through {@see Validator::clean()} BEFORE `wp_insert_post`/`wp_update_post`:
- * a validation failure returns the WP_Error whole-write — nothing is persisted.
- * `Validator` also owns the tag/attribute allow-list: these runs execute as an
- * administrator, who holds `unfiltered_html`, so WordPress installs no kses of
- * its own on this path.
+ * 0.3 S4 CHANGES SHIPPED 0.2 BEHAVIOUR:
+ *   - `senroflux/update-post` is now DRAFT-STATE EDITS ONLY (Tier 1). It
+ *     refuses a target post that is already public (publish/future/private)
+ *     and refuses a requested transition to publish/future.
+ *   - NEW `senroflux/publish-post` carries every publish/future transition
+ *     AND any edit to an already-public post (Tier 2).
+ *   - `senroflux/create-post` refuses `publish`/`future` outright (already
+ *     true in 0.2 by construction: `status_not_allowed` fires for anything
+ *     but `draft`).
+ *   - NEW slug-collision refusal on `create-post`: `slug_collision` (409)
+ *     when a non-trashed object of the same post type already holds the
+ *     requested slug, or matches the title case-insensitively.
+ *     `wp_unique_post_slug()` skips drafts, so 0.2's pages pack could create
+ *     a second page at the same slug silently; this closes that gap for
+ *     every content pack.
  *
- * CAPABILITIES. Every gate is applied in BOTH the `permission_callback` and the
- * execute callback — execute is reachable on its own, and a write must never
- * assume an earlier gate ran. The primitive `edit_posts` / `edit_pages` check is
- * not sufficient on its own:
+ * VOCABULARY BY PACK, NEVER BY ARGUMENT (S4 point 4). `list-patterns` and the
+ * write abilities' content validation resolve the RUNNING pack's
+ * {@see Vocabulary}/{@see Validator} through {@see useRunPack()}, which the
+ * composition root sets from `Run::$pack` for the scope of one tick — never
+ * from the model. A model-supplied `pack` argument is refused outright
+ * (`pack_arg_refused`), and a call with no resolvable pack context fails
+ * closed (`pack_unresolved`) rather than falling back to any one pack's
+ * rules.
+ *
+ * S8 SEAM (stage 4, not yet implemented): {@see executeUpdateLike()} marks
+ * the single place the stale-write compare will run for every write ability
+ * here.
+ *
+ * CAPABILITIES. Every gate is applied in BOTH the `permission_callback` and
+ * the execute callback — execute is reachable on its own, and a write must
+ * never assume an earlier gate ran. The primitive `edit_posts` / `edit_pages`
+ * check is not sufficient on its own:
  *   - create → the post type's `create_posts` capability;
- *   - update → the PER-POST `edit_post` capability for the target id;
+ *   - a draft-state update → the PER-POST `edit_post` capability for the
+ *     target id;
  *   - a publish transition → additionally the type's `publish_posts` /
  *     `publish_pages`;
  *   - read by id or slug → the PER-POST `read_post` capability, and the post
@@ -36,7 +61,7 @@
 
 declare ( strict_types = 1 );
 
-namespace Specflux\SenroFlux\Packs\Pages;
+namespace Specflux\SenroFlux\Packs\Content;
 
 use WP_Error;
 use WP_Post;
@@ -45,14 +70,14 @@ use WP_Post;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Registers the five abilities for the pages pack.
+ * Registers the shared content abilities and their permission predicates.
  */
 final class Abilities {
 
 	/**
-	 * The ability category for all five polyfills.
+	 * The ability category for the content abilities.
 	 */
-	public const CATEGORY = 'senroflux-pages-content';
+	public const CATEGORY = 'senroflux-content';
 
 	/**
 	 * The post types these abilities will touch at all (S10 allow-list). Every
@@ -62,6 +87,46 @@ final class Abilities {
 	 * @var list<string>
 	 */
 	private const POST_TYPES = array( 'page', 'post' );
+
+	/**
+	 * Statuses a non-trashed object may hold and still collide on slug/title
+	 * (S4 slug collision). Trash is deliberately absent.
+	 *
+	 * @var list<string>
+	 */
+	private const COLLISION_STATUSES = array( 'publish', 'draft', 'pending', 'private', 'future' );
+
+	/**
+	 * Statuses that make a post's CURRENT state "already public" (S4): a
+	 * draft-state update must refuse these; a publish-post call is routed to
+	 * them.
+	 *
+	 * @var list<string>
+	 */
+	private const PUBLIC_STATUSES = array( 'publish', 'future', 'private' );
+
+	/**
+	 * Statuses `update-post` (Tier 1) may be asked to move a post TO.
+	 *
+	 * @var list<string>
+	 */
+	private const DRAFT_STATUSES = array( 'draft', 'pending' );
+
+	/**
+	 * Statuses `publish-post` (Tier 2) may be asked to move a post TO, on top
+	 * of every draft-state status (S4: "any edit to an already-public post",
+	 * including moving it back to draft or pending).
+	 *
+	 * @var list<string>
+	 */
+	private const PUBLISH_STATUSES = array( 'draft', 'pending', 'publish', 'future' );
+
+	/**
+	 * Statuses that count as "requesting a publish/future transition".
+	 *
+	 * @var list<string>
+	 */
+	private const TRANSITION_STATUSES = array( 'publish', 'future' );
 
 	/**
 	 * The default `fields` list for read-content (content_rendered is OFF).
@@ -90,8 +155,24 @@ final class Abilities {
 	private static bool $registered = false;
 
 	/**
+	 * Registered content-pack sources, keyed by pack slug.
+	 *
+	 * @var array<string, array{validator: Validator, vocabulary: Vocabulary, capability: string}>
+	 */
+	private static array $sources = array();
+
+	/**
+	 * The pack slug executing the current tick, or null outside one. Scoped
+	 * per tick (never per-request) by {@see useRunPack()} / {@see forgetRunPack()}
+	 * — the same discipline `PublishSummary::useRunContext()` uses, and for
+	 * the same reason: several ticks share one PHP process under PHPUnit,
+	 * WP-CLI and cron.
+	 */
+	private static ?string $current_pack = null;
+
+	/**
 	 * Wire the category + ability registration hooks (call once, from the
-	 * pack's own bootstrap).
+	 * composition root).
 	 */
 	public static function boot(): void {
 		if ( ! function_exists( 'add_action' ) ) {
@@ -111,6 +192,51 @@ final class Abilities {
 	}
 
 	/**
+	 * Test-only: forget every registered content-pack source.
+	 */
+	public static function resetSources(): void {
+		self::$sources      = array();
+		self::$current_pack = null;
+	}
+
+	/**
+	 * Register a content pack's vocabulary + validator under its slug. Safe to
+	 * call more than once — a later call for the same slug replaces the
+	 * earlier one.
+	 *
+	 * @param string     $pack_slug        The pack's `name()`.
+	 * @param Validator  $validator        The pack's write validator.
+	 * @param Vocabulary $vocabulary       The pack's pattern vocabulary.
+	 * @param string     $list_capability  The capability `list-patterns` requires for this pack.
+	 */
+	public static function registerSource( string $pack_slug, Validator $validator, Vocabulary $vocabulary, string $list_capability ): void {
+		self::$sources[ $pack_slug ] = array(
+			'validator'  => $validator,
+			'vocabulary' => $vocabulary,
+			'capability' => $list_capability,
+		);
+	}
+
+	/**
+	 * Enter the run context for one tick: which pack's vocabulary/validator
+	 * governs vocabulary-bearing calls. Set by the composition root from
+	 * `Run::$pack`, NEVER from the model (S4 point 4).
+	 *
+	 * @param string|null $pack_slug The running run's pack, or null (a
+	 *                                direct-allow run has none).
+	 */
+	public static function useRunPack( ?string $pack_slug ): void {
+		self::$current_pack = ( null !== $pack_slug && '' !== $pack_slug ) ? $pack_slug : null;
+	}
+
+	/**
+	 * Leave the run context (mirrors `PublishSummary::forgetRunContext()`).
+	 */
+	public static function forgetRunPack(): void {
+		self::$current_pack = null;
+	}
+
+	/**
 	 * Register the category (must run before `wp_abilities_api_init`, or the
 	 * abilities that reference it return null).
 	 */
@@ -122,14 +248,14 @@ final class Abilities {
 		wp_register_ability_category(
 			self::CATEGORY,
 			array(
-				'label'       => __( 'SenroFlux pages content', 'senroflux' ),
-				'description' => __( 'Content abilities for the SenroFlux pages pack.', 'senroflux' ),
+				'label'       => __( 'SenroFlux content', 'senroflux' ),
+				'description' => __( 'Content abilities shared by SenroFlux capability packs.', 'senroflux' ),
 			)
 		);
 	}
 
 	/**
-	 * Register the five abilities. Idempotent per request (the API rejects a
+	 * Register the six abilities. Idempotent per request (the API rejects a
 	 * duplicate name anyway, but we avoid the duplicate-registration noise).
 	 */
 	public static function register(): void {
@@ -142,14 +268,12 @@ final class Abilities {
 			return;
 		}
 
-		$vocabulary = new Vocabulary();
-		$validator  = new Validator( $vocabulary );
-
 		self::registerReadContent();
-		self::registerCreatePost( $validator );
-		self::registerUpdatePost( $validator );
+		self::registerCreatePost();
+		self::registerUpdatePost();
+		self::registerPublishPost();
 		self::registerGetPreviewUrl();
-		self::registerListPatterns( $vocabulary );
+		self::registerListPatterns();
 	}
 
 	/**
@@ -194,9 +318,10 @@ final class Abilities {
 	}
 
 	/**
-	 * senroflux/create-post — draft-only create; content validated before insert.
+	 * senroflux/create-post — draft-only create; content validated before
+	 * insert; slug/title collision refused (S4).
 	 */
-	private static function registerCreatePost( Validator $validator ): void {
+	private static function registerCreatePost(): void {
 		wp_register_ability(
 			'senroflux/create-post',
 			array(
@@ -205,8 +330,8 @@ final class Abilities {
 				'category'            => self::CATEGORY,
 				'input_schema'        => self::createPostSchema(),
 				'output_schema'       => self::createPostOutputSchema(),
-				'execute_callback'    => static function ( $input = array() ) use ( $validator ) {
-					return self::executeCreatePost( is_array( $input ) ? $input : array(), $validator );
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeCreatePost( is_array( $input ) ? $input : array() );
 				},
 				'permission_callback' => static function ( $input = array() ) {
 					return self::mayCreate( is_array( $input ) ? $input : array() );
@@ -229,23 +354,61 @@ final class Abilities {
 	}
 
 	/**
-	 * senroflux/update-post — id + same fields; status draft|pending|publish;
-	 * publish is a status transition on THIS ability.
+	 * senroflux/update-post — draft-state edits ONLY (Tier 1, 0.3 S4). Refuses
+	 * a target that is already public, or a requested transition to
+	 * publish/future — both point the caller at `publish-post` instead.
+	 *
+	 * NOT destructive: unlike 0.2's combined ability, this one can never
+	 * publish anything, so the `destructive` hint is dropped — carrying it
+	 * would elevate every Tier-1 draft edit to Agent Safety's irreversible
+	 * classification and park it for approval (the same SF-BUG-2 reasoning
+	 * `create-post` already documents).
 	 */
-	private static function registerUpdatePost( Validator $validator ): void {
+	private static function registerUpdatePost(): void {
 		wp_register_ability(
 			'senroflux/update-post',
 			array(
 				'label'               => __( 'Update post', 'senroflux' ),
-				'description'         => __( 'Update a page or post; publishing is a status transition.', 'senroflux' ),
+				'description'         => __( 'Update a draft-state page or post. Refuses an already-public target or a publish/future status; use publish-post for those.', 'senroflux' ),
 				'category'            => self::CATEGORY,
-				'input_schema'        => self::updatePostSchema(),
+				'input_schema'        => self::updatePostSchema( self::DRAFT_STATUSES ),
 				'output_schema'       => self::updatePostOutputSchema(),
-				'execute_callback'    => static function ( $input = array() ) use ( $validator ) {
-					return self::executeUpdatePost( is_array( $input ) ? $input : array(), $validator );
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeUpdateLike( is_array( $input ) ? $input : array(), false );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					return self::mayUpdate( is_array( $input ) ? $input : array() );
+					return self::mayUpdate( is_array( $input ) ? $input : array(), false );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => false,
+						'destructive' => false,
+						'idempotent'  => false,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * senroflux/publish-post — NEW (0.3 S4). Every transition to publish or
+	 * future, AND any edit to an already-public post (Tier 2, "any change
+	 * with public effect").
+	 */
+	private static function registerPublishPost(): void {
+		wp_register_ability(
+			'senroflux/publish-post',
+			array(
+				'label'               => __( 'Publish post', 'senroflux' ),
+				'description'         => __( 'Publish, schedule, or edit an already-public page or post.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => self::updatePostSchema( self::PUBLISH_STATUSES ),
+				'output_schema'       => self::updatePostOutputSchema(),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeUpdateLike( is_array( $input ) ? $input : array(), true );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					return self::mayUpdate( is_array( $input ) ? $input : array(), true );
 				},
 				'meta'                => self::meta(
 					array(
@@ -309,14 +472,15 @@ final class Abilities {
 	}
 
 	/**
-	 * senroflux/list-patterns — {} → {patterns: [...]} (S11).
+	 * senroflux/list-patterns — {} → {patterns: [...]}. Answers with the
+	 * RUNNING pack's vocabulary (S4 point 4) — never a model-supplied `pack`.
 	 */
-	private static function registerListPatterns( Vocabulary $vocabulary ): void {
+	private static function registerListPatterns(): void {
 		wp_register_ability(
 			'senroflux/list-patterns',
 			array(
 				'label'               => __( 'List patterns', 'senroflux' ),
-				'description'         => __( 'List the available page patterns and their copy constraints.', 'senroflux' ),
+				'description'         => __( 'List the available content patterns and their copy constraints for the running pack.', 'senroflux' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'                 => 'object',
@@ -352,10 +516,24 @@ final class Abilities {
 						),
 					),
 				),
-				'execute_callback'    => static function () use ( $vocabulary ) {
+				'execute_callback'    => static function ( $input = array() ) {
+					$input = is_array( $input ) ? $input : array();
+					if ( array_key_exists( 'pack', $input ) ) {
+						return self::packArgRefused();
+					}
+
+					$vocabulary = self::currentVocabulary();
+					if ( null === $vocabulary ) {
+						return self::packUnresolved();
+					}
+
 					return $vocabulary->listPayload();
 				},
-				'permission_callback' => static fn (): bool => current_user_can( 'edit_pages' ),
+				'permission_callback' => static function () {
+					$capability = self::currentListCapability();
+
+					return null !== $capability && current_user_can( $capability );
+				},
 				'meta'                => self::meta(
 					array(
 						'readonly'    => true,
@@ -552,11 +730,14 @@ final class Abilities {
 	}
 
 	/**
-	 * update-post input schema (id + same fields; status draft|pending|publish).
+	 * update-post / publish-post input schema (id + same fields); the
+	 * requested-status enum is the only thing that differs between the two
+	 * abilities.
 	 *
+	 * @param list<string> $status_enum Allowed requested statuses for this ability.
 	 * @return array<string,mixed>
 	 */
-	private static function updatePostSchema(): array {
+	private static function updatePostSchema( array $status_enum ): array {
 		return array(
 			'type'                 => 'object',
 			'required'             => array( 'id' ),
@@ -571,7 +752,7 @@ final class Abilities {
 				'content'   => array( 'type' => 'string' ),
 				'status'    => array(
 					'type' => 'string',
-					'enum' => array( 'draft', 'pending', 'publish' ),
+					'enum' => $status_enum,
 				),
 				'slug'      => array( 'type' => 'string' ),
 				'parent'    => array( 'type' => 'integer' ),
@@ -581,7 +762,7 @@ final class Abilities {
 	}
 
 	/**
-	 * update-post output schema.
+	 * update-post / publish-post output schema.
 	 *
 	 * @return array<string,mixed>
 	 */
@@ -651,16 +832,41 @@ final class Abilities {
 	}
 
 	/**
-	 * The single refusal for every capability failure. Deliberately one code and
-	 * one message: which capability was missing is a detail the model cannot act
-	 * on, and spelling it out narrates the site's permission map to a caller
-	 * that just failed a permission check.
+	 * The single refusal for every capability/routing failure. Deliberately
+	 * one code and one message: which capability was missing — or whether the
+	 * call should have gone to the other ability — is a detail the model
+	 * cannot act on beyond retrying with the right one, and spelling it out
+	 * narrates the site's permission map to a caller that just failed a check.
 	 */
 	private static function forbidden(): WP_Error {
 		return new WP_Error(
 			'forbidden',
 			__( 'You are not allowed to do that.', 'senroflux' ),
 			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * The refusal for a model-supplied `pack` argument (S4 point 4): the pack
+	 * is the harness's business, never the model's.
+	 */
+	private static function packArgRefused(): WP_Error {
+		return new WP_Error(
+			'pack_arg_refused',
+			__( 'The pack is determined by the run, not by the call.', 'senroflux' ),
+			array( 'status' => 400 )
+		);
+	}
+
+	/**
+	 * The fail-closed refusal when a vocabulary-bearing call has no resolved
+	 * pack context (S4 point 4) — never a silent fallback to any one pack.
+	 */
+	private static function packUnresolved(): WP_Error {
+		return new WP_Error(
+			'pack_unresolved',
+			__( 'This call is not running inside a pack that provides content rules.', 'senroflux' ),
+			array( 'status' => 400 )
 		);
 	}
 
@@ -672,7 +878,46 @@ final class Abilities {
 	}
 
 	/**
-	 * The create/update capability gate, shared by `permission_callback` and the
+	 * The running tick's Validator, or null when no pack is resolved (S4 point 4).
+	 */
+	private static function currentValidator(): ?Validator {
+		$source = self::currentSource();
+
+		return null !== $source ? $source['validator'] : null;
+	}
+
+	/**
+	 * The running tick's Vocabulary, or null when no pack is resolved (S4 point 4).
+	 */
+	private static function currentVocabulary(): ?Vocabulary {
+		$source = self::currentSource();
+
+		return null !== $source ? $source['vocabulary'] : null;
+	}
+
+	/**
+	 * The capability `list-patterns` requires for the running pack, or null
+	 * when no pack is resolved.
+	 */
+	private static function currentListCapability(): ?string {
+		$source = self::currentSource();
+
+		return null !== $source ? $source['capability'] : null;
+	}
+
+	/**
+	 * @return array{validator: Validator, vocabulary: Vocabulary, capability: string}|null
+	 */
+	private static function currentSource(): ?array {
+		if ( null === self::$current_pack ) {
+			return null;
+		}
+
+		return self::$sources[ self::$current_pack ] ?? null;
+	}
+
+	/**
+	 * The create capability gate, shared by `permission_callback` and the
 	 * execute callback so a caller that reaches execute by another route (a
 	 * direct `Ability::execute()`, a future transport) is checked too.
 	 *
@@ -685,12 +930,36 @@ final class Abilities {
 	}
 
 	/**
-	 * The update gate: the PER-POST `edit_post` capability, plus the post type's
-	 * publish capability when the call is a publish transition.
-	 *
-	 * @param array<string,mixed> $input Call input.
+	 * Whether a post's CURRENT status counts as "already public" (S4).
 	 */
-	private static function mayUpdate( array $input ): bool {
+	private static function isPublicStatus( string $status ): bool {
+		return in_array( $status, self::PUBLIC_STATUSES, true );
+	}
+
+	/**
+	 * Whether a REQUESTED status counts as "a publish/future transition" (S4).
+	 */
+	private static function isTransitionStatus( mixed $status ): bool {
+		return is_string( $status ) && in_array( $status, self::TRANSITION_STATUSES, true );
+	}
+
+	/**
+	 * The shared update/publish routing + capability gate (S4).
+	 *
+	 * `$publish_tier` false (update-post, Tier 1): refuses when the target is
+	 * already public, or the call requests a publish/future transition — both
+	 * belong to `publish-post`.
+	 *
+	 * `$publish_tier` true (publish-post, Tier 2): only reachable when the
+	 * call is genuinely a Tier-2 change — the target is already public, or the
+	 * call requests a publish/future transition. A transition additionally
+	 * needs the post type's publish capability, on top of the PER-POST
+	 * `edit_post` capability every update needs.
+	 *
+	 * @param array<string,mixed> $input        Call input.
+	 * @param bool                $publish_tier Whether this is the publish-post gate.
+	 */
+	private static function mayUpdate( array $input, bool $publish_tier ): bool {
 		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) ) {
 			return false;
 		}
@@ -710,11 +979,18 @@ final class Abilities {
 			return false;
 		}
 
-		if ( 'publish' === ( $input['status'] ?? null ) && ! current_user_can( self::publishCap( $post_type ) ) ) {
-			return false;
+		$current_public = self::isPublicStatus( (string) $post->post_status );
+		$desired_public = self::isTransitionStatus( $input['status'] ?? null );
+
+		if ( $publish_tier ) {
+			if ( ! $current_public && ! $desired_public ) {
+				return false;
+			}
+
+			return ! $desired_public || current_user_can( self::publishCap( $post_type ) );
 		}
 
-		return true;
+		return ! $current_public && ! $desired_public;
 	}
 
 	/**
@@ -801,13 +1077,17 @@ final class Abilities {
 	}
 
 	/**
-	 * create-post execute: draft-only, content validated, insert as draft.
+	 * create-post execute: draft-only, slug/title collision checked, content
+	 * validated, insert as draft.
 	 *
-	 * @param array<string,mixed> $input     Call input.
-	 * @param Validator           $validator Write validator.
+	 * @param array<string,mixed> $input Call input.
 	 * @return array<string,mixed>|WP_Error
 	 */
-	private static function executeCreatePost( array $input, Validator $validator ): array|WP_Error {
+	private static function executeCreatePost( array $input ): array|WP_Error {
+		if ( array_key_exists( 'pack', $input ) ) {
+			return self::packArgRefused();
+		}
+
 		// Re-checked here, not only in permission_callback: execute is reachable
 		// on its own and a write must never rely on an earlier gate having run.
 		if ( ! self::mayCreate( $input ) ) {
@@ -818,8 +1098,22 @@ final class Abilities {
 			return new WP_Error( 'status_not_allowed', __( 'Only draft is allowed on create.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
+		$validator = self::currentValidator();
+		if ( null === $validator ) {
+			return self::packUnresolved();
+		}
+
+		$post_type = (string) ( $input['post_type'] ?? 'page' );
+		$slug      = isset( $input['slug'] ) ? (string) $input['slug'] : '';
+		$title     = (string) ( $input['title'] ?? '' );
+
+		$collision = self::slugCollision( $post_type, $slug, $title );
+		if ( null !== $collision ) {
+			return $collision;
+		}
+
 		$content = (string) ( $input['content'] ?? '' );
-		$clean   = $validator->clean( $content, array( 'post_type' => (string) ( $input['post_type'] ?? 'page' ) ) );
+		$clean   = $validator->clean( $content, array( 'post_type' => $post_type ) );
 		if ( ! $clean['ok'] ) {
 			/** @var WP_Error $error */
 			$error = $clean['wp_error'];
@@ -829,11 +1123,11 @@ final class Abilities {
 
 		$id = wp_insert_post(
 			array(
-				'post_type'    => $input['post_type'] ?? 'page',
-				'post_title'   => (string) ( $input['title'] ?? '' ),
+				'post_type'    => $post_type,
+				'post_title'   => $title,
 				'post_content' => $clean['content'],
 				'post_status'  => 'draft',
-				'post_name'    => (string) ( $input['slug'] ?? '' ),
+				'post_name'    => $slug,
 				'post_parent'  => (int) ( $input['parent'] ?? 0 ),
 				'post_excerpt' => (string) ( $input['excerpt'] ?? '' ),
 			),
@@ -851,16 +1145,88 @@ final class Abilities {
 	}
 
 	/**
-	 * update-post execute: target post must exist; non-empty content is
-	 * validated, omitted/empty content leaves `post_content` untouched (and a
-	 * publish then validates the STORED content); status allowlist
-	 * draft|pending|publish.
+	 * S4 slug collision: refuses when any non-trashed object of the same post
+	 * type already holds the requested slug, or matches the title
+	 * case-insensitively. `wp_unique_post_slug()` skips drafts, so this is the
+	 * only place a draft-vs-draft (or draft-vs-published) collision is ever
+	 * caught before it would otherwise surface as a silent `-2` at publish.
 	 *
-	 * @param array<string,mixed> $input     Call input.
-	 * @param Validator           $validator Write validator.
+	 * Fails CLOSED, like `executeReadContent()`'s query branch, when the query
+	 * surface itself is unavailable — never a silent pass on an unverifiable
+	 * check.
+	 *
+	 * @param string $post_type The post type being created.
+	 * @param string $slug      The requested slug, or '' when none was given.
+	 * @param string $title     The requested title.
+	 */
+	private static function slugCollision( string $post_type, string $slug, string $title ): ?WP_Error {
+		$slug  = trim( $slug );
+		$title = trim( $title );
+		if ( '' === $slug && '' === $title ) {
+			return null;
+		}
+
+		if ( ! class_exists( '\WP_Query' ) ) {
+			return new WP_Error(
+				'collision_check_unavailable',
+				__( 'Could not verify the slug is unique.', 'senroflux' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		$query = new \WP_Query(
+			array(
+				'post_type'      => $post_type,
+				'post_status'    => self::COLLISION_STATUSES,
+				'posts_per_page' => -1,
+			)
+		);
+
+		foreach ( (array) ( $query->posts ?? array() ) as $candidate ) {
+			if ( ! is_object( $candidate ) ) {
+				continue;
+			}
+
+			$candidate_slug  = (string) $candidate->post_name;
+			$candidate_title = (string) $candidate->post_title;
+
+			if ( '' !== $slug && $candidate_slug === $slug ) {
+				return self::slugCollisionError();
+			}
+			if ( '' !== $title && 0 === strcasecmp( $candidate_title, $title ) ) {
+				return self::slugCollisionError();
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @return WP_Error slug_collision (409).
+	 */
+	private static function slugCollisionError(): WP_Error {
+		return new WP_Error(
+			'slug_collision',
+			__( 'Another page or post already uses that slug or title.', 'senroflux' ),
+			array( 'status' => 409 )
+		);
+	}
+
+	/**
+	 * update-post / publish-post execute (S4 split). `$publish_tier` selects
+	 * which ability's status allow-list and routing gate applies; everything
+	 * else — content validation, the omitted/empty-content contract, the
+	 * publish-time stored-content re-check — is shared.
+	 *
+	 * @param array<string,mixed> $input        Call input.
+	 * @param bool                $publish_tier Whether this is publish-post.
 	 * @return array<string,mixed>|WP_Error
 	 */
-	private static function executeUpdatePost( array $input, Validator $validator ): array|WP_Error {
+	private static function executeUpdateLike( array $input, bool $publish_tier ): array|WP_Error {
+		if ( array_key_exists( 'pack', $input ) ) {
+			return self::packArgRefused();
+		}
+
 		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) ) {
 			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
@@ -874,17 +1240,29 @@ final class Abilities {
 			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
-		// The status allow-list runs BEFORE the capability gate so a refused
-		// status never reveals whether the caller could have published.
-		$status = $input['status'] ?? null;
-		if ( null !== $status && ! in_array( $status, array( 'draft', 'pending', 'publish' ), true ) ) {
-			return new WP_Error( 'status_not_allowed', __( 'That status is not allowed on update.', 'senroflux' ), array( 'status' => 400 ) );
+		// The status allow-list runs BEFORE the capability/routing gate so a
+		// refused status never reveals whether the caller could have published.
+		$status         = $input['status'] ?? null;
+		$allowed_status = $publish_tier ? self::PUBLISH_STATUSES : self::DRAFT_STATUSES;
+		if ( null !== $status && ! in_array( $status, $allowed_status, true ) ) {
+			return new WP_Error( 'status_not_allowed', __( 'That status is not allowed on this ability.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
-		// Per-post `edit_post`, plus the type's publish cap on a publish
-		// transition. Re-checked here for the same reason as create.
-		if ( ! self::mayUpdate( $input ) ) {
+		// Per-post `edit_post`, the S4 public/transition routing, and the
+		// type's publish cap on a publish/future transition. Re-checked here
+		// for the same reason as create.
+		if ( ! self::mayUpdate( $input, $publish_tier ) ) {
 			return self::forbidden();
+		}
+
+		// S8 SEAM (stage 4, not yet implemented): this is the single place
+		// every write ability here will compare $post's `post_modified_gmt`
+		// against the run's tracker and refuse `stale_write` (409) on a
+		// mismatch or an unread object. Deliberately a no-op until then.
+
+		$validator = self::currentValidator();
+		if ( null === $validator ) {
+			return self::packUnresolved();
 		}
 
 		$args = array( 'ID' => (int) ( $post->ID ?? 0 ) );
@@ -911,11 +1289,12 @@ final class Abilities {
 				return $error;
 			}
 			$args['post_content'] = $clean['content'];
-		} elseif ( 'publish' === $status ) {
+		} elseif ( self::isTransitionStatus( $status ) ) {
 			// Fail closed (§0.2): "content unchanged" must never be a way to
-			// put unvalidated markup live. On a publish the STORED content is
-			// validated instead — and left untouched either way, so a page
-			// that goes live is markup the validator has accepted.
+			// put unvalidated markup live. On a transition to publish/future
+			// the STORED content is validated instead — and left untouched
+			// either way, so a page that goes live is markup the validator
+			// has accepted.
 			$stored = $validator->clean( (string) ( $post->post_content ?? '' ), $post_type );
 			if ( ! $stored['ok'] ) {
 				/** @var WP_Error $error */

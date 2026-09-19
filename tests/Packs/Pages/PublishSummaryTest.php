@@ -106,12 +106,13 @@ final class PublishSummaryTest extends TestCase {
 	 * Agent Safety hands the filter the ABILITY ID, not a `pages/*` verb, so
 	 * the Tier-2 test has to run through the pack's predicate.
 	 */
+	/** 0.3 S4: the publish transition now lives on `senroflux/publish-post`. */
 	public function test_filter_enriches_an_ability_id_publish_transition(): void {
 		$this->seedPost( 100, 'Pricing', self::PRICING_MARKUP );
 
 		$sum = PublishSummary::filter(
 			'plain',
-			'senroflux/update-post',
+			'senroflux/publish-post',
 			array(
 				'id'     => 100,
 				'status' => 'publish',

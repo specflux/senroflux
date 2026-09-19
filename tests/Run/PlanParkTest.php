@@ -818,6 +818,11 @@ final class PlanParkTest extends TestCase {
 				permission_result: true,
 				execute_result: array( 'ok' => true )
 			),
+			'senroflux/publish-post' => new SenroFlux_Test_Fake_Ability(
+				'senroflux/publish-post',
+				permission_result: true,
+				execute_result: array( 'ok' => true )
+			),
 		);
 	}
 
@@ -859,7 +864,7 @@ final class PlanParkTest extends TestCase {
 			new MessagePart(
 				new FunctionCall(
 					'call_p',
-					'wpab__senroflux__update-post',
+					'wpab__senroflux__publish-post',
 					array(
 						'id'     => 7,
 						'status' => 'publish',
@@ -872,14 +877,20 @@ final class PlanParkTest extends TestCase {
 		$result = $this->packRunner()->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
-		// The SAME ability, tiered 2 because of its args: refused for want of a plan.
+		// Tiered 2 because of its args: refused for want of a plan.
 		$publish = $result['new_steps'][2];
 		$this->assertSame( 'error', $publish['status'] );
 		$response = $publish['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( array( 'error' => 'plan_required' ), $response['response'] ?? null );
 	}
 
-	public function test_the_same_ability_is_in_plan_as_a_draft_edit_and_not_in_plan_as_a_publish(): void {
+	/**
+	 * 0.3 S4: the draft edit and the publish are now TWO abilities
+	 * (update-post, publish-post), each tiered by its OWN role — the split
+	 * that stops a draft edit from ever collapsing up to Tier 2. This mirrors
+	 * 0.2's "same ability, two verbs" test but across the split abilities.
+	 */
+	public function test_update_post_is_in_plan_as_a_draft_edit_and_publish_post_is_not(): void {
 		$this->seedPagesAbilities();
 		$run_id = $this->createPagesRun();
 		$runner = $this->packRunner();
@@ -900,15 +911,14 @@ final class PlanParkTest extends TestCase {
 		$parked                  = $runner->tick( $run_id, 0, null );
 		$this->assertSame( 'awaiting_plan', $parked['run']['status'] );
 
-		// One ability, two calls: the publish is outside the plan's verb set,
-		// the draft edit is inside it. Only an args-aware verb can tell them
-		// apart — on the ability id alone both would land the same way.
+		// Two abilities, two calls: the publish-post call is outside the
+		// plan's verb set, the update-post call is inside it.
 		$this->gateway->script[] = self::turn(
 			new MessagePart( 'Continuing.' ),
 			new MessagePart(
 				new FunctionCall(
 					'call_pub',
-					'wpab__senroflux__update-post',
+					'wpab__senroflux__publish-post',
 					array(
 						'id'     => 7,
 						'status' => 'publish',
@@ -940,6 +950,87 @@ final class PlanParkTest extends TestCase {
 
 		$draft = $result['new_steps'][3];
 		$this->assertSame( 'ok', $draft['status'] );
+	}
+
+	/**
+	 * S3 x S4: built-in mode parks ANY Tier ≥ 1 call — unlike Agent Safety's
+	 * own approval, which only gates Tier 2 (`approvalByClass: ['tier2' =>
+	 * true]`, see `PagesPack::agentSafetyPack()`). The split's whole point is
+	 * that a draft edit stops requiring AS approval; it must still park here,
+	 * in the harness's own built-in gate, because that gate parks every
+	 * Tier ≥ 1 call regardless of which ability carries it.
+	 */
+	public function test_a_draft_edit_still_parks_in_built_in_mode(): void {
+		$this->seedPagesAbilities();
+		$pack   = new PagesPack();
+		$run_id = $this->store->createRun(
+			1,
+			'test-consumer',
+			'Design a pricing page',
+			array( 'senroflux/*' ),
+			Budget::defaults(),
+			null,
+			null,
+			null,
+			\Specflux\SenroFlux\Run\GateMode::BuiltIn
+		);
+
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			$this->bridge,
+			null,
+			static function ( Run $run ) use ( $pack ): ?array {
+				unset( $run );
+
+				return $pack->verbMap();
+			},
+			static function ( Run $run, string $ability, array $args ) use ( $pack ): string {
+				unset( $run );
+
+				return $pack->verbFor( $ability, $args );
+			},
+			null,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			null,
+			static fn (): \Specflux\SenroFlux\Run\GateMode => \Specflux\SenroFlux\Run\GateMode::BuiltIn
+		);
+
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Edit the draft',
+						'verbs' => array( 'pages/update-draft' ),
+					),
+				),
+			)
+		);
+		$parked                  = $runner->tick( $run_id, 0, null );
+		$this->assertSame( 'awaiting_plan', $parked['run']['status'] );
+
+		$run                     = $this->store->getRun( $run_id );
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Editing.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_draft',
+					'wpab__senroflux__update-post',
+					array(
+						'id'     => 7,
+						'status' => 'draft',
+					)
+				)
+			)
+		);
+		$result                  = $runner->tick( $run_id, (int) $run->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_approval', $result['run']['status'], 'a Tier-1 draft edit must still park in built-in mode' );
 	}
 
 	// ------------------------------------------------------------------

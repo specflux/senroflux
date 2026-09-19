@@ -42,13 +42,17 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\Content\Vocabulary as ContentVocabulary;
+
 // Bail on direct access.
 defined( 'ABSPATH' ) || exit;
 
 /**
- * The seven-page vocabulary.
+ * The seven-page vocabulary. Implements the S4 {@see ContentVocabulary} seam
+ * so `Packs\Content\Abilities` can answer `list-patterns` without knowing any
+ * pack's concrete pattern set.
  */
-final class Vocabulary {
+final class Vocabulary implements ContentVocabulary {
 
 	/**
 	 * The pattern category registered with the block editor.

@@ -345,7 +345,7 @@ abstract class Pack {
 	 * parks for a human).
 	 *
 	 * The inverse of {@see roleVerbs()}, and the only place that knows a grant
-	 * on `pages/publish` has to be issued against `senroflux/update-post`.
+	 * on `pages/publish` has to be issued against `senroflux/publish-post`.
 	 * Several pack verbs legitimately collapse onto one ability — the caller
 	 * aggregates their counts.
 	 *
@@ -390,10 +390,13 @@ abstract class Pack {
 	 * tier per verb, and its only argument-aware seam (`ElevationRule`) is
 	 * constructor-injected by integration modules with no filter a third-party
 	 * host can reach (verified against agent-safety 0.3: no `apply_filters` on
-	 * the elevation-rule list). Rounding UP is the §0 fail-closed reading: the
-	 * pages pack's `update-post` therefore parks for approval on a draft edit
-	 * too, rather than letting a publish through unparked. Rounding down would
-	 * be the only unsafe choice.
+	 * the elevation-rule list). Rounding UP is the §0 fail-closed reading. 0.3
+	 * S4 splits `update-post` (draft-state edits, Tier 1) from `publish-post`
+	 * (Tier 2) into two abilities precisely so this collapse can no longer drag
+	 * a draft edit up to Tier 2 the way 0.2's combined ability did — each
+	 * ability's own role now spans only the verbs it can actually produce.
+	 * Rounding down would still be the only unsafe choice for an ability that
+	 * genuinely spans tiers.
 	 *
 	 * Keyed on the polyfill id, never on the resolved one, so this stays a pure
 	 * function of pack data: Agent Safety reads both filters on
