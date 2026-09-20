@@ -72,8 +72,18 @@ final class ThemePatterns {
 	 */
 	private const TEXT_TAGS = array( 'p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'summary', 'cite', 'figcaption', 'a' );
 
-	/** S21: the maximum block-tree depth a theme pattern may reach. */
-	private const MAX_DEPTH = 5;
+	/**
+	 * S21: the maximum block-tree depth a theme pattern may reach.
+	 *
+	 * S21 first set this to 5, which is exactly where the pack's own curated
+	 * seven top out — a bound fitted to this plugin's markup rather than to
+	 * how themes actually nest. Twenty Twenty-Five wraps its richer patterns
+	 * in an outer section group, putting its pricing table, FAQs and
+	 * testimonials at 6 and two CTAs at 7, so a cap of 5 rejected every
+	 * pattern that maps onto a curated shape and left 4 of 98 eligible. The
+	 * bound is now our own maximum plus room for that wrapper.
+	 */
+	private const MAX_DEPTH = 7;
 
 	/**
 	 * @var array{eligible: list<array<string,mixed>>, skipped: int}|null

@@ -18,15 +18,16 @@
  * first).
  *
  * A one-off scan of the FULL Twenty Twenty-Five `patterns/` directory (98
- * files, not committed here — machine-local wp-env path) found 4 eligible:
- * `banner-intro`, `cta-book-links`, `cta-centered-heading`, `format-link`.
- * The other 6 of the brief's 10-pattern calibration list are cut by real
- * clauses: `binding-format` (no text slot with any shipped words — a
- * block-bindings paragraph with empty literal content), and
- * `cta-book-locations`/`cta-events-list`/`pricing-3-col`/`testimonials-6-col`/
- * `text-faqs` all by DEPTH (6 or 7, over the limit of 5) — Twenty
- * Twenty-Five nests its richer patterns more deeply than the pack's own
- * curated seven. See the stage report for the full breakdown.
+ * files, not committed here — machine-local wp-env path) finds 9 eligible:
+ * `banner-intro`, `cta-book-links`, `cta-book-locations`,
+ * `cta-centered-heading`, `cta-events-list`, `format-link`, `pricing-3-col`,
+ * `testimonials-6-col`, `text-faqs`.
+ *
+ * Five of those nine were rejected while the depth cap stood at S21's
+ * original 5 — see {@see \Specflux\SenroFlux\Packs\Pages\ThemePatterns}'s
+ * `MAX_DEPTH` for why the bound moved to 7. `binding-format` is still cut,
+ * on a different clause: no text slot with any shipped words, being a
+ * block-bindings paragraph with empty literal content.
  *
  * @package SenroFlux
  */
@@ -167,12 +168,34 @@ final class ThemePatternsTest extends TestCase {
 		$this->assertSame( 1, ThemePatterns::skippedCount() );
 	}
 
-	public function test_depth_over_five_is_cut(): void {
-		// Real: Twenty Twenty-Five's `cta-events-list` nests 7 levels deep.
-		$this->registerFixtures( 'cta-events-list' );
+	public function test_depth_over_seven_is_cut(): void {
+		// SYNTHETIC: no real Twenty Twenty-Five pattern nests past 7 while
+		// staying inside the block allow-list, so the clause can only be
+		// isolated with a hand-built tree — seven groups around a paragraph.
+		$open  = str_repeat( '<!-- wp:group -->', 7 );
+		$close = str_repeat( '<!-- /wp:group -->', 7 );
+
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/too-deep',
+				'title'    => 'Nested past the cap',
+				'content'  => $open . '<!-- wp:paragraph --><p>Some real sample copy here.</p><!-- /wp:paragraph -->' . $close,
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
 
 		$this->assertSame( array(), ThemePatterns::eligible() );
 		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	public function test_depth_of_exactly_seven_is_admitted(): void {
+		// Real boundary: `cta-events-list` nests exactly 7 levels. It was cut
+		// by S21's original cap of 5 and is admitted by the raised bound, so
+		// this pins the edge in both directions.
+		$this->registerFixtures( 'cta-events-list' );
+
+		$this->assertSame( array( 'twentytwentyfive/cta-events-list' ), $this->names( ThemePatterns::eligible() ) );
+		$this->assertSame( 0, ThemePatterns::skippedCount() );
 	}
 
 	public function test_disallowed_block_is_cut(): void {
