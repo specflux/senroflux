@@ -4,3 +4,10 @@
 .phpunit.cache/
 .phpunit.result.cache
 /.scratch/
+
+# Playwright (0.3 S22/17e) — generated per-run, never committed.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/tests/e2e/support/storage-state.*.json

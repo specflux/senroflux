@@ -8,6 +8,17 @@
 
     <exclude-pattern>vendor/*</exclude-pattern>
 
+    <!--
+        0.3 S22/17e: the e2e fake-provider mu-plugin is a LOCAL DEV/CI-ONLY
+        fixture (excluded from the shipped zip by .distignore), modelled on
+        dev/smoke/*-fixture.php which is likewise unlinted. It intentionally
+        uses global classes/functions (mirroring dev/smoke's WordPress AI
+        Client provider shape) rather than the plugin's own PSR-4 namespace,
+        so holding it to the shipped-code WPCS ruleset would fight the
+        pattern rather than catch a real defect.
+    -->
+    <exclude-pattern>tests/e2e/fake-provider/*</exclude-pattern>
+
     <arg name="colors"/>
     <arg name="extensions" value="php"/>
     <arg value="ps"/>
