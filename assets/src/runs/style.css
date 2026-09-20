@@ -398,6 +398,9 @@
  * never even renders this element in built-in mode). */
 .senroflux-tier {
 	display: inline-block;
+	/* The park card body is a flex column, whose default stretch would blow
+	 * an inline-block badge out to the full card width. */
+	align-self: flex-start;
 	font-size: 10.5px;
 	padding: 0 6px;
 	border-radius: 9px;
