@@ -93,11 +93,78 @@ final class Schema {
 			return;
 		}
 
+		// S14: record the legacy-run watermark BEFORE install() stamps the
+		// version option, so a crash mid-upgrade leaves the option low and
+		// the next boot retries this too (same fail-toward-re-running
+		// posture as the version stamp itself).
+		self::maybe_record_legacy_watermark( $db, $installed );
+
 		self::install( $db );
 
 		if ( function_exists( 'update_option' ) ) {
 			update_option( 'senroflux_db_version', self::DB_VERSION, false );
 		}
+	}
+
+	/**
+	 * S14 ("Upgrade from 0.2"): on a genuine pre-0.3 install — $installed > 0
+	 * (a fresh install, 0, has no rows to protect) and < 4 (0.3 S3's
+	 * `gate_mode` column, the first 0.3-era addition) — record the highest
+	 * run id that existed at upgrade time into the (non-autoloaded) option
+	 * `senroflux_legacy_run_watermark`, but ONLY when a live (non-terminal)
+	 * run actually exists, and only once: an existing watermark is never
+	 * overwritten, even with a now-higher MAX(id), so a repeated upgrade
+	 * attempt can never creep the boundary later runs get judged against.
+	 * {@see \Specflux\SenroFlux\Run\Runner::legacyRunRefusal()} reads it
+	 * back: any run at or below the mark that is still non-terminal started
+	 * under 0.2 (ids are AUTO_INCREMENT, so every 0.3 run's id is strictly
+	 * greater) and cannot continue.
+	 *
+	 * Terminal statuses are hard-coded here as the three literal values from
+	 * {@see \Specflux\SenroFlux\Run\RunStatus::isTerminal()} — that enum
+	 * lives in a namespace this framework-agnostic-adjacent class does not
+	 * otherwise depend on, so the literals are duplicated rather than
+	 * introducing a new coupling; RunStatus::isTerminal() remains the
+	 * source of truth if the set of terminal statuses ever changes.
+	 *
+	 * KNOWN LIMITATION: if a site TRUNCATEd its runs table and reset
+	 * AUTO_INCREMENT while somehow keeping the upgrade option below 4 (or
+	 * cleared it) so this ran again, new low-id runs could be misread as
+	 * legacy. Writing the watermark only when a live 0.2 run is actually
+	 * found keeps that window closed on nearly every real site.
+	 *
+	 * @return void
+	 */
+	private static function maybe_record_legacy_watermark( wpdb $db, int $installed ): void {
+		if ( $installed <= 0 || $installed >= 4 ) {
+			return;
+		}
+
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
+			return;
+		}
+
+		if ( false !== get_option( 'senroflux_legacy_run_watermark', false ) ) {
+			return; // Never overwrite an existing watermark.
+		}
+
+		$runs = self::runsTable( $db );
+
+		$live = (int) $db->get_var(
+			// phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table/column names, no user input.
+			"SELECT COUNT(*) FROM {$runs} WHERE status NOT IN ('completed', 'failed', 'cancelled')"
+		);
+
+		if ( $live <= 0 ) {
+			return;
+		}
+
+		$max_id = (int) $db->get_var(
+			// phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table name.
+			"SELECT MAX(id) FROM {$runs}"
+		);
+
+		update_option( 'senroflux_legacy_run_watermark', $max_id, false );
 	}
 
 	/**
