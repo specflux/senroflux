@@ -34,6 +34,7 @@ final class PluginListRecentTest extends TestCase {
 		Plugin::set_dependency_probe( false );
 		$GLOBALS['senroflux_test_current_user_id'] = 1;
 		$GLOBALS['senroflux_test_transients']      = array();
+		$GLOBALS['senroflux_test_user_caps']       = array();
 
 		$db              = new wpdb();
 		$db->queryReturn = 1;
@@ -82,8 +83,15 @@ final class PluginListRecentTest extends TestCase {
 
 	public function test_viewer_may_tick_defaults_to_owner_only(): void {
 		$GLOBALS['senroflux_test_current_user_id'] = 1;
-		$own_run                                   = $this->createRun( 1, RunStatus::AwaitingApproval );
-		$other_run                                 = $this->createRun( 2, RunStatus::AwaitingApproval );
+		// 0.3 S10: listRecent() is now scoped, so another user's run is only
+		// LISTED for a Runs-capability holder. The flag under test is
+		// `viewer_may_tick`, not visibility — hold the capability so the row
+		// is present and the flag's owner-only default is what's asserted.
+		// {@see PluginListScopeTest} covers the scoping itself.
+		$GLOBALS['senroflux_test_user_caps']['manage_options'] = true;
+
+		$own_run   = $this->createRun( 1, RunStatus::AwaitingApproval );
+		$other_run = $this->createRun( 2, RunStatus::AwaitingApproval );
 
 		$rows = senroflux()->listRecent();
 

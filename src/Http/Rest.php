@@ -20,6 +20,7 @@ defined( 'ABSPATH' ) || exit;
  *   POST /runs                          {consumer, goal, budget?, follow_up_of?}  (allow-list via senroflux_http_consumers)
  *   POST /runs/{id}/tick                {step_count, approval_action?}
  *   POST /runs/{id}/cancel
+ *   GET  /runs                          {limit?} (0.3 S10; scoped to the runs the viewer may see)
  *   GET  /runs/{id}
  *   POST /runs/{id}/suggestions/{n}     {action, text?} (0.3 S20; manage_options + a REST nonce)
  */
@@ -91,6 +92,28 @@ final class Rest {
 				'methods'             => 'POST',
 				'callback'            => array( $this, 'routeCancel' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
+			)
+		);
+
+		// 0.3 S10: the React screen's left-hand list. `read` here matches the
+		// other read routes; the ACTUAL scoping lives in
+		// {@see \Specflux\SenroFlux\Plugin::listRecent()}, which filters to
+		// the runs this viewer may see or drive — a logged-in Subscriber gets
+		// their own runs and nothing else, never an empty-capability leak of
+		// every goal on the site.
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/runs',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'routeList' ),
+				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
+				'args'                => array(
+					'limit' => array(
+						'type'     => 'integer',
+						'required' => false,
+					),
+				),
 			)
 		);
 
@@ -194,6 +217,22 @@ final class Rest {
 	/** GET /runs/{id}. */
 	public function routeGet( \WP_REST_Request $request ): \WP_REST_Response {
 		return $this->respond( senroflux()->get( (int) $request->get_param( 'run_id' ) ) );
+	}
+
+	/**
+	 * GET /runs (0.3 S10).
+	 *
+	 * `limit` is the number of rows CONSIDERED before scoping, so a response
+	 * may be shorter than the limit asked for. It is clamped to 1..100: an
+	 * unbounded limit would let any logged-in user walk the whole table one
+	 * request at a time, even though each row is already scoped.
+	 */
+	public function routeList( \WP_REST_Request $request ): \WP_REST_Response {
+		$limit = $request->get_param( 'limit' );
+		$limit = null === $limit ? 50 : (int) $limit;
+		$limit = max( 1, min( 100, $limit ) );
+
+		return $this->respond( array( 'runs' => senroflux()->listRecent( $limit ) ) );
 	}
 
 	/**

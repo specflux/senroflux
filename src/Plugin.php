@@ -830,9 +830,20 @@ final class Plugin {
 	}
 
 	/**
-	 * Most recent runs for the Runs screen list.
+	 * Most recent runs the viewer may see.
 	 *
-	 * @param int $limit Max rows.
+	 * 0.3 S10 (owner decision, 2026-09-20): scoped to {@see maySee()} OR the
+	 * delegation seam. Until 0.3 this returned every run on the site, which
+	 * was looser than {@see get()} on the same run: the list showed a goal
+	 * whose detail the same viewer was refused with `senroflux_forbidden`.
+	 * The screen capability is a PACK RUN capability (S10) — `edit_pages` is
+	 * enough to open it — so the old behaviour showed one author's run goals
+	 * to every other author. The drivable clause is kept because S13
+	 * deliberately lets a screen-capability holder resolve a parked run they
+	 * do not own; dropping it would break that.
+	 *
+	 * @param int $limit Max rows CONSIDERED, before scoping. A viewer may
+	 *                   therefore receive fewer than `$limit` rows.
 	 * @return list<array<string,mixed>> Lightweight run summaries.
 	 */
 	public function listRecent( int $limit = 50 ): array {
@@ -841,6 +852,14 @@ final class Plugin {
 		}
 
 		$viewer_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+
+		$visible = array_filter(
+			$this->runner()->store()->listRecent( $limit ),
+			function ( \Specflux\SenroFlux\Run\Run $run ) use ( $viewer_id ): bool {
+				return $this->maySee( $run )
+					|| (bool) apply_filters( 'senroflux_can_tick', $viewer_id === $run->userId, $run );
+			}
+		);
 
 		return array_map(
 			function ( \Specflux\SenroFlux\Run\Run $run ) use ( $viewer_id ): array {
@@ -871,7 +890,7 @@ final class Plugin {
 						&& false === get_transient( 'senroflux_lock_' . $run->id ),
 				);
 			},
-			$this->runner()->store()->listRecent( $limit )
+			array_values( $visible )
 		);
 	}
 
