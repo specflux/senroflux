@@ -3,6 +3,7 @@ import { groupSteps, stepText, isTerminalStatus } from '../utils';
 import PinnedPlan from './PinnedPlan';
 import LedgerGroup from './LedgerGroup';
 import ParkCard from './ParkCard';
+import SuggestionCard from './SuggestionCard';
 
 /**
  * The newest step of the kind matching the run's OWN park status. A question
@@ -83,15 +84,29 @@ function usageAgainstCeilings( run, steps ) {
  * @param {Object}   props
  * @param {Object}   props.run
  * @param {Array}    props.steps
- * @param {Function} [props.onResolvePark] `( resume ) => Promise` for the open park, if any.
- * @param {Function} [props.onCancel]      `() => Promise` for the Cancel button.
- * @param {boolean}  [props.busy]          True while a tick/cancel is in flight.
- * @param {number}   [props.tickCount]     How many tick round-trips this run has sent this page-load (the "Tick N" bubble).
+ * @param {Array}    [props.suggestions]        `{ seq, text, status }[]` (0.3 S20).
+ * @param {boolean}  [props.canManageBrief]      Server-computed `manage_options` (S20).
+ * @param {Function} [props.onResolvePark]       `( resume ) => Promise` for the open park, if any.
+ * @param {Function} [props.onResolveSuggestion] `( seq, action, text ) => Promise` (S20).
+ * @param {Function} [props.onCancel]            `() => Promise` for the Cancel button.
+ * @param {boolean}  [props.busy]                True while a tick/cancel is in flight.
+ * @param {number}   [props.tickCount]           How many tick round-trips this run has sent this page-load (the "Tick N" bubble).
  */
-export default function Chat( { run, steps, onResolvePark, onCancel, busy, tickCount } ) {
+export default function Chat( {
+	run,
+	steps,
+	suggestions,
+	canManageBrief,
+	onResolvePark,
+	onResolveSuggestion,
+	onCancel,
+	busy,
+	tickCount,
+} ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
 	const plan = currentPlan( run, steps );
+	const suggestionsBySeq = new Map( ( suggestions || [] ).map( ( s ) => [ s.seq, s ] ) );
 
 	const usage = usageAgainstCeilings( run, steps );
 
@@ -164,6 +179,23 @@ export default function Chat( { run, steps, onResolvePark, onCancel, busy, tickC
 								busy={ busy }
 							/>
 						);
+					}
+					if ( 'suggestion' === step.kind ) {
+						// `suggestionsBySeq` (from the REST `suggestions` list)
+						// carries the CURRENT status/text; the step itself is
+						// append-only and never rewritten (S4 convention), so
+						// a step with no matching entry (shouldn't happen —
+						// `Plugin::get()` builds one for every suggestion
+						// step) renders nothing rather than a stale card.
+						const suggestion = suggestionsBySeq.get( step.seq );
+						return suggestion ? (
+							<SuggestionCard
+								key={ index }
+								suggestion={ suggestion }
+								canManageBrief={ canManageBrief }
+								onResolve={ onResolveSuggestion }
+							/>
+						) : null;
 					}
 					return null;
 				} ) }

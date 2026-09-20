@@ -20,6 +20,27 @@ export function isTerminalStatus( status ) {
 }
 
 /**
+ * Compare two run ids for identity, tolerant of type. `WP_Scripts::
+ * localize()` (core `wp_localize_script()`) casts every scalar value to a
+ * STRING before JSON-encoding it, so `window.senrofluxRunsConfig.
+ * initialRunId` always arrives in JS as a string (e.g. `"1"`), while every
+ * `run.id` in a REST/ajax JSON payload is a genuine JSON number (`1`). A
+ * strict `===`/`!==` comparison between a run id seeded from config and one
+ * that came back from the server silently treats the SAME run as a
+ * different one forever — a live-review defect (S10, 17d): the re-render
+ * after resolving a park was silently dropped for any run opened via a
+ * deep link (`?run_id=`). Every place `App.js` decides "is this update for
+ * the run that's still selected" goes through this helper instead of a raw
+ * comparison, so no future id source can reintroduce the same class of bug.
+ */
+export function sameRunId( a, b ) {
+	if ( null === a || undefined === a || null === b || undefined === b ) {
+		return a === b;
+	}
+	return String( a ) === String( b );
+}
+
+/**
  * The four S10 tabs, in order. Each predicate is the SINGLE source of truth
  * for both the tab's count and the rows it shows — a count computed any other
  * way could drift from the list it claims to describe (a named live-review
