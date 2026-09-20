@@ -17,6 +17,7 @@ use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\BuiltinGate;
 use Specflux\SenroFlux\Tools\HarnessTools;
 use Specflux\SenroFlux\Tools\PlanTools;
+use Specflux\SenroFlux\Tools\SuggestBriefTool;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\ToolOutcome;
 use Specflux\SenroFlux\Tools\ToolRegistry;
@@ -515,7 +516,8 @@ final class Runner {
 				// touch the permission-agnostic declaration surface only.
 				$harness_declarations = array_merge(
 					HarnessTools::declarations( $this->remainingQuestions( $run ) ),
-					PlanTools::declarations( $this->remainingPlans( $run ) )
+					PlanTools::declarations( $this->remainingPlans( $run ) ),
+					SuggestBriefTool::declarations()
 				);
 				$tools                = array() !== $harness_declarations
 					? $registry->withDeclarations( $harness_declarations )
@@ -601,6 +603,15 @@ final class Runner {
 					if ( isset( $harness['park'] ) ) {
 						return $harness['park']; // Park ends the tick.
 					}
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
+
+				// S20: the brief-suggestion tool. Tier 0, parks nothing — it
+				// is answered synchronously, in this same tick.
+				if ( SuggestBriefTool::functionName() === $call['name'] ) {
+					$this->runSuggestBrief( $run, $call, $new_steps );
 					++$tool_calls_used;
 					$run = $this->refresh( $run );
 					continue;
@@ -1616,6 +1627,152 @@ final class Runner {
 					),
 				),
 			),
+		);
+	}
+
+	/**
+	 * Handle a `senroflux__suggest-brief-addition` call (0.3 S20). Parks
+	 * nothing: it always appends exactly one `suggestion` step (invalid input
+	 * still counts against nothing but the tool call — no step is recorded)
+	 * and answers with a tool_result in the SAME tick.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param list<array<string,mixed>>               $new_steps Accumulator.
+	 */
+	private function runSuggestBrief( Run $run, array $call, array &$new_steps ): void {
+		$payload = SuggestBriefTool::validate( $call['args'] ?? null );
+		if ( is_wp_error( $payload ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_INVALID );
+			return;
+		}
+
+		$accepted             = 0;
+		$dismissed_normalized = array();
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Suggestion === $step->kind ) {
+				++$accepted;
+				continue;
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'suggestion_resolved' === ( $step->messageArray['note'] ?? '' )
+				&& 'dismiss' === ( $step->messageArray['action'] ?? '' )
+			) {
+				$dismissed_normalized[] = SuggestBriefTool::normalize( (string) ( $step->messageArray['text'] ?? '' ) );
+			}
+		}
+
+		if ( $accepted >= SuggestBriefTool::MAX_PER_RUN ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_LIMIT );
+			return;
+		}
+
+		if ( in_array( SuggestBriefTool::normalize( $payload['text'] ), $dismissed_normalized, true ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_DISMISSED );
+			return;
+		}
+
+		$seq         = $this->store->appendStep(
+			$run->id,
+			StepKind::Suggestion,
+			$payload,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+		$new_steps[] = array(
+			'seq'         => $seq,
+			'kind'        => StepKind::Suggestion->value,
+			'message'     => $payload,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+
+		$new_steps[] = $this->appendSuggestBriefResult( $run->id, $call, array( 'recorded' => true ) );
+	}
+
+	/**
+	 * Tool_result for a recorded suggestion. The FunctionResponse NAME is the
+	 * harness function name, matching the ask-user/plan convention.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call     Call shape.
+	 * @param array<string,mixed>                      $response FunctionResponse payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefResult( int $run_id, array $call, array $response ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Tool_result error to the model for an invalid/limited/dismissed
+	 * suggest-brief-addition call. Counts as a tool call (the caller bumps
+	 * the counter).
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code invalid_suggestion | suggestion_limit | suggestion_dismissed.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefError( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'error',
 		);
 	}
 

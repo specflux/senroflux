@@ -97,6 +97,38 @@ final class Rest {
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
 			)
 		);
+
+		// 0.3 S20: a human click only — manage_options in the permission
+		// callback, RE-CHECKED in the handler (fail closed, B0 rule 2), and
+		// the REST framework's own cookie-nonce check for a logged-in
+		// browser session (a REST nonce, as S20 asks).
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/runs/(?P<run_id>\d+)/suggestions/(?P<seq>\d+)',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'routeSuggestionDecision' ),
+				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'manage_options' ),
+				'args'                => array(
+					'run_id' => array(
+						'type'     => 'integer',
+						'required' => true,
+					),
+					'seq'    => array(
+						'type'     => 'integer',
+						'required' => true,
+					),
+					'action' => array(
+						'type'     => 'string',
+						'required' => true,
+					),
+					'text'   => array(
+						'type'     => 'string',
+						'required' => false,
+					),
+				),
+			)
+		);
 	}
 
 	/** POST /runs. */
@@ -151,6 +183,32 @@ final class Rest {
 	/** GET /runs/{id}. */
 	public function routeGet( \WP_REST_Request $request ): \WP_REST_Response {
 		return $this->respond( senroflux()->get( (int) $request->get_param( 'run_id' ) ) );
+	}
+
+	/**
+	 * POST /runs/{id}/suggestions/{n} (0.3 S20).
+	 *
+	 * The permission_callback already required manage_options; RE-CHECKED
+	 * here regardless (fail closed, B0 rule 2) — a route whose permission
+	 * callback is ever bypassed or misconfigured must still refuse.
+	 */
+	public function routeSuggestionDecision( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+			return $this->respond(
+				new \WP_Error( 'senroflux_forbidden', __( 'Insufficient permissions.', 'senroflux' ), array( 'status' => 403 ) )
+			);
+		}
+
+		$text = $request->get_param( 'text' );
+
+		return $this->respond(
+			senroflux()->resolveSuggestion(
+				(int) $request->get_param( 'run_id' ),
+				(int) $request->get_param( 'seq' ),
+				(string) $request->get_param( 'action' ),
+				is_string( $text ) ? $text : null
+			)
+		);
 	}
 
 	/**

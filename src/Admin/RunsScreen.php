@@ -94,6 +94,7 @@ class RunsScreen {
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
 		add_action( 'admin_post_senroflux_plan_decision', array( $this, 'handlePlanDecision' ) );
 		add_action( 'admin_post_senroflux_approval_decision', array( $this, 'handleApprovalDecision' ) );
+		add_action( 'admin_post_senroflux_suggestion_decision', array( $this, 'handleSuggestionDecision' ) );
 		add_action( 'wp_ajax_senroflux_setup_panel', array( $this, 'handleSetupPanel' ) );
 		add_action( 'wp_ajax_senroflux_dismiss_agent_safety_check', array( $this, 'handleDismissAgentSafetyCheck' ) );
 		add_action( 'admin_notices', array( $this, 'maybeRenderActivationNotice' ) );
@@ -412,6 +413,104 @@ class RunsScreen {
 				$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), array( 'action' => $action ) )
 			)
 		);
+	}
+
+	/**
+	 * admin-post endpoint backing a suggestion's Save/Dismiss (0.3 S20).
+	 *
+	 * `manage_options` and the nonce are BOTH checked here — RE-CHECKED
+	 * inside {@see \Specflux\SenroFlux\Plugin::resolveSuggestion()}'s callee
+	 * is not the point; this is the one human-click seam, and it fails
+	 * closed on its own, same as {@see \Specflux\SenroFlux\Http\Rest::routeSuggestionDecision()}.
+	 */
+	public function handleSuggestionDecision(): void {
+		$run_id = absint( $_POST['run_id'] ?? 0 );
+		check_admin_referer( 'senroflux_suggestion_' . $run_id );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions.', 'senroflux' ) );
+		}
+
+		$seq    = absint( $_POST['seq'] ?? 0 );
+		$action = sanitize_text_field( wp_unslash( $_POST['senroflux_suggestion_action'] ?? '' ) );
+		$text   = isset( $_POST['text'] ) ? sanitize_textarea_field( wp_unslash( $_POST['text'] ) ) : null;
+
+		$result = senroflux()->resolveSuggestion( $run_id, $seq, $action, $text );
+
+		$this->redirectBack( $run_id, is_wp_error( $result ) ? (string) $result->get_error_code() : null );
+	}
+
+	/**
+	 * The suggestions list: Save/Dismiss forms for a `manage_options` viewer,
+	 * plain copyable text ("An administrator can add this to the site
+	 * brief") with no buttons for anyone else.
+	 *
+	 * @param array<string,mixed> $state The run state (carries `suggestions`).
+	 */
+	private function renderSuggestions( array $state ): void {
+		$suggestions = is_array( $state['suggestions'] ?? null ) ? $state['suggestions'] : array();
+		if ( array() === $suggestions ) {
+			return;
+		}
+
+		$run_id     = (int) ( $state['run']['id'] ?? 0 );
+		$may_decide = current_user_can( 'manage_options' );
+
+		echo '<div class="senroflux-suggestions"><h3>' . esc_html__( 'Brief suggestions', 'senroflux' ) . '</h3>';
+
+		foreach ( $suggestions as $suggestion ) {
+			if ( ! is_array( $suggestion ) ) {
+				continue;
+			}
+
+			$seq    = (int) ( $suggestion['seq'] ?? 0 );
+			$text   = (string) ( $suggestion['text'] ?? '' );
+			$status = (string) ( $suggestion['status'] ?? 'pending' );
+
+			echo '<div class="senroflux-suggestion">';
+
+			if ( ! $may_decide ) {
+				printf(
+					'<p>%s</p><p class="description">%s</p>',
+					esc_html( $text ),
+					esc_html__( 'An administrator can add this to the site brief.', 'senroflux' )
+				);
+				echo '</div>';
+				continue;
+			}
+
+			if ( 'pending' !== $status ) {
+				printf(
+					'<p>%1$s <em>(%2$s)</em></p>',
+					esc_html( $text ),
+					esc_html( 'saved' === $status ? __( 'saved', 'senroflux' ) : __( 'dismissed', 'senroflux' ) )
+				);
+				echo '</div>';
+				continue;
+			}
+
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			echo '<input type="hidden" name="action" value="senroflux_suggestion_decision">';
+			echo '<input type="hidden" name="run_id" value="' . esc_attr( (string) $run_id ) . '">';
+			echo '<input type="hidden" name="seq" value="' . esc_attr( (string) $seq ) . '">';
+			wp_nonce_field( 'senroflux_suggestion_' . $run_id );
+			printf(
+				'<textarea name="text" rows="2" class="large-text" maxlength="%d">%s</textarea>',
+				esc_attr( (string) 200 ),
+				esc_textarea( $text )
+			);
+			printf(
+				'<button type="submit" name="senroflux_suggestion_action" value="save" class="button button-primary">%s</button> ',
+				esc_html__( 'Save', 'senroflux' )
+			);
+			printf(
+				'<button type="submit" name="senroflux_suggestion_action" value="dismiss" class="button">%s</button>',
+				esc_html__( 'Dismiss', 'senroflux' )
+			);
+			echo '</form></div>';
+		}
+
+		echo '</div>';
 	}
 
 	/**
@@ -1234,6 +1333,9 @@ class RunsScreen {
 				$this->renderApprovalReviewLinks( $state );
 			}
 		}
+
+		// 0.3 S20: brief suggestions, whatever the run's current status.
+		$this->renderSuggestions( $state );
 
 		// "Refresh" link for the complete-without-JS experience.
 		printf(

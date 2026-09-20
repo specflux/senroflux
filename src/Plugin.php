@@ -22,6 +22,7 @@ use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Report;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\RunStatus;
+use Specflux\SenroFlux\Run\StepKind;
 use Specflux\SenroFlux\Run\WpdbRunStore;
 use Specflux\SenroFlux\Setup\Checks;
 use Specflux\SenroFlux\Skills\Skill;
@@ -681,6 +682,27 @@ final class Plugin {
 	}
 
 	/**
+	 * Save or dismiss a brief suggestion (0.3 S20).
+	 *
+	 * Capability + nonce are the CALLER's job (REST/admin-post): this is the
+	 * ONE place the decision itself is carried out, so both surfaces share
+	 * one implementation of "already resolved" and the brief's own cap.
+	 *
+	 * @param int         $run_id Run id.
+	 * @param int         $seq    The suggestion step's seq.
+	 * @param string      $action 'save' | 'dismiss'.
+	 * @param string|null $text   Optional edited text.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	public function resolveSuggestion( int $run_id, int $seq, string $action, ?string $text = null ): array|WP_Error {
+		if ( ! $this->ready() ) {
+			return $this->ungoverned_error();
+		}
+
+		return \Specflux\SenroFlux\Run\SuggestionResolver::resolve( $this->runner()->store(), $run_id, $seq, $action, $text );
+	}
+
+	/**
 	 * Read one run's current state (no lock, no model calls).
 	 *
 	 * @param int $run_id Run id.
@@ -700,7 +722,9 @@ final class Plugin {
 			return new WP_Error( 'senroflux_forbidden', __( 'This run belongs to another user.', 'senroflux' ), array( 'status' => 403 ) );
 		}
 
-		$steps = array();
+		$steps       = array();
+		$suggestions = array();
+		$resolutions = array();
 		foreach ( $store->getSteps( $run_id ) as $step ) {
 			$steps[] = array(
 				'seq'         => $step->seq,
@@ -713,10 +737,32 @@ final class Plugin {
 				'tokens_out'  => $step->tokensOut,
 				'duration_ms' => $step->durationMs,
 			);
+
+			// 0.3 S20: brief suggestions, listed with their resolution (a
+			// later `suggestion_resolved` system note, never a rewrite of
+			// the suggestion step itself).
+			if ( StepKind::Suggestion === $step->kind && is_array( $step->messageArray ) ) {
+				$suggestions[ $step->seq ] = array(
+					'seq'    => $step->seq,
+					'text'   => (string) ( $step->messageArray['text'] ?? '' ),
+					'status' => 'pending',
+				);
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'suggestion_resolved' === ( $step->messageArray['note'] ?? '' )
+			) {
+				$resolutions[ (int) ( $step->messageArray['suggestion_seq'] ?? -1 ) ] = $step->messageArray;
+			}
+		}
+		foreach ( $resolutions as $seq => $resolution ) {
+			if ( isset( $suggestions[ $seq ] ) ) {
+				$suggestions[ $seq ]['status'] = (string) ( $resolution['action'] ?? '' ) === 'save' ? 'saved' : 'dismissed';
+				$suggestions[ $seq ]['text']   = (string) ( $resolution['text'] ?? $suggestions[ $seq ]['text'] );
+			}
 		}
 
 		return array(
-			'run'   => array(
+			'run'         => array(
 				'id'                  => $run->id,
 				'user_id'             => $run->userId,
 				'consumer'            => $run->consumer,
