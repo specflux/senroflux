@@ -264,6 +264,20 @@ class RunsScreen {
 				// selected yet.
 				'gateMode'     => Plugin::currentGateMode()->value,
 				'examples'     => $this->exampleGoals(),
+				// 0.3 S10 (17c): the admin-ajax surface's tick/cancel/start
+				// actions carry the SAME `senroflux_run` nonce + `read`
+				// capability check the admin-post handlers use, RE-CHECKED
+				// server-side in `Ajax` — this is only the browser's half.
+				// admin-ajax (not REST) is the interaction layer's surface:
+				// {@see \Specflux\SenroFlux\Admin\ScreenCapability::tickAsScreen()}
+				// only wraps the ajax tick handler, so it is the one path
+				// that lets a screen-capability holder resolve a run they do
+				// not own; REST's tick route has no such wrapper.
+				'nonce'        => wp_create_nonce( 'senroflux_run' ),
+				// The one HTTP consumer this screen is allowed to start as
+				// (S13); registered only for a holder of the screen
+				// capability ({@see registerAdminConsumer()}).
+				'consumer'     => self::CONSUMER,
 			)
 		);
 	}
