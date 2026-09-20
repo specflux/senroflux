@@ -347,6 +347,8 @@ final class Plugin {
 		// Observation screen (S10).
 		if ( function_exists( 'is_admin' ) && is_admin() ) {
 			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
+			// 0.3 S20: the site-brief settings submenu.
+			( new \Specflux\SenroFlux\Admin\SettingsScreen() )->register();
 		}
 
 		// 0.3 S3: Agent Safety's absence is advisory only — runs still start

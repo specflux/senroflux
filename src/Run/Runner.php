@@ -1114,12 +1114,15 @@ final class Runner {
 			? $pack->withheldRoleNotice( $run->withheldRoles )
 			: null;
 
-		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice );
+		// 0.3 S20: the site owner's standing notes, opaque to the harness.
+		$brief = SiteBrief::get();
+
+		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice, $brief );
 
 		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
 
-		$this->auditInstruction( $run, $skills, $text, $new_steps );
+		$this->auditInstruction( $run, $skills, $text, $new_steps, $brief );
 
 		return $text;
 	}
@@ -1263,8 +1266,9 @@ final class Runner {
 	 *
 	 * @param list<Skill>               $skills     Freshly collected set.
 	 * @param list<array<string,mixed>> $new_steps  Accumulator.
+	 * @param string                    $brief      0.3 S20: the brief text this render saw.
 	 */
-	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps ): void {
+	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps, string $brief = '' ): void {
 		$fingerprints = array();
 		foreach ( $skills as $skill ) {
 			$fingerprints[ $skill->id ] = hash( 'sha256', $skill->body );
@@ -1273,12 +1277,16 @@ final class Runner {
 		$recorded = $this->findInstructionRecord( $run->id );
 
 		if ( null === $recorded ) {
+			// S20: the brief's hash rides next to the skills hashes, ONLY on
+			// the seq-0 record — a report can show which brief a run saw,
+			// without re-recording it on every drift note.
 			$this->store->prependSystemStep(
 				$run->id,
 				array(
-					'note'   => 'system_instruction',
-					'text'   => $text,
-					'skills' => $fingerprints,
+					'note'       => 'system_instruction',
+					'text'       => $text,
+					'skills'     => $fingerprints,
+					'brief_hash' => SiteBrief::hash( $brief ),
 				)
 			);
 			return;
