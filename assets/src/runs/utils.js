@@ -32,9 +32,18 @@ export const RUN_TABS = [
 		predicate: ( run ) => Boolean( run.viewer_may_tick ) && isParkedStatus( run.status ),
 	},
 	{
+		// Everything active that is not this viewer's own park: `pending`
+		// (a run has been started but has not ticked yet — it belongs here,
+		// not in a fourth invisible bucket), `running`, and a park belonging
+		// to someone else. This predicate plus `needs_you` and `finished`
+		// must partition every `RunStatus` case exactly once — a live-review
+		// finding was a `pending` run that landed in NONE of the three tabs
+		// and only showed up in "All" (see live-review-findings tests).
 		key: 'running',
 		label: 'Running',
-		predicate: ( run ) => 'running' === run.status,
+		predicate: ( run ) =>
+			! isTerminalStatus( run.status ) &&
+			! ( Boolean( run.viewer_may_tick ) && isParkedStatus( run.status ) ),
 	},
 	{
 		key: 'finished',
@@ -70,8 +79,17 @@ export function tabCounts( runs ) {
  * Group a run's steps into ledger entries for the chat stream.
  *
  * Consecutive `tool_result` steps collapse into one ledger group of
- * "N actions". Anything else (goal, model prose, an UNresolved park, a
- * report) breaks the group and is emitted as its own entry. An `approval`
+ * "N actions". A real run's step kinds alternate `model, tool_result, model,
+ * tool_result, ...`, because each tool call is itself preceded by a `model`
+ * step that only carries the function-call request, with no user-visible
+ * prose — a live-review finding (stage-17a) found this literal-adjacency
+ * rule NEVER fires against a real run, rendering six consecutive "1 action"
+ * rows instead of one "6 actions" row. So a `model` step with no prose
+ * (`stepText() === ''`) is transparent to grouping: it neither breaks a run
+ * of `tool_result`s nor is emitted as its own bubble. A `model` step that
+ * DOES carry prose still breaks the group and renders as its own entry, same
+ * as before. Anything else (goal, an UNresolved park, a report) also still
+ * breaks the group. An `approval`
  * step that already carries its resolution is folded INTO the ledger group
  * too (S10: "a resolved approval is marked on its call"), rather than
  * appearing as its own bubble, because the very next `tool_result` step is
@@ -111,6 +129,13 @@ export function groupSteps( steps ) {
 			// A resolved approval step (a reject leaves the approval step
 			// itself at 'parked' and appends its OWN rejected tool_result
 			// instead) folds into the ledger rather than opening a new bubble.
+			previousKind = step.kind;
+			return;
+		}
+		if ( 'model' === step.kind && '' === stepText( step ) ) {
+			// A call-only model step (the function-call request itself, no
+			// prose): transparent to the ledger, must not break a run of
+			// tool_result groups either side of it.
 			previousKind = step.kind;
 			return;
 		}
@@ -247,9 +272,36 @@ export function planApprovalCount( plan, gateMode ) {
 	}, 0 );
 }
 
-/** A human label for a ledger row: the verb, since S10 has no separate label field yet. */
+/**
+ * A human-readable label for a ledger row, derived from the raw ability id.
+ *
+ * A live-review finding: the ledger showed the raw mangled ability id
+ * (`wpab__senroflux__read-content`) as its own label, with nothing readable
+ * next to it. S10 asks for BOTH a readable label and the ability id — the id
+ * stays visible (`stepVerb()`, rendered separately in `LedgerGroup`), this
+ * only derives the readable half. The mcp-adapter/Abilities-API id shape is
+ * `wpab__<namespace>__<ability-slug>` (WordPress ability ids are namespaced
+ * with a double underscore, mangled again with `wpab__` for MCP tool-name
+ * rules that forbid `/`); this takes the LAST `__`-separated segment (the
+ * ability slug) and turns its dashes/underscores into spaces, Sentence case.
+ * A verb that doesn't match the shape (no `__`) is returned as-is rather
+ * than guessed at.
+ */
 export function stepLabel( step ) {
-	return stepVerb( step ) || 'Tool call';
+	const verb = stepVerb( step );
+	if ( ! verb ) {
+		return 'Tool call';
+	}
+	const segments = verb.split( '__' );
+	const slug = segments[ segments.length - 1 ];
+	if ( ! slug || slug === verb ) {
+		return verb;
+	}
+	const words = slug.replace( /[-_]+/g, ' ' ).trim();
+	if ( ! words ) {
+		return verb;
+	}
+	return words.charAt( 0 ).toUpperCase() + words.slice( 1 );
 }
 
 /** The plain-text result shown under a ledger row. */
