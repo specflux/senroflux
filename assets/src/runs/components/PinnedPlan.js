@@ -18,11 +18,23 @@ export default function PinnedPlan( { plan, steps } ) {
 	const done = progress.reduce( ( sum, p ) => sum + p.done, 0 );
 	const total = progress.reduce( ( sum, p ) => sum + p.total, 0 );
 
+	// `planProgress()` is a best-effort sequential match (see its docblock),
+	// not an authoritative index the REST payload carries — the "~" prefix
+	// and title make that visible in the UI instead of only in a comment, so
+	// the count is never presented as more exact than it is.
+	const approxTitle = __(
+		'This count is estimated by matching the plan against executed calls in order; it may be briefly wrong if calls run out of the plan\'s listed order.',
+		'senroflux'
+	);
+	const approxCount = ( doneCount, totalCount ) => sprintf( '~%d / %d', doneCount, totalCount );
+
 	return (
 		<div className="senroflux-pinned-plan">
 			<div className="senroflux-pinned-plan-header">
 				<span className="senroflux-pinned-plan-goal">{ plan.goal }</span>
-				<span className="senroflux-pinned-plan-count">{ sprintf( '%d / %d', done, total ) }</span>
+				<span className="senroflux-pinned-plan-count" title={ approxTitle }>
+					{ approxCount( done, total ) }
+				</span>
 				<button type="button" className="senroflux-pinned-plan-toggle" onClick={ () => setHidden( ! hidden ) }>
 					{ hidden ? __( 'Show', 'senroflux' ) : __( 'Hide', 'senroflux' ) }
 				</button>
@@ -33,8 +45,8 @@ export default function PinnedPlan( { plan, steps } ) {
 						<li key={ index } className={ progress[ index ] && progress[ index ].waiting ? 'is-waiting' : '' }>
 							<span className="senroflux-plan-step-text">{ planStep.text }</span>
 							{ progress[ index ] && progress[ index ].total > 1 && (
-								<span className="senroflux-plan-step-count">
-									{ sprintf( '%d / %d', progress[ index ].done, progress[ index ].total ) }
+								<span className="senroflux-plan-step-count" title={ approxTitle }>
+									{ approxCount( progress[ index ].done, progress[ index ].total ) }
 								</span>
 							) }
 							{ progress[ index ] && progress[ index ].waiting && (

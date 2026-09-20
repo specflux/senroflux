@@ -1,4 +1,4 @@
-import { __ } from '@wordpress/i18n';
+import { __, sprintf } from '@wordpress/i18n';
 import { groupSteps, stepText, isTerminalStatus } from '../utils';
 import PinnedPlan from './PinnedPlan';
 import LedgerGroup from './LedgerGroup';
@@ -68,6 +68,26 @@ export default function Chat( { run, steps } ) {
 			<div className="senroflux-chat-header">
 				<h1 className="senroflux-run-heading">{ run.goal }</h1>
 			</div>
+			{ /*
+			 * S6 disclosure: a role the starter lacks the capability for is
+			 * withheld from the run's tool surface — without this line the run
+			 * silently has fewer abilities than the pack advertises and the
+			 * viewer has no way to know why something wasn't attempted. A
+			 * viewer holding every capability sees nothing (no empty
+			 * paragraph either).
+			 */ }
+			{ Array.isArray( run.withheld_roles ) && run.withheld_roles.length > 0 && (
+				<p className="senroflux-withheld-roles">
+					{ sprintf(
+						/* translators: %s: comma-separated list of withheld role names. */
+						__(
+							'Some abilities are off for this run (your account is missing the capability they need): %s',
+							'senroflux'
+						),
+						run.withheld_roles.join( ', ' )
+					) }
+				</p>
+			) }
 			<PinnedPlan plan={ plan } steps={ steps } />
 			<div className="senroflux-chat-stream">
 				<div className="senroflux-chat-bubble senroflux-chat-bubble-user">{ run.goal }</div>

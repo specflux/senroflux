@@ -251,6 +251,16 @@
 	outline-offset: 2px;
 }
 
+.senroflux-plan-approval-count {
+	font-weight: 600;
+	color: #8a4b00;
+}
+
+.senroflux-withheld-roles {
+	color: #646970;
+	overflow-wrap: anywhere;
+}
+
 .senroflux-park-actions {
 	display: flex;
 	/* Live-review finding: Approve and Reject need spacing between them (no

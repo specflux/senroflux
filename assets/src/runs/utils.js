@@ -207,6 +207,46 @@ export function planProgress( plan, steps ) {
 	} );
 }
 
+/**
+ * How many approvals a plan implies (S7/S10), so the plan card discloses
+ * this BEFORE the human accepts it, not step by step as the run goes.
+ *
+ * Built-in mode: every Tier >= 1 verb OCCURRENCE across the whole plan, not
+ * every qualifying STEP — a step naming three Tier >= 1 verbs parks three
+ * times, once per call, not once. Ported from the retired PHP plan card
+ * (`RunsScreen::countParksInBuiltinMode()`/`countVerbsAtOrAboveTier()`) after
+ * a live-run defect: counting steps instead of verb occurrences told the
+ * approver "approve 2" when the real answer was 4 (one step grouped three
+ * Tier >= 1 verbs: [create-draft], [media-generate, update-alt,
+ * set-featured-image], [read] — the correct count is 1 + 3 + 0 = 4). A verb
+ * whose tier is unknown (the step carries no `tier`) is treated as Tier 2 —
+ * fail closed, the same rule `VerbTier::tierFor()` uses server-side.
+ *
+ * Agent Safety mode: no count at all — S3's built-in-only approval count has
+ * no AS-mode equivalent here (a Tier-2 verb's own tier badge already
+ * discloses it per call), so this returns `null` and the caller renders
+ * nothing.
+ *
+ * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier }] }`).
+ * @param {string} gateMode 'agent_safety' | 'built_in'.
+ * @return {number|null} The approval count in built-in mode, else `null`.
+ */
+export function planApprovalCount( plan, gateMode ) {
+	if ( 'built_in' !== gateMode ) {
+		return null;
+	}
+
+	const FAIL_CLOSED_TIER = 2;
+	const THRESHOLD = 1;
+
+	return ( plan.steps || [] ).reduce( ( total, step ) => {
+		const verbs = Array.isArray( step.verbs ) ? step.verbs : [];
+		const tier = Number.isInteger( step.tier ) ? step.tier : FAIL_CLOSED_TIER;
+		const qualifying = tier >= THRESHOLD ? verbs.length : 0;
+		return total + qualifying;
+	}, 0 );
+}
+
 /** A human label for a ledger row: the verb, since S10 has no separate label field yet. */
 export function stepLabel( step ) {
 	return stepVerb( step ) || 'Tool call';

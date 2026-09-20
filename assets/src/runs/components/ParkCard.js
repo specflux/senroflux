@@ -1,6 +1,7 @@
 import { useEffect, useRef } from '@wordpress/element';
-import { __ } from '@wordpress/i18n';
+import { __, _n, sprintf } from '@wordpress/i18n';
 import TierBadge from './TierBadge';
+import { planApprovalCount } from '../utils';
 
 const HEADINGS = {
 	question: __( 'Question for you', 'senroflux' ),
@@ -70,6 +71,7 @@ function QuestionBody( { payload } ) {
 function PlanBody( { payload, gateMode } ) {
 	const steps = Array.isArray( payload.steps ) ? payload.steps : [];
 	const assumptions = Array.isArray( payload.assumptions ) ? payload.assumptions : [];
+	const approvalCount = planApprovalCount( payload, gateMode );
 
 	return (
 		<div className="senroflux-park-body">
@@ -82,6 +84,27 @@ function PlanBody( { payload, gateMode } ) {
 					</li>
 				) ) }
 			</ol>
+			{ /*
+			 * Disclosure, not cosmetics: the built-in gate's whole guarantee is
+			 * that a human sees what they are agreeing to BEFORE accepting a
+			 * plan. `planApprovalCount()` counts Tier >= 1 VERB OCCURRENCES
+			 * across the plan, not steps — see its docblock for the live-run
+			 * defect this exact count was the fix for.
+			 */ }
+			{ null !== approvalCount && (
+				<p className="senroflux-plan-approval-count">
+					{ sprintf(
+						/* translators: %d: number of approvals this plan will ask for. */
+						_n(
+							'This plan will ask you to approve %d change.',
+							'This plan will ask you to approve %d changes.',
+							approvalCount,
+							'senroflux'
+						),
+						approvalCount
+					) }
+				</p>
+			) }
 			{ assumptions.length > 0 && (
 				<>
 					<h4>{ __( 'Assumptions', 'senroflux' ) }</h4>
