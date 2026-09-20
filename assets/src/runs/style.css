@@ -16,9 +16,13 @@
 	padding-block: 12px;
 }
 
+/* The four tabs do not fit one line in this column at common admin widths.
+ * They wrap rather than scroll: a tab pushed off a scrolling strip has no
+ * affordance, and "All" is the only tab a `pending` run appears in. */
 .senroflux-run-tabs {
 	display: flex;
 	flex-wrap: wrap;
+	column-gap: 4px;
 	border-block-end: 1px solid #dcdcde;
 	padding-inline: 8px;
 	margin-block-end: 6px;
@@ -32,6 +36,7 @@
 	cursor: pointer;
 	font-size: 12px;
 	color: #50575e;
+	white-space: nowrap;
 }
 
 .senroflux-run-tab.is-active {
@@ -47,7 +52,10 @@
 }
 
 .senroflux-run-row {
-	display: block;
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 4px;
 	width: 100%;
 	text-align: start;
 	background: none;
@@ -63,11 +71,77 @@
 }
 
 .senroflux-run-row-title {
-	display: block;
-	font-weight: 500;
-	/* Live-review finding: long goal titles must WRAP, not run off the
+	/* Stage-17f decision: clamp to two lines with an ellipsis so a run row
+	 * takes a predictable amount of vertical space and more than four rows
+	 * fit on screen. The full goal text stays in the DOM (this is a purely
+	 * visual clamp, not a JS truncation) so the accessible name is not
+	 * shortened — only the paint is. Both the standard and prefixed
+	 * properties are set; `overflow-wrap: anywhere` is kept from the
+	 * live-review finding below so mid-word breaks still happen inside the
+	 * two visible lines rather than overflowing them.
+	 *
+	 * Live-review finding: long goal titles must WRAP, not run off the
 	 * viewport — no `white-space: nowrap`, no `text-overflow: ellipsis`. */
+	display: -webkit-box;
+	width: 100%;
+	-webkit-box-orient: vertical;
+	-webkit-line-clamp: 2;
+	line-clamp: 2;
+	overflow: hidden;
+	font-weight: 500;
 	overflow-wrap: anywhere;
+}
+
+.senroflux-run-row-pack {
+	font-size: 11px;
+	color: #646970;
+	background: #f0f0f1;
+	border-radius: 10px;
+	padding: 1px 8px;
+	white-space: nowrap;
+}
+
+/* Status pill (run list rows and the run header). Modifiers are built by
+ * template interpolation in StatusPill.js: `senroflux-pill-${ modifier }`
+ * with modifier one of needs|running|done; `cancelled` is included too
+ * since it is a real run status even though the current component never
+ * emits that modifier itself. */
+.senroflux-pill {
+	display: inline-block;
+	font-size: 11px;
+	padding: 1px 8px;
+	border-radius: 10px;
+	background: #e6e6e7;
+	color: #3c434a;
+	white-space: nowrap;
+}
+
+.senroflux-pill-needs {
+	background: #fcf0e3;
+	color: #8a4b00;
+	font-weight: 600;
+}
+
+.senroflux-pill-running {
+	background: #dbe9f6;
+	color: #135e96;
+}
+
+.senroflux-pill-done {
+	background: #edfaef;
+	color: #00701a;
+}
+
+.senroflux-pill-cancelled {
+	background: #f6e0e0;
+	color: #8a2424;
+}
+
+.senroflux-run-rows-empty {
+	display: block;
+	padding: 16px 14px;
+	color: #646970;
+	font-style: italic;
 }
 
 .senroflux-runs-main {
@@ -93,6 +167,16 @@
 	margin: 0;
 }
 
+/* "Needs you" jump button in the run header — same amber-on-transparent
+ * treatment as the pinned-plan jump control in the prototype, so it reads
+ * as an action distinct from the plain WP-admin `.button`. */
+.senroflux-needs-you {
+	background: #dba617;
+	border-color: #dba617;
+	color: #1d2327;
+	font-weight: 600;
+}
+
 .senroflux-usage-ceilings {
 	display: flex;
 	flex-wrap: wrap;
@@ -101,8 +185,30 @@
 	color: #646970;
 }
 
+/* Individual usage-ceiling chip ("Tool calls 10/30") so the three ceilings
+ * read as distinct pieces of data rather than one run-on sentence. */
+.senroflux-usage-ceiling {
+	display: inline-flex;
+	align-items: center;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 10px;
+	padding: 1px 10px;
+	white-space: nowrap;
+}
+
 .senroflux-pick-a-run {
 	padding: 16px 20px;
+}
+
+.senroflux-loading {
+	padding: 16px 20px;
+	color: #646970;
+}
+
+.senroflux-action-error {
+	margin: 0 20px;
+	color: #b32d2e;
 }
 
 .senroflux-plan-decision,
@@ -111,6 +217,14 @@
 	flex-direction: column;
 	gap: 6px;
 	margin-block: 10px;
+}
+
+.senroflux-answer-other,
+.senroflux-answer-text {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 60px;
+	resize: vertical;
 }
 
 .senroflux-chat {
@@ -164,12 +278,28 @@
 	align-items: baseline;
 }
 
+.senroflux-pinned-plan-goal {
+	font-weight: 600;
+	overflow-wrap: anywhere;
+}
+
+.senroflux-pinned-plan-count {
+	font-size: 11px;
+	color: #646970;
+	white-space: nowrap;
+}
+
 .senroflux-pinned-plan-toggle {
 	background: none;
 	border: 0;
 	color: #2271b1;
 	cursor: pointer;
 	padding: 0;
+}
+
+.senroflux-pinned-plan-none {
+	color: #646970;
+	font-style: italic;
 }
 
 .senroflux-pinned-plan-steps {
@@ -182,6 +312,17 @@
 	display: flex;
 	gap: 8px;
 	padding-block: 2px;
+}
+
+.senroflux-plan-step-text {
+	flex: 1 1 auto;
+	overflow-wrap: anywhere;
+}
+
+.senroflux-plan-step-count {
+	font-size: 11px;
+	color: #646970;
+	white-space: nowrap;
 }
 
 .senroflux-plan-step-waiting {
@@ -218,6 +359,26 @@
 	border-block-start: 0;
 }
 
+/* The ✓/✕ mark, the ability id (monospace, per the prototype's `.mono`
+ * treatment) and the verb/status wording that make up one ledger line. The
+ * mark itself carries no rejected/approved modifier class (LedgerGroup.js
+ * only varies its text content, ✓ vs ✕), so it gets one neutral, legible
+ * weight rather than a colour that would be wrong half the time. */
+.senroflux-ledger-status {
+	font-weight: 700;
+	color: #3c434a;
+}
+
+.senroflux-ledger-label {
+	font-family: Menlo, Consolas, monospace;
+	font-size: 11.5px;
+	color: #50575e;
+}
+
+.senroflux-ledger-verb {
+	color: #50575e;
+}
+
 .senroflux-ledger-result {
 	flex-basis: 100%;
 	padding-inline-start: 20px;
@@ -237,6 +398,9 @@
  * never even renders this element in built-in mode). */
 .senroflux-tier {
 	display: inline-block;
+	/* The park card body is a flex column, whose default stretch would blow
+	 * an inline-block badge out to the full card width. */
+	align-self: flex-start;
 	font-size: 10.5px;
 	padding: 0 6px;
 	border-radius: 9px;
@@ -283,6 +447,28 @@
 	outline-offset: 2px;
 }
 
+.senroflux-park-body {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+}
+
+.senroflux-rationale {
+	color: #646970;
+	margin: 0;
+}
+
+.senroflux-plan-steps {
+	margin-block: 6px;
+	margin-inline-start: 20px;
+	margin-inline-end: 0;
+	padding: 0;
+}
+
+.senroflux-plan-steps li {
+	margin-block: 4px;
+}
+
 .senroflux-plan-approval-count {
 	font-weight: 600;
 	color: #8a4b00;
@@ -325,6 +511,20 @@
 	color: #b32d2e;
 }
 
+.senroflux-plan-veto-note {
+	width: 100%;
+	box-sizing: border-box;
+	min-height: 60px;
+	resize: vertical;
+}
+
+.senroflux-run-actions {
+	display: flex;
+	gap: 10px;
+	padding: 12px 20px;
+	border-block-start: 1px solid #dcdcde;
+}
+
 /* Suggestion cards (0.3 S20). */
 .senroflux-suggestion-card {
 	background: #fff;
@@ -341,6 +541,10 @@
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	color: #1d4f76;
+}
+
+.senroflux-suggestion-status {
+	color: #646970;
 }
 
 .senroflux-suggestion-text,
