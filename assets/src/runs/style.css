@@ -16,10 +16,13 @@
 	padding-block: 12px;
 }
 
+/* The four tabs do not fit one line in this column at common admin widths.
+ * They wrap rather than scroll: a tab pushed off a scrolling strip has no
+ * affordance, and "All" is the only tab a `pending` run appears in. */
 .senroflux-run-tabs {
 	display: flex;
-	flex-wrap: nowrap;
-	overflow-x: auto;
+	flex-wrap: wrap;
+	column-gap: 4px;
 	border-block-end: 1px solid #dcdcde;
 	padding-inline: 8px;
 	margin-block-end: 6px;
