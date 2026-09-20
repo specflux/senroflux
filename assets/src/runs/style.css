@@ -187,7 +187,8 @@
 .senroflux-usage-ceiling {
 	display: inline-flex;
 	align-items: center;
-	background: #f0f0f1;
+	background: #fff;
+	border: 1px solid #dcdcde;
 	border-radius: 10px;
 	padding: 1px 10px;
 	white-space: nowrap;
