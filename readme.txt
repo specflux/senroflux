@@ -92,6 +92,11 @@ provider's terms if you have connected a different one.
 * Breaking (B0): `senroflux/create-post` now refuses `slug_collision` (409)
   when a non-trashed page or post of the same type already holds the
   requested slug, or matches the title case-insensitively.
+* Breaking (B0/S10): the Runs screen moved out of Tools to its own top-level
+  "SenroFlux" menu; `tools.php?page=senroflux-runs` redirects there. The
+  screen is now a React app (`assets/src/runs/` built with
+  `@wordpress/scripts`) — 0.2's server-rendered run list, new-run form and
+  park cards are retired in its favour.
 
 = 0.2.0 =
 * Schema v2: run status/step-kind enums, `resume` object replaces the

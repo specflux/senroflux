@@ -13,3 +13,8 @@ phpstan-bootstrap.php
 phpunit.xml.dist
 tests
 CONTEXT.md
+node_modules
+package.json
+package-lock.json
+webpack.config.js
+assets/src
