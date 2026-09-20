@@ -17,10 +17,11 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Routes under senroflux/v1:
- *   POST /runs                {consumer, goal, budget?}  (allow-list via senroflux_http_consumers)
- *   POST /runs/{id}/tick      {step_count, approval_action?}
+ *   POST /runs                          {consumer, goal, budget?, follow_up_of?}  (allow-list via senroflux_http_consumers)
+ *   POST /runs/{id}/tick                {step_count, approval_action?}
  *   POST /runs/{id}/cancel
  *   GET  /runs/{id}
+ *   POST /runs/{id}/suggestions/{n}     {action, text?} (0.3 S20; manage_options + a REST nonce)
  */
 final class Rest {
 
@@ -36,16 +37,21 @@ final class Rest {
 				'callback'            => array( $this, 'routeStart' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
 				'args'                => array(
-					'consumer' => array(
+					'consumer'     => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'goal'     => array(
+					'goal'         => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'budget'   => array(
+					'budget'       => array(
 						'type'     => 'object',
+						'required' => false,
+					),
+					// 0.3 S20: follow-up runs.
+					'follow_up_of' => array(
+						'type'     => 'integer',
 						'required' => false,
 					),
 				),
@@ -139,12 +145,17 @@ final class Rest {
 			return $this->respond( $policy );
 		}
 
+		$follow_up_of = $request->get_param( 'follow_up_of' );
+
 		return $this->respond(
 			senroflux()->start(
 				$consumer,
 				(string) $request->get_param( 'goal' ),
 				$policy['allow'],
-				$policy['budget']
+				$policy['budget'],
+				null,
+				null,
+				null !== $follow_up_of ? (int) $follow_up_of : null
 			)
 		);
 	}

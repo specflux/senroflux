@@ -386,9 +386,13 @@ final class Plugin {
 	 * @param array<string,int> $budget         Optional per-run overrides.
 	 * @param string|null       $pack           Pack name (S9); derives the allow-list.
 	 * @param list<string>|null $skills_disable Non-required skill ids to drop (S8).
+	 * @param int|null          $follow_up_of   0.3 S20: a source run id to seed this run
+	 *                                          from. Forces $pack to the source's pack.
 	 * @return array<string,mixed>|WP_Error RunState or senroflux_ungoverned /
 	 *                                      senroflux_bad_request / pack_unknown /
-	 *                                      pack_unbound / skills_too_large.
+	 *                                      pack_unbound / skills_too_large /
+	 *                                      follow_up_not_found / follow_up_not_finished /
+	 *                                      follow_up_unsupported / follow_up_forbidden.
 	 */
 	public function start(
 		string $consumer,
@@ -396,7 +400,8 @@ final class Plugin {
 		array $allow = array(),
 		array $budget = array(),
 		?string $pack = null,
-		?array $skills_disable = null
+		?array $skills_disable = null,
+		?int $follow_up_of = null
 	): array|WP_Error {
 		if ( ! $this->ready() ) {
 			return $this->ungoverned_error();
@@ -411,6 +416,32 @@ final class Plugin {
 
 		$user_id      = (int) get_current_user_id();
 		$caller_allow = $allow; // Captured BEFORE the pack derives it (S9).
+
+		// 0.3 S20: a follow-up run. Resolved BEFORE pack resolution — the
+		// source's pack REPLACES whatever $pack the caller passed, fail
+		// closed: a source with no pack of its own (a direct-allow run) has
+		// no "source pack's run capability" to check, so it is refused
+		// rather than guessed at.
+		if ( null !== $follow_up_of ) {
+			$source = $this->runner()->store()->getRun( $follow_up_of );
+			if ( null === $source ) {
+				return new WP_Error( 'follow_up_not_found', __( 'The source run was not found.', 'senroflux' ), array( 'status' => 404 ) );
+			}
+			if ( ! in_array( $source->status, array( RunStatus::Completed, RunStatus::Failed, RunStatus::Cancelled ), true ) ) {
+				return new WP_Error( 'follow_up_not_finished', __( 'The source run has not finished yet.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+			if ( null === $source->pack ) {
+				return new WP_Error( 'follow_up_unsupported', __( 'The source run has no capability pack to follow up on.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+
+			$source_pack_obj = $this->packRegistry()->get( $source->pack );
+			$run_capability  = null !== $source_pack_obj ? $source_pack_obj->runCapability() : '';
+			if ( '' === $run_capability || ! function_exists( 'current_user_can' ) || ! current_user_can( $run_capability ) ) {
+				return new WP_Error( 'follow_up_forbidden', __( 'You do not hold the source run\'s capability.', 'senroflux' ), array( 'status' => 403 ) );
+			}
+
+			$pack = $source->pack; // Forced (S20), regardless of what the caller asked for.
+		}
 
 		// 0.3 S11: start() re-decides on the server through the SAME evaluator
 		// the setup panel renders — the harness's own blocking checks (the
@@ -515,7 +546,8 @@ final class Plugin {
 			$conversation_locale,
 			$content_locale,
 			$gate_mode,
-			$withheld_roles
+			$withheld_roles,
+			$follow_up_of
 		);
 
 		// S9: when a pack drove the allow-list, record that a caller-supplied
@@ -782,14 +814,18 @@ final class Plugin {
 				'gate_mode'           => $run->gateMode->value,
 				// 0.3 S6: pinned at start(), rendered once by the run header.
 				'withheld_roles'      => $run->withheldRoles,
+				// 0.3 S20: the source run id when this run is a follow-up.
+				'follow_up_of'        => $run->followUpOf,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
 				// 0.2 S12: the harness-built report (result_json), surfaced on
 				// every read so a terminal run carries its changes list.
 				'report'              => $run->result,
 			),
-			'steps' => $steps,
-			'ui'    => array(),
+			'steps'       => $steps,
+			// 0.3 S20: keyed by seq in $suggestions above; re-indexed for the caller.
+			'suggestions' => array_values( $suggestions ),
+			'ui'          => array(),
 		);
 	}
 
@@ -818,6 +854,11 @@ final class Plugin {
 					'tokens_in'       => $run->tokensIn,
 					'tokens_out'      => $run->tokensOut,
 					'updated_at'      => $run->updatedAtUtc,
+					// 0.3 S20: the Runs list needs both to offer "Follow up"
+					// only on an eligible finished run, and to link a
+					// follow-up's row back to its source.
+					'pack'            => $run->pack,
+					'follow_up_of'    => $run->followUpOf,
 					// 0.3 S9: "Needs you" reuses the SAME delegation seam the
 					// Runner itself gates ticking on — never a re-derived rule
 					// that could drift from it.

@@ -66,6 +66,12 @@ final class Run {
 		 * @var list<string>
 		 */
 		public readonly array $withheldRoles = array(),
+		/**
+		 * 0.3 S20: the source run's id when this run was started as a
+		 * follow-up (`follow_up_of`); pinned at start(), never changes
+		 * afterwards. Null for an ordinary run.
+		 */
+		public readonly ?int $followUpOf = null,
 	) {
 	}
 
@@ -110,6 +116,7 @@ final class Run {
 			contentLocale: isset( $row['content_locale'] ) && is_string( $row['content_locale'] ) && '' !== $row['content_locale'] ? $row['content_locale'] : null,
 			gateMode: GateMode::tryFrom( (string) ( $row['gate_mode'] ?? 'agent_safety' ) ) ?? GateMode::AgentSafety,
 			withheldRoles: is_array( $withheld ) ? array_values( array_filter( $withheld, 'is_string' ) ) : array(),
+			followUpOf: isset( $row['follow_up_of'] ) && '' !== (string) $row['follow_up_of'] ? (int) $row['follow_up_of'] : null,
 		);
 	}
 
@@ -144,6 +151,7 @@ final class Run {
 			'content_locale'        => $this->contentLocale,
 			'gate_mode'             => $this->gateMode->value,
 			'withheld_roles_json'   => (string) wp_json_encode( $this->withheldRoles ),
+			'follow_up_of'          => $this->followUpOf,
 		);
 	}
 }

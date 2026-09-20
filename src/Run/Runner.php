@@ -335,7 +335,7 @@ final class Runner {
 				$new_steps[] = $this->appendStep(
 					$run_id,
 					StepKind::User,
-					new UserMessage( array( new MessagePart( $run->goal ) ) )
+					new UserMessage( array( new MessagePart( $this->goalWithFollowUpSeed( $run ) ) ) )
 				);
 			}
 
@@ -1004,6 +1004,33 @@ final class Runner {
 		return false;
 	}
 
+	/**
+	 * 0.3 S20: for a follow-up run, prepend the source run's own harness-built
+	 * change rows (object type, id, title, status, edit link) to the goal, as
+	 * the first user turn. NO CHAINING — the seed is built from the source
+	 * run's `result.changes` only, never from whatever seed the source run
+	 * itself carried, and never from the source's model prose (its `summary`
+	 * is never read here). Empty when the source has no recorded changes, or
+	 * none is found, so a follow-up of a run that touched nothing carries no
+	 * misleading notice.
+	 */
+	private function goalWithFollowUpSeed( Run $run ): string {
+		if ( null === $run->followUpOf ) {
+			return $run->goal;
+		}
+
+		$source = $this->store->getRun( $run->followUpOf );
+		$raw    = ( null !== $source && is_array( $source->result ) && is_array( $source->result['changes'] ?? null ) )
+			? $source->result['changes']
+			: array();
+		/** @var list<array<string,mixed>> $changes Only array-shaped rows; a corrupt entry is dropped here, not passed on. */
+		$changes = array_values( array_filter( $raw, 'is_array' ) );
+
+		$seed = FollowUpSeed::render( $changes );
+
+		return '' === $seed ? $run->goal : $seed . "\n\n" . $run->goal;
+	}
+
 	private function addTokens( int $run_id, int $tokens_in, int $tokens_out ): void {
 		$current = $this->store->getRun( $run_id );
 		if ( null === $current ) {
@@ -1539,17 +1566,19 @@ final class Runner {
 	private function state( Run $run, array $new_steps, ?array $ui ): array {
 		return array(
 			'run'       => array(
-				'id'         => $run->id,
-				'user_id'    => $run->userId,
-				'consumer'   => $run->consumer,
-				'goal'       => $run->goal,
-				'status'     => $run->status->value,
-				'step_count' => $run->stepCount,
-				'tokens_in'  => $run->tokensIn,
-				'tokens_out' => $run->tokensOut,
-				'error'      => $run->error,
+				'id'           => $run->id,
+				'user_id'      => $run->userId,
+				'consumer'     => $run->consumer,
+				'goal'         => $run->goal,
+				'status'       => $run->status->value,
+				'step_count'   => $run->stepCount,
+				'tokens_in'    => $run->tokensIn,
+				'tokens_out'   => $run->tokensOut,
+				'error'        => $run->error,
 				// 0.3 S3: pinned at start(), rendered once by the run header.
-				'gate_mode'  => $run->gateMode->value,
+				'gate_mode'    => $run->gateMode->value,
+				// 0.3 S20: the source run id when this run is a follow-up.
+				'follow_up_of' => $run->followUpOf,
 			),
 			'new_steps' => $new_steps,
 			'ui'        => $ui ?? array(),

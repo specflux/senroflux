@@ -330,6 +330,12 @@ class RunsScreen {
 			return;
 		}
 
+		// 0.3 S20: a follow-up run. start() forces the pack to the source
+		// run's own pack regardless of the $pack chosen above (fail closed —
+		// the form's pack choice is ignored, never trusted, once a source is
+		// named).
+		$follow_up_of = absint( $_POST['follow_up_of'] ?? 0 );
+
 		// S7: the chosen pack's own default-budget overrides become the
 		// ceiling ConsumerPolicy clamps against, instead of the generic
 		// registered-consumer table — otherwise a pack asking for a flat,
@@ -352,7 +358,9 @@ class RunsScreen {
 			$goal,
 			$policy['allow'],   // Outer bound; start() narrows it to the pack (S9).
 			$policy['budget'],
-			$pack               // The pack is the single source of the allow-list.
+			$pack,              // The pack is the single source of the allow-list.
+			null,
+			0 !== $follow_up_of ? $follow_up_of : null
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -901,7 +909,7 @@ class RunsScreen {
 
 		foreach ( $runs as $run ) {
 			printf(
-				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a></td></tr>',
+				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a>%13$s</td></tr>',
 				(int) $run['id'],
 				(int) $run['user_id'],
 				esc_html( (string) $run['consumer'] ),
@@ -917,7 +925,15 @@ class RunsScreen {
 				(int) $run['tokens_out'],
 				esc_html( (string) $run['updated_at'] ),
 				esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . (int) $run['id'] ) ),
-				esc_html__( 'View steps', 'senroflux' )
+				esc_html__( 'View steps', 'senroflux' ),
+				// 0.3 S20: "Follow up" only on an eligible finished run.
+				self::eligibleForFollowUp( $run )
+					? sprintf(
+						' <a href="%s">%s</a>',
+						esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&follow_up_of=' . (int) $run['id'] ) ),
+						esc_html__( 'Follow up', 'senroflux' )
+					)
+					: ''
 			);
 		}
 
@@ -957,6 +973,38 @@ class RunsScreen {
 	 */
 	public static function needsYou( array $run ): bool {
 		return self::isParkedStatus( (string) $run['status'] ) && (bool) ( $run['viewer_may_tick'] ?? false );
+	}
+
+	/**
+	 * 0.3 S20: eligible for "Follow up" — the run is `completed`, `failed` or
+	 * `cancelled`, it has a pack (a direct-allow run has no "source pack's
+	 * run capability" to check, so it is never eligible — fail closed), and
+	 * the CURRENT viewer holds that pack's run capability.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function eligibleForFollowUp( array $run ): bool {
+		if ( ! in_array(
+			(string) $run['status'],
+			array( RunStatus::Completed->value, RunStatus::Failed->value, RunStatus::Cancelled->value ),
+			true
+		) ) {
+			return false;
+		}
+
+		$pack_name = is_string( $run['pack'] ?? null ) ? $run['pack'] : '';
+		if ( '' === $pack_name ) {
+			return false;
+		}
+
+		$pack = PackRegistry::fromFilters()->get( $pack_name );
+		if ( null === $pack ) {
+			return false;
+		}
+
+		$capability = $pack->runCapability();
+
+		return '' !== $capability && function_exists( 'current_user_can' ) && current_user_can( $capability );
 	}
 
 	/** Whether `$status` is one of the three park statuses (S9). */
@@ -1058,6 +1106,25 @@ class RunsScreen {
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="senroflux-new-run-form">';
 		echo '<input type="hidden" name="action" value="senroflux_new_run">';
 		wp_nonce_field( 'senroflux_new_run' );
+
+		// 0.3 S20: a follow-up run, named by ?follow_up_of= on the list's
+		// "Follow up" link. start() forces the pack to the source's own pack
+		// regardless of what is chosen below.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only prefill, the mutation itself is nonce-checked in handleNewRun().
+		$follow_up_of = absint( $_GET['follow_up_of'] ?? 0 );
+		if ( 0 !== $follow_up_of ) {
+			echo '<input type="hidden" name="follow_up_of" value="' . esc_attr( (string) $follow_up_of ) . '">';
+			printf(
+				'<p class="description">%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %d is the source run's id. */
+						__( 'Following up on run #%d — the capability pack is forced to that run\'s own pack.', 'senroflux' ),
+						$follow_up_of
+					)
+				)
+			);
+		}
 
 		echo '<p>';
 		echo '<label for="senroflux-goal">' . esc_html__( 'Goal', 'senroflux' ) . '</label>';
@@ -1290,6 +1357,21 @@ class RunsScreen {
 					: __( 'Approvals for this run are governed by Agent Safety.', 'senroflux' )
 			)
 		);
+
+		// 0.3 S20: the follow-up's header links back to its source.
+		if ( ! empty( $run['follow_up_of'] ) ) {
+			printf(
+				'<p class="senroflux-follow-up-of"><a href="%s">%s</a></p>',
+				esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . (int) $run['follow_up_of'] ) ),
+				esc_html(
+					sprintf(
+						/* translators: %d is the source run's id. */
+						__( 'Follow-up of run #%d', 'senroflux' ),
+						(int) $run['follow_up_of']
+					)
+				)
+			);
+		}
 
 		// 0.3 S6: one line, next to the gate mode, when roles were withheld
 		// at start() — a user holding every capability sees nothing.
