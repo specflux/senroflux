@@ -36,6 +36,13 @@ if ( ! defined( 'SENROFLUX_URL' ) ) {
 	define( 'SENROFLUX_URL', plugin_dir_url( __FILE__ ) );
 }
 
+if ( ! defined( 'SENROFLUX_PATH' ) ) {
+	// 0.3 S10/S17: the React Runs screen's build assets are read from disk
+	// (its `index.asset.php` dependency/version manifest) before being
+	// enqueued by URL via `SENROFLUX_URL` above.
+	define( 'SENROFLUX_PATH', plugin_dir_path( __FILE__ ) );
+}
+
 
 // Registered UNCONDITIONALLY (not inside any class guard): WordPress calls
 // activation hooks by re-including this file and checking what got registered

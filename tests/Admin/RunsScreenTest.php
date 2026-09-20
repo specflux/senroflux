@@ -134,7 +134,13 @@ final class RunsScreenTest extends TestCase {
 	// New-run form + preflight gate
 	// ------------------------------------------------------------------
 
-	public function test_new_run_form_renders_with_pack_select_when_preflight_passes(): void {
+	/**
+	 * 0.3 S10: `render()` no longer server-renders a new-run form at all — it
+	 * mounts the React app's root element. This is now the ONE test covering
+	 * that (the retired form's own render tests, which asserted on
+	 * `name="goal"`/`<option>` markup, are gone with the form itself).
+	 */
+	public function test_render_mounts_the_react_root_and_a_noscript_fallback(): void {
 		Plugin::set_dependency_probe( true );
 		$this->seedRunnerGraph();
 		$this->registerFakePack( true );
@@ -143,27 +149,9 @@ final class RunsScreenTest extends TestCase {
 		( new RunsScreen() )->render();
 		$html = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( 'name="pack"', $html );
-		$this->assertStringContainsString( '<option value="pages"', $html );
-		$this->assertStringContainsString( 'value="senroflux_new_run"', $html );
-		$this->assertStringContainsString( 'name="max_steps"', $html );
-		$this->assertStringContainsString( 'name="action"', $html );
-	}
-
-	public function test_preflight_failure_renders_notice_and_renders_no_form(): void {
-		Plugin::set_dependency_probe( true );
-		$this->seedRunnerGraph();
-		$this->registerFakePack( new WP_Error( 'pack_unbound', 'This pack is not bound to your user. Bind `user:1` to the pages pack.', array( 'status' => 400 ) ) );
-
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
-
-		$this->assertStringContainsString( 'This pack is not bound', $html );
-		$this->assertStringContainsString( 'agent-safety-packs', $html, 'the notice links to the Agent Capability Packs screen' );
-		$this->assertStringNotContainsString( 'name="goal"', $html, 'NO form is rendered when preflight fails' );
-		$this->assertStringNotContainsString( '<option value="pages"', $html );
+		$this->assertStringContainsString( '<div id="senroflux-runs-root">', $html );
+		$this->assertStringContainsString( '<noscript>', $html );
+		$this->assertStringNotContainsString( 'name="goal"', $html, '0.2\'s server-rendered new-run form is retired' );
 	}
 
 	// ------------------------------------------------------------------
@@ -428,7 +416,13 @@ final class RunsScreenTest extends TestCase {
 	// S13 preflight is PER PACK
 	// ------------------------------------------------------------------
 
-	public function test_a_blocked_pack_is_disabled_while_a_runnable_pack_stays_selectable(): void {
+	/**
+	 * 0.3 S10: per-pack preflight still gates `exampleGoals()` (the empty
+	 * state's examples come only from packs the viewer can actually run) —
+	 * the retired new-run form's own "disabled option" rendering is gone
+	 * with the form.
+	 */
+	public function test_example_goals_only_name_packs_whose_preflight_passes(): void {
 		Plugin::set_dependency_probe( true );
 		$this->seedRunnerGraph();
 		$this->registerFakePack( true );
@@ -437,33 +431,21 @@ final class RunsScreenTest extends TestCase {
 			'widgets'
 		);
 
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
+		$screen = new class() extends RunsScreen {
+			/** @return list<string> */
+			public function exposeExampleGoals(): array {
+				return $this->exampleGoals();
+			}
+		};
 
-		// The form still stands, because ONE pack is runnable…
-		$this->assertStringContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( '<option value="pages" selected>', $html );
-		// …and the blocked one is visible but unselectable, with its reason.
-		$this->assertStringContainsString( '<option value="widgets" disabled>', $html );
-		$this->assertStringContainsString( 'Bind `user:1` to the widgets pack.', $html );
-	}
+		$examples = $screen->exposeExampleGoals();
 
-	public function test_every_pack_blocked_renders_the_notice_and_no_form(): void {
-		Plugin::set_dependency_probe( true );
-		$this->seedRunnerGraph();
-		$this->registerFakePack( new WP_Error( 'pack_unbound', 'Bind `user:1` to the pages pack.', array( 'status' => 400 ) ) );
-		$this->registerFakePack(
-			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
-			'widgets'
+		$this->assertNotEmpty(
+			array_filter( $examples, static fn ( string $e ): bool => str_contains( $e, 'pages' ) )
 		);
-
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
-
-		$this->assertStringNotContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( 'agent-safety-packs', $html );
+		$this->assertEmpty(
+			array_filter( $examples, static fn ( string $e ): bool => str_contains( $e, 'widgets' ) )
+		);
 	}
 
 	// ------------------------------------------------------------------
@@ -679,8 +661,9 @@ final class RunsScreenTest extends TestCase {
 		$this->assertStringContainsString( 'senroflux-setup-panel', $html );
 		$this->assertStringContainsString( 'data-check-id="senroflux/agent-safety"', $html );
 		$this->assertStringContainsString( 'senroflux-dismiss-check', $html );
-		// The empty state/example goals still render below a merely-advisory panel.
-		$this->assertStringContainsString( 'name="goal"', $html );
+		// The React root still mounts below a merely-advisory panel (S11:
+		// "a blocked screen still renders the empty state").
+		$this->assertStringContainsString( '<div id="senroflux-runs-root">', $html );
 
 		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}
@@ -721,21 +704,6 @@ final class RunsScreenTest extends TestCase {
 		$html = (string) ob_get_clean();
 
 		$this->assertStringNotContainsString( 'senroflux-setup-check', $html );
-
-		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
-	}
-
-	public function test_the_start_button_is_disabled_server_side_when_the_provider_check_fails(): void {
-		Plugin::set_dependency_probe( true );
-		Checks::setProviderProbe( false );
-		$this->seedRunnerGraph();
-		$this->registerFakePack( true );
-
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
-
-		$this->assertMatchesRegularExpression( '/id="senroflux-start-run"[^>]*\bdisabled\b/', $html );
 
 		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 	}

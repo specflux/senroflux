@@ -1,0 +1,356 @@
+/* SenroFlux Runs screen (S10/S17): messenger layout, ledger rows, pinned
+ * plan, park cards. Every rule uses LOGICAL properties (inline-start/
+ * inline-end/block-start/block-end) rather than left/right/top/bottom, per
+ * the stage-17a brief, and every animation is guarded behind
+ * `prefers-reduced-motion`. */
+
+.senroflux-runs-app {
+	display: grid;
+	grid-template-columns: 260px 1fr;
+	min-height: 60vh;
+}
+
+.senroflux-run-list {
+	border-inline-end: 1px solid #dcdcde;
+	background: #fff;
+	padding-block: 12px;
+}
+
+.senroflux-run-tabs {
+	display: flex;
+	flex-wrap: wrap;
+	border-block-end: 1px solid #dcdcde;
+	padding-inline: 8px;
+	margin-block-end: 6px;
+}
+
+.senroflux-run-tab {
+	background: none;
+	border: 0;
+	border-block-end: 2px solid transparent;
+	padding: 4px 6px;
+	cursor: pointer;
+	font-size: 12px;
+	color: #50575e;
+}
+
+.senroflux-run-tab.is-active {
+	border-block-end-color: #2271b1;
+	color: #1d2327;
+	font-weight: 600;
+}
+
+.senroflux-run-rows {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.senroflux-run-row {
+	display: block;
+	width: 100%;
+	text-align: start;
+	background: none;
+	border: 0;
+	border-inline-start: 3px solid transparent;
+	padding: 8px 14px;
+	cursor: pointer;
+}
+
+.senroflux-run-row.is-selected {
+	background: #f0f6fc;
+	border-inline-start-color: #2271b1;
+}
+
+.senroflux-run-row-title {
+	display: block;
+	font-weight: 500;
+	/* Live-review finding: long goal titles must WRAP, not run off the
+	 * viewport — no `white-space: nowrap`, no `text-overflow: ellipsis`. */
+	overflow-wrap: anywhere;
+}
+
+.senroflux-runs-main {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.senroflux-run-heading {
+	/* Same wrapping rule as the list row title, for the same reason. */
+	overflow-wrap: anywhere;
+}
+
+.senroflux-chat {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	padding: 16px 20px;
+	min-width: 0;
+}
+
+.senroflux-chat-stream {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+}
+
+.senroflux-chat-bubble {
+	max-width: 78%;
+	padding: 9px 13px;
+	border-radius: 14px;
+	background: #fff;
+	box-shadow: 0 1px 1px rgba( 0, 0, 0, 0.05 );
+	overflow-wrap: anywhere;
+}
+
+.senroflux-chat-bubble-user {
+	align-self: flex-end;
+	background: #2271b1;
+	color: #fff;
+}
+
+.senroflux-chat-bubble-bot {
+	align-self: flex-start;
+}
+
+/* Pinned plan. */
+.senroflux-pinned-plan {
+	position: sticky;
+	inset-block-start: 0;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 8px;
+	padding: 8px 14px;
+	box-shadow: 0 2px 6px rgba( 0, 0, 0, 0.06 );
+}
+
+.senroflux-pinned-plan-header {
+	display: flex;
+	justify-content: space-between;
+	gap: 10px;
+	align-items: baseline;
+}
+
+.senroflux-pinned-plan-toggle {
+	background: none;
+	border: 0;
+	color: #2271b1;
+	cursor: pointer;
+	padding: 0;
+}
+
+.senroflux-pinned-plan-steps {
+	list-style: none;
+	margin: 6px 0 0;
+	padding: 0;
+}
+
+.senroflux-pinned-plan-steps li {
+	display: flex;
+	gap: 8px;
+	padding-block: 2px;
+}
+
+.senroflux-plan-step-waiting {
+	color: #8a4b00;
+	font-weight: 600;
+}
+
+/* Ledger groups. */
+.senroflux-ledger-group summary {
+	cursor: pointer;
+	font-size: 12px;
+	color: #50575e;
+}
+
+.senroflux-ledger {
+	list-style: none;
+	margin: 4px 0 0;
+	padding: 4px 12px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+}
+
+.senroflux-ledger-row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	align-items: baseline;
+	padding-block: 4px;
+	border-block-start: 1px solid #f0f0f1;
+}
+
+.senroflux-ledger-row:first-child {
+	border-block-start: 0;
+}
+
+.senroflux-ledger-result {
+	flex-basis: 100%;
+	padding-inline-start: 20px;
+	color: #646970;
+	/* Ledger results are harness-rendered ("Approved by you" / "Rejected by
+	 * you, not done") or a tool response — same no-truncation rule as the
+	 * approval-card arguments, since a rejected/approved call is exactly the
+	 * safety-relevant text a viewer must be able to read in full. */
+	overflow-wrap: anywhere;
+}
+
+.senroflux-ledger-you {
+	color: #8a4b00;
+}
+
+/* Tier badge (Agent Safety mode only — see components/TierBadge.js, which
+ * never even renders this element in built-in mode). */
+.senroflux-tier {
+	display: inline-block;
+	font-size: 10.5px;
+	padding: 0 6px;
+	border-radius: 9px;
+	background: #e6e6e7;
+	color: #3c434a;
+	white-space: nowrap;
+}
+
+.senroflux-tier-1 {
+	background: #dbe9f6;
+	color: #135e96;
+}
+
+.senroflux-tier-2 {
+	background: #fcf0e3;
+	color: #8a4b00;
+	box-shadow: inset 0 0 0 1px #dba617;
+}
+
+/* Park cards. */
+.senroflux-park-card {
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 10px;
+	border-block-start: 4px solid #dba617;
+	padding: 12px 16px;
+}
+
+/* Live-review finding: the park-heading focus ring must HUG THE HEADING,
+ * not span the whole card — the ring lives on the heading element only. The
+ * card itself (`.senroflux-park-card`) carries no focus-visible rule at
+ * all. */
+.senroflux-park-heading {
+	display: inline-block;
+	margin: 0 0 6px;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #8a4b00;
+}
+
+.senroflux-park-heading:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 2px;
+}
+
+.senroflux-plan-approval-count {
+	font-weight: 600;
+	color: #8a4b00;
+}
+
+.senroflux-withheld-roles {
+	color: #646970;
+	overflow-wrap: anywhere;
+}
+
+.senroflux-park-actions {
+	display: flex;
+	/* Live-review finding: Approve and Reject need spacing between them (no
+	 * adjacent click targets) — the same rule covers Accept/Veto and
+	 * Answer/Skip. */
+	gap: 10px;
+	margin-block-start: 12px;
+}
+
+/* Live-review finding: approval-card arguments must WRAP and show in full —
+ * a safety property, not cosmetics. No `overflow: hidden` and no
+ * `text-overflow: ellipsis` on this element; `overflow-y: auto` only
+ * scrolls a TALL box vertically, it never clips a WIDE line. */
+.senroflux-args {
+	background: #f6f7f7;
+	padding: 8px;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+	overflow-y: auto;
+	max-height: 320px;
+}
+
+.senroflux-args:focus-visible {
+	outline: 2px solid #2271b1;
+	outline-offset: 1px;
+}
+
+.senroflux-button-danger {
+	border-color: #b32d2e;
+	color: #b32d2e;
+}
+
+/* Message box. */
+.senroflux-message-box {
+	display: flex;
+	gap: 8px;
+	align-items: flex-end;
+	border-block-start: 1px solid #dcdcde;
+	padding-block-start: 12px;
+}
+
+.senroflux-message-box-input {
+	flex: 1;
+	resize: none;
+	min-height: 40px;
+}
+
+/* Empty state. */
+.senroflux-empty-state {
+	margin: auto;
+	max-width: 520px;
+	text-align: center;
+	padding: 40px 20px;
+}
+
+.senroflux-empty-examples {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.senroflux-empty-example {
+	display: block;
+	width: 100%;
+	text-align: start;
+	margin-block: 6px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 8px;
+	padding: 8px 12px;
+	cursor: pointer;
+}
+
+/* Typing indicator: a `prefers-reduced-motion`-guarded animation only. */
+.senroflux-typing {
+	color: #646970;
+}
+
+@media not ( prefers-reduced-motion: reduce ) {
+	.senroflux-typing::after {
+		content: '…';
+		animation: senroflux-typing-blink 1.2s infinite;
+	}
+
+	@keyframes senroflux-typing-blink {
+		0%, 80%, 100% {
+			opacity: 0.25;
+		}
+		40% {
+			opacity: 1;
+		}
+	}
+}
