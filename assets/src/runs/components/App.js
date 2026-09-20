@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
-import { listRuns, getRun, startRun, tickRun, cancelRun } from '../api';
-import { isParkedStatus, isTerminalStatus, runsForTab } from '../utils';
+import { listRuns, getRun, startRun, tickRun, cancelRun, resolveSuggestion } from '../api';
+import { isParkedStatus, isTerminalStatus, runsForTab, sameRunId } from '../utils';
 import RunList from './RunList';
 import Chat from './Chat';
 import EmptyState from './EmptyState';
@@ -16,7 +16,13 @@ export default function App( { config } ) {
 	const [ runs, setRuns ] = useState( [] );
 	const [ loaded, setLoaded ] = useState( false );
 	const [ activeTab, setActiveTab ] = useState( 'needs_you' );
-	const [ selectedRunId, setSelectedRunId ] = useState( config.initialRunId || null );
+	// `config.initialRunId` comes from `wp_localize_script()`, which casts
+	// every scalar to a STRING before JSON-encoding it — normalize it to a
+	// number here (matching every `run.id` from REST/ajax) so it is never
+	// the one value in this component whose type doesn't match. `sameRunId()`
+	// below is the defense-in-depth layer for every id comparison regardless.
+	const initialRunId = config.initialRunId ? Number( config.initialRunId ) : null;
+	const [ selectedRunId, setSelectedRunId ] = useState( initialRunId );
 	const [ runDetail, setRunDetail ] = useState( null );
 	const [ busy, setBusy ] = useState( false );
 	const [ tickCount, setTickCount ] = useState( 0 );
@@ -59,7 +65,7 @@ export default function App( { config } ) {
 			return;
 		}
 		getRun( selectedRunId ).then( ( detail ) => {
-			if ( aliveRef.current && selectedRunId === activeRunRef.current ) {
+			if ( aliveRef.current && sameRunId( selectedRunId, activeRunRef.current ) ) {
 				setRunDetail( detail );
 			}
 		} );
@@ -94,11 +100,11 @@ export default function App( { config } ) {
 	 * refresh the list so its status pill / tab counts stay in step.
 	 */
 	const applyRunState = useCallback( ( runId, state ) => {
-		if ( ! aliveRef.current || runId !== activeRunRef.current ) {
+		if ( ! aliveRef.current || ! sameRunId( runId, activeRunRef.current ) ) {
 			return;
 		}
 		setRunDetail( ( previous ) => {
-			const previousSteps = previous && previous.run.id === runId ? previous.steps : [];
+			const previousSteps = previous && sameRunId( previous.run.id, runId ) ? previous.steps : [];
 			const appended = Array.isArray( state.new_steps ) ? state.new_steps : [];
 			return {
 				...( previous || {} ),
@@ -131,7 +137,7 @@ export default function App( { config } ) {
 			const step = ( id, count, body, iteration ) => {
 				setTickCount( ( n ) => n + 1 );
 				return tickRun( id, count, body, ajaxConfig ).then( ( state ) => {
-					if ( ! aliveRef.current || id !== activeRunRef.current ) {
+					if ( ! aliveRef.current || ! sameRunId( id, activeRunRef.current ) ) {
 						return;
 					}
 					applyRunState( id, state );
@@ -219,6 +225,41 @@ export default function App( { config } ) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [ runDetail, applyRunState ] );
 
+	/**
+	 * A suggestion's Save/Dismiss (0.3 S20). Independent of `driveTicks`'s
+	 * `busy`/error machinery — resolving a suggestion never ticks the run,
+	 * so `SuggestionCard` owns its own busy/error state and this only
+	 * updates `runDetail.suggestions` in place once the server confirms.
+	 */
+	const handleResolveSuggestion = useCallback(
+		( seq, action, text ) => {
+			if ( ! runDetail ) {
+				return Promise.reject( new Error( __( 'No run selected.', 'senroflux' ) ) );
+			}
+			const runId = runDetail.run.id;
+			return resolveSuggestion( runId, seq, action, text ).then( ( result ) => {
+				if ( ! aliveRef.current || ! sameRunId( runId, activeRunRef.current ) ) {
+					return result;
+				}
+				setRunDetail( ( previous ) => {
+					if ( ! previous || ! Array.isArray( previous.suggestions ) ) {
+						return previous;
+					}
+					return {
+						...previous,
+						suggestions: previous.suggestions.map( ( suggestion ) =>
+							suggestion.seq === seq
+								? { ...suggestion, status: 'save' === action ? 'saved' : 'dismissed', text: result.text }
+								: suggestion
+						),
+					};
+				} );
+				return result;
+			} );
+		},
+		[ runDetail ]
+	);
+
 	const handleSelectRun = ( runId ) => {
 		setTickCount( 0 );
 		setActionError( '' );
@@ -257,7 +298,10 @@ export default function App( { config } ) {
 					<Chat
 						run={ runDetail.run }
 						steps={ runDetail.steps }
+						suggestions={ runDetail.suggestions }
+						canManageBrief={ Boolean( config.canManageSiteBrief ) }
 						onResolvePark={ handleResolvePark }
+						onResolveSuggestion={ handleResolveSuggestion }
 						onCancel={ handleCancel }
 						busy={ busy }
 						tickCount={ tickCount }
@@ -279,7 +323,7 @@ export default function App( { config } ) {
 						onPickExample={ () => {} }
 					/>
 				) }
-				<MessageBox state={ boxState } onSend={ handleStart } />
+				<MessageBox state={ boxState } onSend={ handleStart } initialText={ config.initialGoal || '' } />
 			</main>
 		</div>
 	);

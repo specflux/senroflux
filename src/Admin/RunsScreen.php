@@ -86,6 +86,7 @@ class RunsScreen {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_init', array( $this, 'redirectOldToolsUrl' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'commandPaletteAssets' ) );
 		add_action( 'admin_post_senroflux_cancel_run', array( $this, 'handleCancel' ) );
 		add_action( 'admin_post_senroflux_new_run', array( $this, 'handleNewRun' ) );
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
@@ -253,17 +254,30 @@ class RunsScreen {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only, decides which run opens first.
 		$run_id = absint( $_GET['run_id'] ?? ( $_GET['run'] ?? 0 ) );
 
+		// 0.3 S10: the command palette's "SenroFlux: run "<text>"" command
+		// (see `commandPaletteAssets()`) links here with `goal` set — it only
+		// ever PRE-FILLS the message box, never starts a run itself, so this
+		// is read-only same as `run_id` above. Capped at the same length the
+		// no-JS New-run form enforces (`MAX_GOAL`) so a very long deep link
+		// can't paste something the form would itself have refused.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only prefill, no state change.
+		$goal = sanitize_textarea_field( wp_unslash( $_GET['goal'] ?? '' ) );
+		if ( $this->strLen( $goal ) > self::MAX_GOAL ) {
+			$goal = function_exists( 'mb_substr' ) ? mb_substr( $goal, 0, self::MAX_GOAL ) : substr( $goal, 0, self::MAX_GOAL );
+		}
+
 		wp_localize_script(
 			'senroflux-runs',
 			'senrofluxRunsConfig',
 			array(
-				'initialRunId' => $run_id > 0 ? $run_id : null,
+				'initialRunId'       => $run_id > 0 ? $run_id : null,
+				'initialGoal'        => '' !== $goal ? $goal : null,
 				// 0.3 S3: the SITE-WIDE mode a NEW run would start under —
 				// the empty state's promise sentence and the tier badge both
 				// read this, never a per-run value, since no run may be
 				// selected yet.
-				'gateMode'     => Plugin::currentGateMode()->value,
-				'examples'     => $this->exampleGoals(),
+				'gateMode'           => Plugin::currentGateMode()->value,
+				'examples'           => $this->exampleGoals(),
 				// 0.3 S10 (17c): the admin-ajax surface's tick/cancel/start
 				// actions carry the SAME `senroflux_run` nonce + `read`
 				// capability check the admin-post handlers use, RE-CHECKED
@@ -273,11 +287,63 @@ class RunsScreen {
 				// only wraps the ajax tick handler, so it is the one path
 				// that lets a screen-capability holder resolve a run they do
 				// not own; REST's tick route has no such wrapper.
-				'nonce'        => wp_create_nonce( 'senroflux_run' ),
+				'nonce'              => wp_create_nonce( 'senroflux_run' ),
 				// The one HTTP consumer this screen is allowed to start as
 				// (S13); registered only for a holder of the screen
 				// capability ({@see registerAdminConsumer()}).
-				'consumer'     => self::CONSUMER,
+				'consumer'           => self::CONSUMER,
+				// 0.3 S20: gates the React suggestion card's Save/Dismiss —
+				// server-computed, never re-derived from a role guess on the
+				// client, since `manage_options` (not the screen capability)
+				// is what the REST route itself checks.
+				'canManageSiteBrief' => current_user_can( 'manage_options' ),
+			)
+		);
+	}
+
+	/**
+	 * Register the "SenroFlux: run "<text>"" command palette command,
+	 * site-wide (0.3 S10) — Cmd/Ctrl+K is available on every wp-admin screen
+	 * since WP 6.9 (`wp_enqueue_command_palette_assets()`, hooked on this
+	 * same `admin_enqueue_scripts` action), not only the Runs screen, so this
+	 * runs unconditionally rather than being gated by `$hook` like
+	 * {@see self::assets()}.
+	 *
+	 * Fail closed: a user who does not hold the screen capability never gets
+	 * the script at all, so there is nothing for them to see or invoke.
+	 *
+	 * This command is a NAVIGATION only. It opens the Runs screen with the
+	 * typed text already in the message box (via the SAME read-only `goal`
+	 * query arg `assets()` reads above) and stops there — it never calls
+	 * `senroflux()->start()` or anything that ticks a run. A human still has
+	 * to look at the pre-filled box and click "Start run" themselves.
+	 */
+	public function commandPaletteAssets(): void {
+		if ( ! current_user_can( $this->capability() ) ) {
+			return;
+		}
+
+		$asset_file = SENROFLUX_PATH . 'build/commands/index.asset.php';
+		if ( ! file_exists( $asset_file ) ) {
+			return;
+		}
+
+		/** @var array{dependencies:list<string>,version:string} $asset */
+		$asset = require $asset_file;
+
+		$dependencies = array_values( array_filter( $asset['dependencies'], static fn ( string $handle ): bool => '' !== $handle ) );
+
+		wp_enqueue_script( 'senroflux-commands', SENROFLUX_URL . 'build/commands/index.js', $dependencies, $asset['version'], true );
+
+		if ( function_exists( 'wp_set_script_translations' ) ) {
+			wp_set_script_translations( 'senroflux-commands', 'senroflux' );
+		}
+
+		wp_localize_script(
+			'senroflux-commands',
+			'senrofluxCommandsConfig',
+			array(
+				'runsUrl' => admin_url( 'admin.php?page=' . self::SLUG ),
 			)
 		);
 	}

@@ -9,9 +9,20 @@ import { __ } from '@wordpress/i18n';
  * "parked" ("Answer the card above to continue") and "running" (ticks are
  * driven automatically once started; see `App`'s `driveTicks`) both disable
  * it, same as before 17c wired the actual submit.
+ *
+ * @param {Object} props
+ * @param {string} props.state       'idle' | 'parked' | 'running'.
+ * @param {Function} [props.onSend]  `( goal ) => void`, starts a new run.
+ * @param {string}   [props.initialText] Pre-fills the box (0.3 S10, the
+ *                                       command palette's "SenroFlux: run
+ *                                       "<text>"" command) — this ONLY seeds
+ *                                       the textarea; it never calls
+ *                                       `onSend()` itself, so landing here
+ *                                       from the palette never starts a run
+ *                                       on its own.
  */
-export default function MessageBox( { state, onSend } ) {
-	const [ text, setText ] = useState( '' );
+export default function MessageBox( { state, onSend, initialText } ) {
+	const [ text, setText ] = useState( initialText || '' );
 	const disabled = 'idle' !== state || ! onSend;
 
 	const placeholder =

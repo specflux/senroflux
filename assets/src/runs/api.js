@@ -83,3 +83,25 @@ export function tickRun( runId, stepCount, resume, config ) {
 export function cancelRun( runId, config ) {
 	return postAjax( 'senroflux_cancel', { run_id: runId }, config );
 }
+
+/**
+ * POST /senroflux/v1/runs/{id}/suggestions/{seq}: {action, text?} ->
+ * `{run_id, seq, action, text}` (0.3 S20). This goes over REST, not
+ * admin-ajax — the route already requires `manage_options` and a REST nonce
+ * (`apiFetch`'s own nonce middleware, the same one `listRuns`/`getRun`
+ * already rely on), and it is never called on a delegated run's behalf the
+ * way tick/cancel are, so it does not need the screen's admin-ajax
+ * delegation wrapper.
+ *
+ * @param {number} runId
+ * @param {number} seq    The suggestion step's own `seq`.
+ * @param {'save'|'dismiss'} action
+ * @param {string} [text] Edited text; omitted keeps the suggestion's own text.
+ */
+export function resolveSuggestion( runId, seq, action, text ) {
+	const data = { action };
+	if ( undefined !== text ) {
+		data.text = text;
+	}
+	return apiFetch( { path: `${ NAMESPACE }/runs/${ runId }/suggestions/${ seq }`, method: 'POST', data } );
+}
