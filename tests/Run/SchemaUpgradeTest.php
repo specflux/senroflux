@@ -1,7 +1,8 @@
 <?php
 /**
  * Schema tests (0.2 S4, plus the v3 skills_disable_json column, the v4
- * gate_mode column, and the v5 withheld_roles_json column): the new columns
+ * gate_mode column, the v5 withheld_roles_json column, and the v6
+ * follow_up_of column): the new columns
  * exist, the version option is stamped, and the upgrade is idempotent.
  *
  * @package SenroFlux
@@ -23,7 +24,7 @@ final class SchemaUpgradeTest extends TestCase {
 	}
 
 	public function test_schema_version_is_five(): void {
-		$this->assertSame( 5, Schema::DB_VERSION );
+		$this->assertSame( 6, Schema::DB_VERSION );
 	}
 
 	/** @return list<string> The 0.2-0.3 columns every current runs table carries. */
@@ -39,6 +40,7 @@ final class SchemaUpgradeTest extends TestCase {
 			'content_locale VARCHAR(20) NULL',
 			'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
 			'withheld_roles_json TEXT NULL',
+			'follow_up_of BIGINT(20) UNSIGNED NULL',
 		);
 	}
 
@@ -59,13 +61,13 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 5, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 6, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'], 'runs + steps statements' );
 	}
 
 	public function test_maybe_upgrade_is_idempotent_at_the_current_version(): void {
 		$db = new wpdb();
-		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 5;
+		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 6;
 
 		Schema::maybe_upgrade( $db );
 
@@ -78,7 +80,7 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 5, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 6, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'] );
 
 		// dbDelta is idempotent by design: re-running the SAME statements is
@@ -87,5 +89,6 @@ final class SchemaUpgradeTest extends TestCase {
 		$this->assertStringContainsString( 'accepted_plan_step_id', $statements );
 		$this->assertStringContainsString( 'skills_disable_json', $statements );
 		$this->assertStringContainsString( 'withheld_roles_json', $statements );
+		$this->assertStringContainsString( 'follow_up_of', $statements );
 	}
 }

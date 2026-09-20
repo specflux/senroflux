@@ -17,6 +17,7 @@ use Specflux\SenroFlux\Skills\SkillSet;
 use Specflux\SenroFlux\Tools\BuiltinGate;
 use Specflux\SenroFlux\Tools\HarnessTools;
 use Specflux\SenroFlux\Tools\PlanTools;
+use Specflux\SenroFlux\Tools\SuggestBriefTool;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\ToolOutcome;
 use Specflux\SenroFlux\Tools\ToolRegistry;
@@ -334,7 +335,7 @@ final class Runner {
 				$new_steps[] = $this->appendStep(
 					$run_id,
 					StepKind::User,
-					new UserMessage( array( new MessagePart( $run->goal ) ) )
+					new UserMessage( array( new MessagePart( $this->goalWithFollowUpSeed( $run ) ) ) )
 				);
 			}
 
@@ -515,7 +516,8 @@ final class Runner {
 				// touch the permission-agnostic declaration surface only.
 				$harness_declarations = array_merge(
 					HarnessTools::declarations( $this->remainingQuestions( $run ) ),
-					PlanTools::declarations( $this->remainingPlans( $run ) )
+					PlanTools::declarations( $this->remainingPlans( $run ) ),
+					SuggestBriefTool::declarations()
 				);
 				$tools                = array() !== $harness_declarations
 					? $registry->withDeclarations( $harness_declarations )
@@ -601,6 +603,15 @@ final class Runner {
 					if ( isset( $harness['park'] ) ) {
 						return $harness['park']; // Park ends the tick.
 					}
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
+
+				// S20: the brief-suggestion tool. Tier 0, parks nothing — it
+				// is answered synchronously, in this same tick.
+				if ( SuggestBriefTool::functionName() === $call['name'] ) {
+					$this->runSuggestBrief( $run, $call, $new_steps );
 					++$tool_calls_used;
 					$run = $this->refresh( $run );
 					continue;
@@ -993,6 +1004,33 @@ final class Runner {
 		return false;
 	}
 
+	/**
+	 * 0.3 S20: for a follow-up run, prepend the source run's own harness-built
+	 * change rows (object type, id, title, status, edit link) to the goal, as
+	 * the first user turn. NO CHAINING — the seed is built from the source
+	 * run's `result.changes` only, never from whatever seed the source run
+	 * itself carried, and never from the source's model prose (its `summary`
+	 * is never read here). Empty when the source has no recorded changes, or
+	 * none is found, so a follow-up of a run that touched nothing carries no
+	 * misleading notice.
+	 */
+	private function goalWithFollowUpSeed( Run $run ): string {
+		if ( null === $run->followUpOf ) {
+			return $run->goal;
+		}
+
+		$source = $this->store->getRun( $run->followUpOf );
+		$raw    = ( null !== $source && is_array( $source->result ) && is_array( $source->result['changes'] ?? null ) )
+			? $source->result['changes']
+			: array();
+		/** @var list<array<string,mixed>> $changes Only array-shaped rows; a corrupt entry is dropped here, not passed on. */
+		$changes = array_values( array_filter( $raw, 'is_array' ) );
+
+		$seed = FollowUpSeed::render( $changes );
+
+		return '' === $seed ? $run->goal : $seed . "\n\n" . $run->goal;
+	}
+
 	private function addTokens( int $run_id, int $tokens_in, int $tokens_out ): void {
 		$current = $this->store->getRun( $run_id );
 		if ( null === $current ) {
@@ -1114,12 +1152,15 @@ final class Runner {
 			? $pack->withheldRoleNotice( $run->withheldRoles )
 			: null;
 
-		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice );
+		// 0.3 S20: the site owner's standing notes, opaque to the harness.
+		$brief = SiteBrief::get();
+
+		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice, $brief );
 
 		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
 
-		$this->auditInstruction( $run, $skills, $text, $new_steps );
+		$this->auditInstruction( $run, $skills, $text, $new_steps, $brief );
 
 		return $text;
 	}
@@ -1263,8 +1304,9 @@ final class Runner {
 	 *
 	 * @param list<Skill>               $skills     Freshly collected set.
 	 * @param list<array<string,mixed>> $new_steps  Accumulator.
+	 * @param string                    $brief      0.3 S20: the brief text this render saw.
 	 */
-	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps ): void {
+	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps, string $brief = '' ): void {
 		$fingerprints = array();
 		foreach ( $skills as $skill ) {
 			$fingerprints[ $skill->id ] = hash( 'sha256', $skill->body );
@@ -1273,12 +1315,16 @@ final class Runner {
 		$recorded = $this->findInstructionRecord( $run->id );
 
 		if ( null === $recorded ) {
+			// S20: the brief's hash rides next to the skills hashes, ONLY on
+			// the seq-0 record — a report can show which brief a run saw,
+			// without re-recording it on every drift note.
 			$this->store->prependSystemStep(
 				$run->id,
 				array(
-					'note'   => 'system_instruction',
-					'text'   => $text,
-					'skills' => $fingerprints,
+					'note'       => 'system_instruction',
+					'text'       => $text,
+					'skills'     => $fingerprints,
+					'brief_hash' => SiteBrief::hash( $brief ),
 				)
 			);
 			return;
@@ -1520,17 +1566,19 @@ final class Runner {
 	private function state( Run $run, array $new_steps, ?array $ui ): array {
 		return array(
 			'run'       => array(
-				'id'         => $run->id,
-				'user_id'    => $run->userId,
-				'consumer'   => $run->consumer,
-				'goal'       => $run->goal,
-				'status'     => $run->status->value,
-				'step_count' => $run->stepCount,
-				'tokens_in'  => $run->tokensIn,
-				'tokens_out' => $run->tokensOut,
-				'error'      => $run->error,
+				'id'           => $run->id,
+				'user_id'      => $run->userId,
+				'consumer'     => $run->consumer,
+				'goal'         => $run->goal,
+				'status'       => $run->status->value,
+				'step_count'   => $run->stepCount,
+				'tokens_in'    => $run->tokensIn,
+				'tokens_out'   => $run->tokensOut,
+				'error'        => $run->error,
 				// 0.3 S3: pinned at start(), rendered once by the run header.
-				'gate_mode'  => $run->gateMode->value,
+				'gate_mode'    => $run->gateMode->value,
+				// 0.3 S20: the source run id when this run is a follow-up.
+				'follow_up_of' => $run->followUpOf,
 			),
 			'new_steps' => $new_steps,
 			'ui'        => $ui ?? array(),
@@ -1608,6 +1656,152 @@ final class Runner {
 					),
 				),
 			),
+		);
+	}
+
+	/**
+	 * Handle a `senroflux__suggest-brief-addition` call (0.3 S20). Parks
+	 * nothing: it always appends exactly one `suggestion` step (invalid input
+	 * still counts against nothing but the tool call — no step is recorded)
+	 * and answers with a tool_result in the SAME tick.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param list<array<string,mixed>>               $new_steps Accumulator.
+	 */
+	private function runSuggestBrief( Run $run, array $call, array &$new_steps ): void {
+		$payload = SuggestBriefTool::validate( $call['args'] ?? null );
+		if ( is_wp_error( $payload ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_INVALID );
+			return;
+		}
+
+		$accepted             = 0;
+		$dismissed_normalized = array();
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Suggestion === $step->kind ) {
+				++$accepted;
+				continue;
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'suggestion_resolved' === ( $step->messageArray['note'] ?? '' )
+				&& 'dismiss' === ( $step->messageArray['action'] ?? '' )
+			) {
+				$dismissed_normalized[] = SuggestBriefTool::normalize( (string) ( $step->messageArray['text'] ?? '' ) );
+			}
+		}
+
+		if ( $accepted >= SuggestBriefTool::MAX_PER_RUN ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_LIMIT );
+			return;
+		}
+
+		if ( in_array( SuggestBriefTool::normalize( $payload['text'] ), $dismissed_normalized, true ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_DISMISSED );
+			return;
+		}
+
+		$seq         = $this->store->appendStep(
+			$run->id,
+			StepKind::Suggestion,
+			$payload,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+		$new_steps[] = array(
+			'seq'         => $seq,
+			'kind'        => StepKind::Suggestion->value,
+			'message'     => $payload,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+
+		$new_steps[] = $this->appendSuggestBriefResult( $run->id, $call, array( 'recorded' => true ) );
+	}
+
+	/**
+	 * Tool_result for a recorded suggestion. The FunctionResponse NAME is the
+	 * harness function name, matching the ask-user/plan convention.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call     Call shape.
+	 * @param array<string,mixed>                      $response FunctionResponse payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefResult( int $run_id, array $call, array $response ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Tool_result error to the model for an invalid/limited/dismissed
+	 * suggest-brief-addition call. Counts as a tool call (the caller bumps
+	 * the counter).
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code invalid_suggestion | suggestion_limit | suggestion_dismissed.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefError( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'error',
 		);
 	}
 

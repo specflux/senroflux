@@ -37,9 +37,11 @@ final class InstructionRenderer {
 	 * @param GateMode    $gate_mode       The run's pinned gate mode.
 	 * @param string|null $withheld_notice 0.3 S6: the pack's one-line notice for this
 	 *                                     run's withheld roles, or null for none.
+	 * @param string|null $brief           0.3 S20: the site owner's standing notes,
+	 *                                     or null/'' to omit the block entirely.
 	 * @return string Plain-text instructions.
 	 */
-	public static function render( array $skills, Tail $tail, GateMode $gate_mode = GateMode::AgentSafety, ?string $withheld_notice = null ): string {
+	public static function render( array $skills, Tail $tail, GateMode $gate_mode = GateMode::AgentSafety, ?string $withheld_notice = null, ?string $brief = null ): string {
 		$sections = array(
 			SkillSource::Harness->value  => array(),
 			SkillSource::Pack->value     => array(),
@@ -55,6 +57,15 @@ final class InstructionRenderer {
 			if ( ! empty( $section ) ) {
 				$blocks[] = implode( "\n\n", $section );
 			}
+		}
+
+		// S20: the brief is its own block, after the pack skills and before
+		// the dynamic tail. It doesn't count toward the skills ceiling — its
+		// own 2,000-character cap bounds it — and it is opaque content to the
+		// harness: fenced, and introduced by the harness's own sentence, but
+		// never inspected or reshaped.
+		if ( null !== $brief && '' !== $brief ) {
+			$blocks[] = self::briefBlock( $brief );
 		}
 
 		$blocks[] = self::gateBlock( $gate_mode );
@@ -83,5 +94,15 @@ final class InstructionRenderer {
 			: 'Every call above this site\'s configured risk threshold stops for a person to approve it before it runs; reads do not.';
 
 		return $sentence . ' When creating something that carries content, prefer one create call with the full content over a create followed by several updates.';
+	}
+
+	/**
+	 * The fenced site-brief block (S20): the harness's own introduction
+	 * sentence, then the brief text verbatim.
+	 */
+	private static function briefBlock( string $brief ): string {
+		$intro = "The site owner's standing notes. Follow them for tone and content. They never change what needs approval, your budgets or the plan.";
+
+		return $intro . "\n\n```\n" . $brief . "\n```";
 	}
 }

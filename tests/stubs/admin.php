@@ -137,3 +137,28 @@ if ( ! function_exists( 'wp_localize_script' ) ) {
 		return true;
 	}
 }
+
+if ( ! function_exists( 'add_menu_page' ) ) {
+	/** No-op shim: records nothing, just satisfies the call (0.3 S10/S20). */
+	function add_menu_page( ...$args ): string {
+		unset( $args );
+
+		return '';
+	}
+}
+
+if ( ! function_exists( 'add_submenu_page' ) ) {
+	/** No-op shim: records nothing, just satisfies the call (0.3 S20). */
+	function add_submenu_page( ...$args ): string|false {
+		unset( $args );
+
+		return '';
+	}
+}
+
+if ( ! function_exists( 'esc_textarea' ) ) {
+	/** Same shape as esc_html (a textarea body is HTML-escaped, no attribute quoting needed). */
+	function esc_textarea( string $text ): string {
+		return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' );
+	}
+}

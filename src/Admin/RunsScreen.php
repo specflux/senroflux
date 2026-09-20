@@ -94,6 +94,7 @@ class RunsScreen {
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
 		add_action( 'admin_post_senroflux_plan_decision', array( $this, 'handlePlanDecision' ) );
 		add_action( 'admin_post_senroflux_approval_decision', array( $this, 'handleApprovalDecision' ) );
+		add_action( 'admin_post_senroflux_suggestion_decision', array( $this, 'handleSuggestionDecision' ) );
 		add_action( 'wp_ajax_senroflux_setup_panel', array( $this, 'handleSetupPanel' ) );
 		add_action( 'wp_ajax_senroflux_dismiss_agent_safety_check', array( $this, 'handleDismissAgentSafetyCheck' ) );
 		add_action( 'admin_notices', array( $this, 'maybeRenderActivationNotice' ) );
@@ -329,6 +330,12 @@ class RunsScreen {
 			return;
 		}
 
+		// 0.3 S20: a follow-up run. start() forces the pack to the source
+		// run's own pack regardless of the $pack chosen above (fail closed —
+		// the form's pack choice is ignored, never trusted, once a source is
+		// named).
+		$follow_up_of = absint( $_POST['follow_up_of'] ?? 0 );
+
 		// S7: the chosen pack's own default-budget overrides become the
 		// ceiling ConsumerPolicy clamps against, instead of the generic
 		// registered-consumer table — otherwise a pack asking for a flat,
@@ -351,7 +358,9 @@ class RunsScreen {
 			$goal,
 			$policy['allow'],   // Outer bound; start() narrows it to the pack (S9).
 			$policy['budget'],
-			$pack               // The pack is the single source of the allow-list.
+			$pack,              // The pack is the single source of the allow-list.
+			null,
+			0 !== $follow_up_of ? $follow_up_of : null
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -412,6 +421,104 @@ class RunsScreen {
 				$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), array( 'action' => $action ) )
 			)
 		);
+	}
+
+	/**
+	 * admin-post endpoint backing a suggestion's Save/Dismiss (0.3 S20).
+	 *
+	 * `manage_options` and the nonce are BOTH checked here — RE-CHECKED
+	 * inside {@see \Specflux\SenroFlux\Plugin::resolveSuggestion()}'s callee
+	 * is not the point; this is the one human-click seam, and it fails
+	 * closed on its own, same as {@see \Specflux\SenroFlux\Http\Rest::routeSuggestionDecision()}.
+	 */
+	public function handleSuggestionDecision(): void {
+		$run_id = absint( $_POST['run_id'] ?? 0 );
+		check_admin_referer( 'senroflux_suggestion_' . $run_id );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions.', 'senroflux' ) );
+		}
+
+		$seq    = absint( $_POST['seq'] ?? 0 );
+		$action = sanitize_text_field( wp_unslash( $_POST['senroflux_suggestion_action'] ?? '' ) );
+		$text   = isset( $_POST['text'] ) ? sanitize_textarea_field( wp_unslash( $_POST['text'] ) ) : null;
+
+		$result = senroflux()->resolveSuggestion( $run_id, $seq, $action, $text );
+
+		$this->redirectBack( $run_id, is_wp_error( $result ) ? (string) $result->get_error_code() : null );
+	}
+
+	/**
+	 * The suggestions list: Save/Dismiss forms for a `manage_options` viewer,
+	 * plain copyable text ("An administrator can add this to the site
+	 * brief") with no buttons for anyone else.
+	 *
+	 * @param array<string,mixed> $state The run state (carries `suggestions`).
+	 */
+	private function renderSuggestions( array $state ): void {
+		$suggestions = is_array( $state['suggestions'] ?? null ) ? $state['suggestions'] : array();
+		if ( array() === $suggestions ) {
+			return;
+		}
+
+		$run_id     = (int) ( $state['run']['id'] ?? 0 );
+		$may_decide = current_user_can( 'manage_options' );
+
+		echo '<div class="senroflux-suggestions"><h3>' . esc_html__( 'Brief suggestions', 'senroflux' ) . '</h3>';
+
+		foreach ( $suggestions as $suggestion ) {
+			if ( ! is_array( $suggestion ) ) {
+				continue;
+			}
+
+			$seq    = (int) ( $suggestion['seq'] ?? 0 );
+			$text   = (string) ( $suggestion['text'] ?? '' );
+			$status = (string) ( $suggestion['status'] ?? 'pending' );
+
+			echo '<div class="senroflux-suggestion">';
+
+			if ( ! $may_decide ) {
+				printf(
+					'<p>%s</p><p class="description">%s</p>',
+					esc_html( $text ),
+					esc_html__( 'An administrator can add this to the site brief.', 'senroflux' )
+				);
+				echo '</div>';
+				continue;
+			}
+
+			if ( 'pending' !== $status ) {
+				printf(
+					'<p>%1$s <em>(%2$s)</em></p>',
+					esc_html( $text ),
+					esc_html( 'saved' === $status ? __( 'saved', 'senroflux' ) : __( 'dismissed', 'senroflux' ) )
+				);
+				echo '</div>';
+				continue;
+			}
+
+			echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
+			echo '<input type="hidden" name="action" value="senroflux_suggestion_decision">';
+			echo '<input type="hidden" name="run_id" value="' . esc_attr( (string) $run_id ) . '">';
+			echo '<input type="hidden" name="seq" value="' . esc_attr( (string) $seq ) . '">';
+			wp_nonce_field( 'senroflux_suggestion_' . $run_id );
+			printf(
+				'<textarea name="text" rows="2" class="large-text" maxlength="%d">%s</textarea>',
+				esc_attr( (string) 200 ),
+				esc_textarea( $text )
+			);
+			printf(
+				'<button type="submit" name="senroflux_suggestion_action" value="save" class="button button-primary">%s</button> ',
+				esc_html__( 'Save', 'senroflux' )
+			);
+			printf(
+				'<button type="submit" name="senroflux_suggestion_action" value="dismiss" class="button">%s</button>',
+				esc_html__( 'Dismiss', 'senroflux' )
+			);
+			echo '</form></div>';
+		}
+
+		echo '</div>';
 	}
 
 	/**
@@ -802,7 +909,7 @@ class RunsScreen {
 
 		foreach ( $runs as $run ) {
 			printf(
-				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a></td></tr>',
+				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a>%13$s</td></tr>',
 				(int) $run['id'],
 				(int) $run['user_id'],
 				esc_html( (string) $run['consumer'] ),
@@ -818,7 +925,15 @@ class RunsScreen {
 				(int) $run['tokens_out'],
 				esc_html( (string) $run['updated_at'] ),
 				esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . (int) $run['id'] ) ),
-				esc_html__( 'View steps', 'senroflux' )
+				esc_html__( 'View steps', 'senroflux' ),
+				// 0.3 S20: "Follow up" only on an eligible finished run.
+				self::eligibleForFollowUp( $run )
+					? sprintf(
+						' <a href="%s">%s</a>',
+						esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&follow_up_of=' . (int) $run['id'] ) ),
+						esc_html__( 'Follow up', 'senroflux' )
+					)
+					: ''
 			);
 		}
 
@@ -858,6 +973,38 @@ class RunsScreen {
 	 */
 	public static function needsYou( array $run ): bool {
 		return self::isParkedStatus( (string) $run['status'] ) && (bool) ( $run['viewer_may_tick'] ?? false );
+	}
+
+	/**
+	 * 0.3 S20: eligible for "Follow up" — the run is `completed`, `failed` or
+	 * `cancelled`, it has a pack (a direct-allow run has no "source pack's
+	 * run capability" to check, so it is never eligible — fail closed), and
+	 * the CURRENT viewer holds that pack's run capability.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function eligibleForFollowUp( array $run ): bool {
+		if ( ! in_array(
+			(string) $run['status'],
+			array( RunStatus::Completed->value, RunStatus::Failed->value, RunStatus::Cancelled->value ),
+			true
+		) ) {
+			return false;
+		}
+
+		$pack_name = is_string( $run['pack'] ?? null ) ? $run['pack'] : '';
+		if ( '' === $pack_name ) {
+			return false;
+		}
+
+		$pack = PackRegistry::fromFilters()->get( $pack_name );
+		if ( null === $pack ) {
+			return false;
+		}
+
+		$capability = $pack->runCapability();
+
+		return '' !== $capability && function_exists( 'current_user_can' ) && current_user_can( $capability );
 	}
 
 	/** Whether `$status` is one of the three park statuses (S9). */
@@ -959,6 +1106,25 @@ class RunsScreen {
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="senroflux-new-run-form">';
 		echo '<input type="hidden" name="action" value="senroflux_new_run">';
 		wp_nonce_field( 'senroflux_new_run' );
+
+		// 0.3 S20: a follow-up run, named by ?follow_up_of= on the list's
+		// "Follow up" link. start() forces the pack to the source's own pack
+		// regardless of what is chosen below.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only prefill, the mutation itself is nonce-checked in handleNewRun().
+		$follow_up_of = absint( $_GET['follow_up_of'] ?? 0 );
+		if ( 0 !== $follow_up_of ) {
+			echo '<input type="hidden" name="follow_up_of" value="' . esc_attr( (string) $follow_up_of ) . '">';
+			printf(
+				'<p class="description">%s</p>',
+				esc_html(
+					sprintf(
+						/* translators: %d is the source run's id. */
+						__( 'Following up on run #%d — the capability pack is forced to that run\'s own pack.', 'senroflux' ),
+						$follow_up_of
+					)
+				)
+			);
+		}
 
 		echo '<p>';
 		echo '<label for="senroflux-goal">' . esc_html__( 'Goal', 'senroflux' ) . '</label>';
@@ -1192,6 +1358,21 @@ class RunsScreen {
 			)
 		);
 
+		// 0.3 S20: the follow-up's header links back to its source.
+		if ( ! empty( $run['follow_up_of'] ) ) {
+			printf(
+				'<p class="senroflux-follow-up-of"><a href="%s">%s</a></p>',
+				esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . (int) $run['follow_up_of'] ) ),
+				esc_html(
+					sprintf(
+						/* translators: %d is the source run's id. */
+						__( 'Follow-up of run #%d', 'senroflux' ),
+						(int) $run['follow_up_of']
+					)
+				)
+			);
+		}
+
 		// 0.3 S6: one line, next to the gate mode, when roles were withheld
 		// at start() — a user holding every capability sees nothing.
 		if ( ! empty( $run['withheld_roles'] ) && is_array( $run['withheld_roles'] ) ) {
@@ -1234,6 +1415,9 @@ class RunsScreen {
 				$this->renderApprovalReviewLinks( $state );
 			}
 		}
+
+		// 0.3 S20: brief suggestions, whatever the run's current status.
+		$this->renderSuggestions( $state );
 
 		// "Refresh" link for the complete-without-JS experience.
 		printf(

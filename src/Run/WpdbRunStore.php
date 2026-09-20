@@ -37,7 +37,8 @@ final class WpdbRunStore implements RunStore {
 		?string $conversation_locale = null,
 		?string $content_locale = null,
 		GateMode $gate_mode = GateMode::AgentSafety,
-		array $withheld_roles = array()
+		array $withheld_roles = array(),
+		?int $follow_up_of = null
 	): int {
 		$table = Schema::runsTable( $this->db );
 		$now   = gmdate( 'Y-m-d H:i:s' );
@@ -61,8 +62,9 @@ final class WpdbRunStore implements RunStore {
 				'content_locale'      => $content_locale,
 				'gate_mode'           => $gate_mode->value,
 				'withheld_roles_json' => (string) wp_json_encode( array_values( $withheld_roles ) ),
+				'follow_up_of'        => $follow_up_of,
 			),
-			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s' )
+			array( '%d', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d' )
 		);
 
 		return (int) $this->db->insert_id;

@@ -34,9 +34,12 @@ final class Schema {
 	 * adds `gate_mode` (0.3 S3) — existing rows default to `agent_safety`,
 	 * because 0.2 could only ever run under it; 5 adds `withheld_roles_json`
 	 * (0.3 S6) — computed once at start() and, like `gate_mode`, never
-	 * updated afterwards; a NULL/missing value reads back as the empty list.
+	 * updated afterwards; a NULL/missing value reads back as the empty list;
+	 * 6 adds `follow_up_of` (0.3 S20) — the source run's id when this run was
+	 * started as a follow-up, pinned at start() and never updated afterwards;
+	 * NULL means an ordinary (non-follow-up) run.
 	 */
-	public const DB_VERSION = 5;
+	public const DB_VERSION = 6;
 
 	/**
 	 * Runs table name for this site.
@@ -144,6 +147,8 @@ final class Schema {
 				'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
 				// 0.3 S6: also pinned at start, never updated afterwards.
 				'withheld_roles_json TEXT NULL',
+				// 0.3 S20: also pinned at start, never updated afterwards.
+				'follow_up_of BIGINT(20) UNSIGNED NULL',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',
