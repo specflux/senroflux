@@ -10,13 +10,20 @@
 		"test:editor": "node --test tests/editor/editor-parity.test.cjs",
 		"build": "wp-scripts build",
 		"start": "wp-scripts start",
-		"test:unit": "wp-scripts test-unit-js --config jest.config.js"
+		"test:unit": "wp-scripts test-unit-js --config jest.config.js",
+		"e2e:env:start": "wp-env start",
+		"e2e:env:stop": "wp-env stop",
+		"e2e:env:destroy": "wp-env destroy",
+		"test:e2e": "playwright test"
 	},
 	"devDependencies": {
+		"@axe-core/playwright": "^4.13.0",
+		"@playwright/test": "^1.63.0",
 		"@testing-library/jest-dom": "6.6.3",
 		"@testing-library/react": "14.3.1",
 		"@wordpress/block-library": "9.40.2",
 		"@wordpress/blocks": "15.13.1",
+		"@wordpress/env": "^10.39.0",
 		"@wordpress/scripts": "35.0.0",
 		"jsdom": "26.1.0"
 	},
