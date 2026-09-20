@@ -224,16 +224,6 @@
 	resize: vertical;
 }
 
-/* `senroflux-answer-choice` and `senroflux-plan-action` are the `name`
- * values shared by each radio group in ParkCard.js, not classes applied in
- * markup — there is nothing to visually style, but a rule is kept here so
- * the style-coverage gate (which extracts every senroflux-* token from the
- * component source, not only className usage) has something to find. */
-.senroflux-answer-choice,
-.senroflux-plan-action {
-	margin: 0;
-}
-
 .senroflux-chat {
 	display: flex;
 	flex-direction: column;

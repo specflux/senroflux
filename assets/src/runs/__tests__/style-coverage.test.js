@@ -17,7 +17,7 @@ import path from 'path';
 const COMPONENTS_DIR = path.join( __dirname, '..', 'components' );
 const CSS_PATH = path.join( __dirname, '..', 'style.css' );
 
-/** Every `senroflux-*` token referenced anywhere in the component source. */
+/** Every `senroflux-*` class name referenced in the component source. */
 function extractUsedClassNames() {
 	const files = fs
 		.readdirSync( COMPONENTS_DIR )
@@ -26,7 +26,13 @@ function extractUsedClassNames() {
 
 	const names = new Set();
 	for ( const file of files ) {
-		const source = fs.readFileSync( file, 'utf8' );
+		// A `senroflux-` prefix is also used for values that are not classes
+		// and must never demand a rule: the radio `name` attributes that
+		// group ParkCard's choices, and element ids. Drop those attributes
+		// before matching, so the gate cannot be satisfied by dead CSS.
+		const source = fs
+			.readFileSync( file, 'utf8' )
+			.replace( /\b(?:name|id|htmlFor)\s*=\s*"[^"]*"/g, '' );
 		const matches = source.match( /senroflux-[a-zA-Z0-9-]+/g ) || [];
 		matches.forEach( ( m ) => names.add( m ) );
 	}
