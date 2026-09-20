@@ -25,7 +25,7 @@ export default function RunList( { runs, activeTab, onTabChange, selectedRunId, 
 						onClick={ () => onTabChange( tab.key ) }
 					>
 						{ tab.label }
-						{ counts[ tab.key ] > 0 && ` (${ counts[ tab.key ] })` }
+						{ ` (${ counts[ tab.key ] })` }
 					</button>
 				) ) }
 			</div>
