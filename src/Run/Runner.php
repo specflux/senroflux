@@ -94,6 +94,8 @@ final class Runner {
 		 * output[key] behaviour unchanged.
 		 */
 		private readonly mixed $write_object_id_resolver = null,
+		/** @var callable():(int|null)|null S14: the highest run id that existed when a pre-0.3 install was upgraded; a non-terminal run at or below it started under 0.2 and cannot continue. Absent/null = no 0.2 run was ever live here (a fresh install), so nothing is refused. */
+		private readonly mixed $legacy_run_watermark_probe = null,
 	) {
 	}
 
@@ -239,6 +241,15 @@ final class Runner {
 
 			if ( $run->status->isTerminal() ) {
 				return $this->state( $run, array(), null );
+			}
+
+			// 0.3 S14: a run that started under 0.2 is checked FIRST — "this
+			// run predates 0.3" subsumes any gate-mode question about it, and
+			// a completed 0.2 run (already excluded by the terminal check
+			// inside legacyRunRefusal()) must keep rendering untouched.
+			$legacy_report = $this->legacyRunRefusal( $run );
+			if ( null !== $legacy_report ) {
+				return $this->state( $this->refresh( $run ), array(), array( 'report' => $legacy_report ) );
 			}
 
 			// 0.3 S3: the environment's mode vs. the one pinned at start().
@@ -3150,6 +3161,41 @@ final class Runner {
 			$run,
 			'gate_mode_changed',
 			__( 'The gate mode changed after this run started; it cannot continue safely.', 'senroflux' )
+		);
+	}
+
+	/**
+	 * S14 ("Upgrade from 0.2"): a run whose id is at or below the legacy
+	 * watermark ({@see \Specflux\SenroFlux\Schema::maybe_upgrade()}) started
+	 * under 0.2 and cannot continue — the `update-post` tier (among others)
+	 * changed under it, and nothing is ever silently re-tiered. A terminal
+	 * run is never checked — a completed 0.2 run's history and report must
+	 * keep rendering untouched. No watermark (a fresh install, or a site
+	 * that never had a live 0.2 run) means nothing is ever refused here.
+	 *
+	 * Public for the same reason {@see gateModeMismatch()} is: {@see
+	 * \Specflux\SenroFlux\Plugin::cancel()} runs the same check before a
+	 * plain cancel, which never passes through {@see tick()}.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function legacyRunRefusal( Run $run ): ?array {
+		if ( $run->status->isTerminal() ) {
+			return null;
+		}
+
+		$watermark = is_callable( $this->legacy_run_watermark_probe )
+			? ( $this->legacy_run_watermark_probe )()
+			: null;
+
+		if ( ! is_int( $watermark ) || $run->id > $watermark ) {
+			return null;
+		}
+
+		return $this->failError(
+			$run,
+			'started_under_0_2',
+			__( 'This run started under SenroFlux 0.2 and cannot continue; start a new run.', 'senroflux' )
 		);
 	}
 

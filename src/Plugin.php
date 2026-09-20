@@ -688,6 +688,14 @@ final class Plugin {
 			return $this->get( $run_id ); // Already finished: state unchanged.
 		}
 
+		// 0.3 S14: the same legacy-run check tick() runs, at the top of
+		// cancel too — a 0.2 run gets one consistent terminal outcome
+		// (started_under_0_2) whichever surface touches it, never a plain
+		// cancel.
+		if ( null !== $this->runner()->legacyRunRefusal( $run ) ) {
+			return $this->get( $run_id );
+		}
+
 		// 0.3 S3: the same mismatch check tick() runs, at the top of cancel
 		// too — a run whose gate mode no longer matches the environment fails
 		// with a partial report (gate_mode_changed) instead of a plain cancel.
@@ -1083,6 +1091,14 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->objectIdForWrite( $verb, $args, $output ) : null;
+			},
+			// 0.3 S14: the legacy-run watermark {@see \Specflux\SenroFlux\Schema::maybe_upgrade()}
+			// recorded at the 0.2 -> 0.3 upgrade, or null when the option was
+			// never written (a fresh install, or a site with no live 0.2 run).
+			static function (): ?int {
+				$value = get_option( 'senroflux_legacy_run_watermark', false );
+
+				return is_numeric( $value ) ? (int) $value : null;
 			}
 		);
 
