@@ -97,6 +97,13 @@ jobs:
       # shipping. wp-cli's own exit code does not reflect audit findings, so
       # the step greps its own output for the audit's "Warning:" lines.
       - name: wp i18n make-pot (audit on)
+        # Explicit shell: bash (not the step default) is load-bearing here.
+        # GitHub Actions only runs `bash -o pipefail` when the shell is
+        # named explicitly; the unspecified-shell default on Linux is
+        # `bash -e {0}` with no pipefail, so `wp ... | tee ...` would report
+        # tee's exit status (0) even if `wp` itself crashed, letting a crash
+        # silently pass the grep below.
+        shell: bash
         run: |
           wp i18n make-pot . /tmp/senroflux.pot --exclude=tests,vendor,node_modules,build,research 2>&1 | tee /tmp/make-pot.log
           if grep -q '^Warning:' /tmp/make-pot.log; then
