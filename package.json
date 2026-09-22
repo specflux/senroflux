@@ -14,7 +14,9 @@
 		"e2e:env:start": "wp-env start",
 		"e2e:env:stop": "wp-env stop",
 		"e2e:env:destroy": "wp-env destroy",
-		"test:e2e": "playwright test"
+		"test:e2e": "playwright test",
+		"lint:css": "wp-scripts lint-style 'assets/src/**/*.css'",
+		"lint:js-i18n": "wp-scripts lint-js -c eslint.config.i18n.cjs assets/src"
 	},
 	"devDependencies": {
 		"@axe-core/playwright": "^4.13.0",

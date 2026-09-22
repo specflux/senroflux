@@ -61,7 +61,7 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.3'
-          tools: composer
+          tools: composer, wp-cli
           coverage: none
 
       - uses: actions/setup-node@v4
@@ -79,6 +79,30 @@ jobs:
       # that the PHP round-trip check cannot see.
       - name: Editor parity
         run: npm run test:editor
+
+      # S22 RTL gate: bans physical left/right margin/padding/position
+      # properties in assets/src via Stylelint's built-in
+      # property-disallowed-list, so layout must use logical properties.
+      - name: Stylelint (logical properties only)
+        run: npm run lint:css
+
+      # S22 translation gate (JS half): only the @wordpress/i18n-* rules,
+      # against the plugin's own text domain — deliberately not the full
+      # @wordpress/eslint-plugin style preset (see eslint.config.i18n.cjs).
+      - name: ESLint (i18n rules only)
+        run: npm run lint:js-i18n
+
+      # S22 translation gate (POT half): audit stays ON (no --skip-audit) so
+      # malformed/ambiguous translatable strings fail CI instead of silently
+      # shipping. wp-cli's own exit code does not reflect audit findings, so
+      # the step greps its own output for the audit's "Warning:" lines.
+      - name: wp i18n make-pot (audit on)
+        run: |
+          wp i18n make-pot . /tmp/senroflux.pot --exclude=tests,vendor,node_modules,build,research 2>&1 | tee /tmp/make-pot.log
+          if grep -q '^Warning:' /tmp/make-pot.log; then
+            echo "make-pot audit reported warnings — see above" >&2
+            exit 1
+          fi
 
   e2e:
     runs-on: ubuntu-latest
