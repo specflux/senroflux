@@ -94,7 +94,7 @@ function QuestionBody( { payload, onResolve, busy } ) {
 			{ /* S22 pseudo-locale: model/user-authored data with no other markup
 			 * hook to exclude it by — `data-senroflux-content` marks it as
 			 * NOT translatable chrome. */ }
-			<p data-senroflux-content>{ payload.text }</p>
+			<p data-senroflux-content dir="auto">{ payload.text }</p>
 			{ payload.rationale && <p className="senroflux-rationale">{ payload.rationale }</p> }
 			{ hasChoices ? (
 				<div className="senroflux-answer-choices" role="radiogroup" aria-label={ __( 'Answer', 'senroflux' ) }>
@@ -211,7 +211,7 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 			<ol className="senroflux-plan-steps">
 				{ steps.map( ( step, index ) => (
 					<li key={ index }>
-						<span data-senroflux-content>{ step.text }</span>
+						<span data-senroflux-content dir="auto">{ step.text }</span>
 						{ Array.isArray( step.verbs ) &&
 							step.verbs.map( ( verb ) => <TierBadge key={ verb } gateMode={ gateMode } tier={ step.tier } /> ) }
 					</li>

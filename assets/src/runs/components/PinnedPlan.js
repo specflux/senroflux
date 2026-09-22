@@ -26,13 +26,19 @@ export default function PinnedPlan( { plan, steps } ) {
 		'This count is estimated by matching the plan against executed calls in order; it may be briefly wrong if calls run out of the plan\'s listed order.',
 		'senroflux'
 	);
-	const approxCount = ( doneCount, totalCount ) => sprintf( '~%d / %d', doneCount, totalCount );
+	const approxCount = ( doneCount, totalCount ) =>
+		sprintf(
+			/* translators: 1: steps done, 2: total steps; "~" marks the count as approximate. */
+			__( '~%1$d / %2$d', 'senroflux' ),
+			doneCount,
+			totalCount
+		);
 
 	return (
 		<div className="senroflux-pinned-plan">
 			<div className="senroflux-pinned-plan-header">
-				<span className="senroflux-pinned-plan-goal">{ plan.goal }</span>
-				<span className="senroflux-pinned-plan-count" title={ approxTitle }>
+				<span className="senroflux-pinned-plan-goal" dir="auto">{ plan.goal }</span>
+				<span className="senroflux-pinned-plan-count" dir="ltr" title={ approxTitle }>
 					{ approxCount( done, total ) }
 				</span>
 				<button type="button" className="senroflux-pinned-plan-toggle" onClick={ () => setHidden( ! hidden ) }>
@@ -43,9 +49,9 @@ export default function PinnedPlan( { plan, steps } ) {
 				<ol className="senroflux-pinned-plan-steps">
 					{ ( plan.steps || [] ).map( ( planStep, index ) => (
 						<li key={ index } className={ progress[ index ] && progress[ index ].waiting ? 'is-waiting' : '' }>
-							<span className="senroflux-plan-step-text">{ planStep.text }</span>
+							<span className="senroflux-plan-step-text" dir="auto">{ planStep.text }</span>
 							{ progress[ index ] && progress[ index ].total > 1 && (
-								<span className="senroflux-plan-step-count" title={ approxTitle }>
+								<span className="senroflux-plan-step-count" dir="ltr" title={ approxTitle }>
 									{ approxCount( progress[ index ].done, progress[ index ].total ) }
 								</span>
 							) }

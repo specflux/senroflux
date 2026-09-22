@@ -53,7 +53,7 @@ export default function RunList( { runs, activeTab, onTabChange, selectedRunId, 
 							className={ `senroflux-run-row${ run.id === selectedRunId ? ' is-selected' : '' }` }
 							onClick={ () => onSelectRun( run.id ) }
 						>
-							<span className="senroflux-run-row-title">{ run.goal }</span>
+							<span className="senroflux-run-row-title" dir="auto">{ run.goal }</span>
 							<StatusPill status={ run.status } stalled={ run.stalled } />
 							<span className="senroflux-run-row-pack">{ run.pack }</span>
 						</button>

@@ -1,4 +1,4 @@
-import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel } from '../utils';
+import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel, stepResult } from '../utils';
 
 // Every RunStatus case (src/Run/RunStatus.php), kept in sync by hand: a
 // future status added there and not here would silently fall through the
@@ -172,7 +172,29 @@ describe( 'stepLabel derives a readable label, distinct from the raw ability id 
 		expect( stepLabel( { tool_name: 'core/get-site-info' } ) ).toBe( 'core/get-site-info' );
 	} );
 
-	it( 'falls back to "Tool call" when there is no verb at all', () => {
+	it( 'falls back to the untranslated sentinel when no fallbackLabel is supplied (utils.js makes no WordPress i18n calls)', () => {
 		expect( stepLabel( {} ) ).toBe( 'Tool call' );
+	} );
+
+	it( 'uses the caller-supplied fallbackLabel instead of the bare English sentinel when there is no verb at all', () => {
+		expect( stepLabel( {}, 'Appel d\'outil' ) ).toBe( 'Appel d\'outil' );
+	} );
+
+	it( 'ignores fallbackLabel once a verb IS derivable (fallback only applies to the no-verb case)', () => {
+		expect( stepLabel( { tool_name: 'wpab__senroflux__read-content' }, 'Appel d\'outil' ) ).toBe( 'Read content' );
+	} );
+} );
+
+describe( 'stepResult never returns the bare "Rejected by you, not done" fallback (that case is dead: LedgerGroup.js branches on status === \'rejected\' and renders its own translated span before ever calling stepResult())', () => {
+	it( 'returns an empty string for a rejected step, not an untranslated English fallback', () => {
+		expect( stepResult( { status: 'rejected' } ) ).toBe( '' );
+	} );
+
+	it( 'still extracts a functionResponse error for a non-rejected step', () => {
+		const step = {
+			status: 'ok',
+			message: { parts: [ { functionResponse: { response: { error: 'boom' } } } ] },
+		};
+		expect( stepResult( step ) ).toBe( 'boom' );
 	} );
 } );

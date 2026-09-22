@@ -307,11 +307,17 @@ export function planApprovalCount( plan, gateMode ) {
  * ability slug) and turns its dashes/underscores into spaces, Sentence case.
  * A verb that doesn't match the shape (no `__`) is returned as-is rather
  * than guessed at.
+ *
+ * `utils.js` deliberately makes no WordPress calls (no `@wordpress/i18n`), so
+ * it cannot translate the "no verb at all" fallback itself — the caller
+ * supplies the already-translated label via `fallbackLabel`
+ * ({@see components/LedgerGroup.js}). Omitting `fallbackLabel` (e.g. from a
+ * unit test) falls back to this untranslated sentinel rather than throwing.
  */
-export function stepLabel( step ) {
+export function stepLabel( step, fallbackLabel ) {
 	const verb = stepVerb( step );
 	if ( ! verb ) {
-		return 'Tool call';
+		return undefined !== fallbackLabel ? fallbackLabel : 'Tool call';
 	}
 	const segments = verb.split( '__' );
 	const slug = segments[ segments.length - 1 ];
@@ -325,11 +331,17 @@ export function stepLabel( step ) {
 	return words.charAt( 0 ).toUpperCase() + words.slice( 1 );
 }
 
-/** The plain-text result shown under a ledger row. */
+/**
+ * The plain-text result shown under a ledger row.
+ *
+ * Rejected calls are NOT handled here: `LedgerGroup.js` branches on
+ * `call.step.status === 'rejected'` and renders its own translated
+ * "Rejected by you, not done" span BEFORE ever calling `stepResult()` — this
+ * function's only call site only reaches it in the non-rejected branch (see
+ * `components/LedgerGroup.js`), so a `status === 'rejected'` case here would
+ * be dead code. Kept out rather than translated.
+ */
 export function stepResult( step ) {
-	if ( 'rejected' === step.status ) {
-		return 'Rejected by you, not done';
-	}
 	if ( step.message && 'object' === typeof step.message && Array.isArray( step.message.parts ) ) {
 		const part = step.message.parts.find( ( p ) => p && p.functionResponse );
 		if ( part ) {
