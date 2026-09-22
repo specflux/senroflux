@@ -3,6 +3,7 @@ const { test, expect } = require( '@playwright/test' );
 const { resetRuns, setScript, wpCli } = require( '../support/wp-cli' );
 const { planOnly } = require( '../support/scenarios' );
 const { waitLoaded, waitForPark, acceptPlan } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * Regression #5: `wp_localize_script()` casts every scalar to a STRING, so
@@ -39,6 +40,7 @@ test.describe( 'S10 a deep-linked run updates after a park resolution without re
 		navigated = false; // Ignore the initial deep-link navigation itself.
 
 		await waitForPark( page, 'plan', 'Plan: needs your OK' );
+		await assertNoSeriousA11y( page, 'plan park' );
 		await acceptPlan( page );
 
 		await expect( page.locator( '.senroflux-park-card' ) ).toHaveCount( 0, { timeout: 30000 } );

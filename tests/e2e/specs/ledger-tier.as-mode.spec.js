@@ -12,6 +12,7 @@ const {
 	approveCall,
 	waitSettled,
 } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * S10 asks for a tier badge on each expanded ledger row in Agent Safety mode
@@ -48,8 +49,10 @@ test.describe( 'S10 known defect: ledger rows carry no tier badge in Agent Safet
 			await waitForPark( page, 'question', 'Question for you' );
 			await answerChoice( page, 'Launch Day' );
 			await waitForPark( page, 'approval', 'Approve this change?' );
+			await assertNoSeriousA11y( page, 'approval park' );
 			await approveCall( page );
 			await waitSettled( page );
+			await assertNoSeriousA11y( page, 'terminal report view' );
 
 			// The assertion that SHOULD hold once the tier is surfaced on
 			// tool_result steps.

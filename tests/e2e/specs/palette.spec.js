@@ -1,6 +1,7 @@
 // @ts-check
 const { test, expect } = require( '@playwright/test' );
 const { resetRuns } = require( '../support/wp-cli' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * S10: "the command palette opening the screen with a goal without starting
@@ -40,6 +41,7 @@ test.describe( 'S10 command palette', () => {
 		await popup.waitForSelector( '.senroflux-loading', { state: 'detached' } ).catch( () => {} );
 
 		await expect( popup.locator( '.senroflux-message-box-input' ) ).toHaveValue( /keyboard palette smoke goal/ );
+		await assertNoSeriousA11y( popup, 'runs screen opened from palette' );
 		// Never started: no park, no ledger, no typing bubble, no run selected.
 		await expect( popup.locator( '.senroflux-park-card' ) ).toHaveCount( 0 );
 		await expect( popup.locator( '.senroflux-chat-bubble' ) ).toHaveCount( 0 );

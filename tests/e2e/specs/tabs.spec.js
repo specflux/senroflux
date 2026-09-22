@@ -3,6 +3,7 @@ const { test, expect } = require( '@playwright/test' );
 const { resetRuns, setScript, wpCli } = require( '../support/wp-cli' );
 const { fullTour, planOnly, quickComplete } = require( '../support/scenarios' );
 const { gotoRuns, waitLoaded, startRun, waitForPark } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * Create a `pending` run directly (never ticked) — the exact shape of the
@@ -50,6 +51,7 @@ test.describe( 'S10 run-list tabs partition every run exactly once', () => {
 		// Reload the list fresh and read every tab's own count off its own list.
 		await gotoRuns( page );
 		await waitLoaded( page );
+		await assertNoSeriousA11y( page, 'run list' );
 
 		const counts = {};
 		for ( const tab of [ 'needs_you', 'running', 'finished', 'all' ] ) {
