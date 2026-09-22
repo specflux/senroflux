@@ -11,3 +11,4 @@
 /blob-report/
 /playwright/.cache/
 /tests/e2e/support/storage-state.*.json
+/tests/e2e/pseudo-locale/build/

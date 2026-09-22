@@ -245,6 +245,12 @@ class RunsScreen {
 		$dependencies = array_values( array_filter( $asset['dependencies'], static fn ( string $handle ): bool => '' !== $handle ) );
 
 		wp_enqueue_style( 'senroflux-runs', SENROFLUX_URL . 'build/runs/style-index.css', array(), $asset['version'] );
+		// S22 RTL gate: `wp-scripts build` emits a `style-index-rtl.css`
+		// alongside the LTR stylesheet, but nothing loads it unless the
+		// handle is told an RTL replacement exists — `wp_style_add_data()`
+		// with the `rtl` key is how core wires that swap in for any locale
+		// whose `WP_Locale::is_rtl()` is true (arabic, hebrew, etc.).
+		wp_style_add_data( 'senroflux-runs', 'rtl', 'replace' );
 		wp_enqueue_script( 'senroflux-runs', SENROFLUX_URL . 'build/runs/index.js', $dependencies, $asset['version'], true );
 
 		if ( function_exists( 'wp_set_script_translations' ) ) {

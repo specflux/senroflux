@@ -8,7 +8,8 @@
 		"wp-content/plugins/agent-safety": "../agent-safety/plugin",
 		"wp-content/plugins/mcp-adapter": "../research/mcp-adapter",
 		"wp-content/plugins/abilities-api": "../research/abilities-api",
-		"wp-content/mu-plugins/senroflux-e2e-fake-provider.php": "./tests/e2e/fake-provider/fake-provider.php"
+		"wp-content/mu-plugins/senroflux-e2e-fake-provider.php": "./tests/e2e/fake-provider/fake-provider.php",
+		"wp-content/mu-plugins/senroflux-e2e-pseudo-locale.php": "./tests/e2e/pseudo-locale/mu-senroflux-pseudo-locale.php"
 	},
 	"config": {
 		"WP_DEBUG": true,
