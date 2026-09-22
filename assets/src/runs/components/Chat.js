@@ -113,7 +113,7 @@ export default function Chat( {
 	return (
 		<div className="senroflux-chat">
 			<div className="senroflux-chat-header">
-				<h1 className="senroflux-run-heading">{ run.goal }</h1>
+				<h1 className="senroflux-run-heading" dir="auto">{ run.goal }</h1>
 				{ park && (
 					<button
 						type="button"
@@ -153,7 +153,7 @@ export default function Chat( {
 			) }
 			<PinnedPlan plan={ plan } steps={ steps } />
 			<div className="senroflux-chat-stream">
-				<div className="senroflux-chat-bubble senroflux-chat-bubble-user">{ run.goal }</div>
+				<div className="senroflux-chat-bubble senroflux-chat-bubble-user" dir="auto">{ run.goal }</div>
 				{ entries.map( ( entry, index ) => {
 					if ( 'ledger' === entry.type ) {
 						return <LedgerGroup key={ index } calls={ entry.calls } gateMode={ run.gate_mode } />;
@@ -163,7 +163,7 @@ export default function Chat( {
 					if ( 'model' === step.kind ) {
 						const text = stepText( step );
 						return text ? (
-							<div key={ index } className="senroflux-chat-bubble senroflux-chat-bubble-bot">
+							<div key={ index } className="senroflux-chat-bubble senroflux-chat-bubble-bot" dir="auto">
 								{ text }
 							</div>
 						) : null;

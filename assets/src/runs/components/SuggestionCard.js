@@ -93,11 +93,11 @@ export default function SuggestionCard( { suggestion, canManageBrief, onResolve 
 						</div>
 					</>
 				) : (
-					<pre className="senroflux-suggestion-text-final">{ suggestion.text }</pre>
+					<pre className="senroflux-suggestion-text-final" dir="auto">{ suggestion.text }</pre>
 				)
 			) : (
 				<>
-					<pre className="senroflux-suggestion-text-final" tabIndex={ 0 }>
+					<pre className="senroflux-suggestion-text-final" dir="auto" tabIndex={ 0 }>
 						{ suggestion.text }
 					</pre>
 					{ pending && (

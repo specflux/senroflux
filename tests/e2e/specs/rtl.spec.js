@@ -133,4 +133,26 @@ test.describe( 'S22 RTL: dir, stylesheet and mirrored bubble alignment', () => {
 		expect( ltrResult.userBoxX ).toBeGreaterThan( ltrResult.botBoxX );
 		expect( rtlResult.userBoxX ).toBeLessThan( rtlResult.botBoxX );
 	} );
+
+	/**
+	 * Stage 19c2: bidi follow-ups. In the ar-locale (RTL) admin, English DATA
+	 * text must stay readable — `dir="auto"` on the goal heading and the
+	 * model bubble lets the browser detect each one's own bidi direction
+	 * instead of inheriting `dir="rtl"` from `<html>` (which corrupts
+	 * trailing punctuation, e.g. ".Done" instead of "Done."). The plan
+	 * progress counter is a numeric ratio ("~N / M"), never prose — it gets
+	 * `dir="ltr"` instead so it never reads as "1 of 0" in RTL.
+	 */
+	test( 'goal heading and model bubble get dir="auto"; the plan progress counter gets dir="ltr"', async ( { browser } ) => {
+		const context = await browser.newContext( { storageState: RTL_STATE_PATH } );
+		const page = await context.newPage();
+
+		await driveToTerminalAndMeasure( page );
+
+		await expect( page.locator( '.senroflux-run-heading' ) ).toHaveAttribute( 'dir', 'auto' );
+		await expect( page.locator( '.senroflux-chat-bubble-bot' ).first() ).toHaveAttribute( 'dir', 'auto' );
+		await expect( page.locator( '.senroflux-pinned-plan-count' ) ).toHaveAttribute( 'dir', 'ltr' );
+
+		await context.close();
+	} );
 } );
