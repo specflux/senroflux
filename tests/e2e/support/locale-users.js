@@ -44,8 +44,22 @@ function setUserLocale( userId, locale ) {
  * @param {string} locale Locale code, e.g. 'ar' or 'en_XA'.
  * @param {string} [role] Defaults to 'administrator'.
  */
-function ensureLocaleUser( login, email, locale, role = 'administrator' ) {
-	if ( 'en_US' !== locale ) {
+/**
+ * @param {string}  login
+ * @param {string}  email
+ * @param {string}  locale             Locale code, e.g. 'ar' or 'en_XA'.
+ * @param {string}  [role]             Defaults to 'administrator'.
+ * @param {boolean} [installCoreLanguage] Defaults to true. `en_XA` is a
+ *                                     pseudo-locale, not a real WordPress
+ *                                     core translation — `wp language core
+ *                                     install` would fail for it, and it is
+ *                                     not needed anyway: `determine_locale()`
+ *                                     returns whatever raw string is in the
+ *                                     user's `locale` meta, valid installed
+ *                                     translation or not.
+ */
+function ensureLocaleUser( login, email, locale, role = 'administrator', installCoreLanguage = true ) {
+	if ( installCoreLanguage && 'en_US' !== locale ) {
 		ensureLanguageInstalled( locale );
 	}
 	const userId = ensureUser( login, email, role );

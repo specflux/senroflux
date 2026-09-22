@@ -22,7 +22,10 @@ export default function LedgerGroup( { calls, gateMode } ) {
 		<details className="senroflux-ledger-group" open={ open } onToggle={ ( e ) => setOpen( e.target.open ) }>
 			<summary>
 				{ /* translators: %d: number of actions in this ledger group. */ sprintf( _n( '%d action', '%d actions', count, 'senroflux' ), count ) }
-				{ lastLabel && `: ${ lastLabel }` }
+				{ /* S22 pseudo-locale: lastLabel is mechanically derived from
+				 * the raw ability id (stepLabel()), not translatable UI
+				 * chrome — data-senroflux-content marks it as data. */ }
+				{ lastLabel && <span data-senroflux-content>{ `: ${ lastLabel }` }</span> }
 			</summary>
 			<ol className="senroflux-ledger">
 				{ calls.map( ( call, index ) => (
@@ -38,7 +41,9 @@ export default function LedgerGroup( { calls, gateMode } ) {
 							{ 'rejected' === call.step.status ? (
 								<span className="senroflux-ledger-you">{ __( 'Rejected by you, not done', 'senroflux' ) }</span>
 							) : (
-								stepResult( call.step )
+								/* S22 pseudo-locale: raw tool-result data (often
+								 * a JSON dump), never chrome. */
+								<span data-senroflux-content>{ stepResult( call.step ) }</span>
 							) }
 						</span>
 					</li>
