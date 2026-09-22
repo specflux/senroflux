@@ -1,0 +1,17 @@
+{
+	"rules": {
+		"property-disallowed-list": [
+			[
+				"margin-left",
+				"margin-right",
+				"padding-left",
+				"padding-right",
+				"left",
+				"right"
+			],
+			{
+				"message": "Use logical properties (margin-inline-start/end, padding-inline-start/end, inset-inline-start/end) instead of physical left/right properties, so layout mirrors correctly under RTL locales."
+			}
+		]
+	}
+}
