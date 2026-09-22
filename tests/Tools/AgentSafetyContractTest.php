@@ -23,7 +23,9 @@ use WP_Error;
  *
  * The fixture is loaded by path from the sibling checkout (the two repos live
  * side by side in the working tree); when it is absent the test is skipped
- * loudly rather than passing vacuously.
+ * loudly rather than passing vacuously. Set SENROFLUX_REQUIRE_AS_FIXTURE=1
+ * (CI does) to turn that skip into a hard failure instead, so the contract
+ * cannot silently stop being checked.
  */
 final class AgentSafetyContractTest extends TestCase {
 
@@ -32,9 +34,26 @@ final class AgentSafetyContractTest extends TestCase {
 	protected function setUp(): void {
 		$fixture = dirname( __DIR__, 3 ) . self::FIXTURE;
 		if ( ! is_readable( $fixture ) ) {
+			if ( self::fixtureRequired() ) {
+				$this->fail( 'SENROFLUX_REQUIRE_AS_FIXTURE is set but the Agent Safety contract fixture is unavailable at ' . $fixture );
+			}
 			$this->markTestSkipped( 'Agent Safety checkout not found beside senroflux/; contract fixture unavailable at ' . $fixture );
 		}
 		require_once $fixture;
+	}
+
+	/**
+	 * Any set-and-not-obviously-falsy value counts as "required" — a strict
+	 * `'1' === ...` check would silently stop guarding CI the moment someone
+	 * writes `true` or an unquoted `1` in YAML, the same vacuous-pass failure
+	 * mode this guard exists to close off.
+	 */
+	private static function fixtureRequired(): bool {
+		$value = getenv( 'SENROFLUX_REQUIRE_AS_FIXTURE' );
+		if ( false === $value ) {
+			return false;
+		}
+		return ! in_array( strtolower( trim( $value ) ), array( '', '0', 'false' ), true );
 	}
 
 	/**
@@ -43,6 +62,20 @@ final class AgentSafetyContractTest extends TestCase {
 	public static function cases(): iterable {
 		$fixture = dirname( __DIR__, 3 ) . self::FIXTURE;
 		if ( ! is_readable( $fixture ) ) {
+			// An empty data provider is a PHPUnit runner error, not a skip
+			// (PHPUnit builds the test list from this before setUp() ever
+			// runs). Yield one placeholder case so setUp() gets to decide
+			// skip vs. hard failure instead of PHPUnit reporting a generic
+			// "empty data set" error regardless of SENROFLUX_REQUIRE_AS_FIXTURE.
+			yield 'fixture missing' => array(
+				array(
+					'code'        => '',
+					'verb'        => '',
+					'tier'        => null,
+					'approval_id' => null,
+					'data'        => array(),
+				),
+			);
 			return;
 		}
 		require_once $fixture;

@@ -24,7 +24,12 @@ module.exports = defineConfig( {
 	forbidOnly: !! process.env.CI,
 	retries: 0,
 	reporter: [ [ 'list' ] ],
-	timeout: 45000,
+	// Not a hang budget: every spec here boots wp-admin, mounts the React
+	// app and drives run ticks through wp-cli, so real durations on a
+	// developer laptop run 16-37s and the slowest cleared the old 45s
+	// ceiling by 8s. A CI runner is slower still. 120s keeps a genuine
+	// hang from blocking the whole run while leaving honest work room.
+	timeout: 120000,
 	use: {
 		baseURL: BASE_URL,
 		trace: 'retain-on-failure',
