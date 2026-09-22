@@ -257,17 +257,17 @@ function UsageCeilings( { usage } ) {
 		<div className="senroflux-usage-ceilings">
 			{ Number.isInteger( usage.toolCalls.max ) && (
 				<span className="senroflux-usage-ceiling">
-					{ sprintf( __( 'Tool calls %1$d/%2$d', 'senroflux' ), usage.toolCalls.used, usage.toolCalls.max ) }
+					{ /* translators: 1: number of tool calls used, 2: tool call ceiling. */ sprintf( __( 'Tool calls %1$d/%2$d', 'senroflux' ), usage.toolCalls.used, usage.toolCalls.max ) }
 				</span>
 			) }
 			{ Number.isInteger( usage.questions.max ) && (
 				<span className="senroflux-usage-ceiling">
-					{ sprintf( __( 'Questions %1$d/%2$d', 'senroflux' ), usage.questions.used, usage.questions.max ) }
+					{ /* translators: 1: number of questions used, 2: question ceiling. */ sprintf( __( 'Questions %1$d/%2$d', 'senroflux' ), usage.questions.used, usage.questions.max ) }
 				</span>
 			) }
 			{ Number.isInteger( usage.tokens.max ) && (
 				<span className="senroflux-usage-ceiling">
-					{ sprintf( __( 'Tokens %1$d/%2$d', 'senroflux' ), usage.tokens.used, usage.tokens.max ) }
+					{ /* translators: 1: number of tokens used, 2: token ceiling. */ sprintf( __( 'Tokens %1$d/%2$d', 'senroflux' ), usage.tokens.used, usage.tokens.max ) }
 				</span>
 			) }
 		</div>

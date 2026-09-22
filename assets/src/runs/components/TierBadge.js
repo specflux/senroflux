@@ -49,7 +49,8 @@ export default function TierBadge( { gateMode, tier: rawTier } ) {
 			? __( 'Tier 2 · irreversible', 'senroflux' )
 			: 1 === tier
 			? __( 'Tier 1', 'senroflux' )
-			: sprintf( __( 'Tier %d', 'senroflux' ), tier );
+			: /* translators: %d: tier number. */
+			  sprintf( __( 'Tier %d', 'senroflux' ), tier );
 
 	return (
 		<span className={ className } data-testid="tier-badge">
