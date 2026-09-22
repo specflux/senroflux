@@ -16,7 +16,8 @@ import { stepLabel, stepResult, stepVerb, stepTier } from '../utils';
 export default function LedgerGroup( { calls, gateMode } ) {
 	const [ open, setOpen ] = useState( false );
 	const count = calls.length;
-	const lastLabel = count > 0 ? stepLabel( calls[ count - 1 ].step ) : '';
+	const toolCallFallback = __( 'Tool call', 'senroflux' );
+	const lastLabel = count > 0 ? stepLabel( calls[ count - 1 ].step, toolCallFallback ) : '';
 
 	return (
 		<details className="senroflux-ledger-group" open={ open } onToggle={ ( e ) => setOpen( e.target.open ) }>
@@ -31,7 +32,7 @@ export default function LedgerGroup( { calls, gateMode } ) {
 				{ calls.map( ( call, index ) => (
 					<li key={ index } className="senroflux-ledger-row">
 						<span className="senroflux-ledger-status">{ 'rejected' === call.step.status ? '✕' : '✓' }</span>
-						<span className="senroflux-ledger-label">{ stepLabel( call.step ) }</span>
+						<span className="senroflux-ledger-label">{ stepLabel( call.step, toolCallFallback ) }</span>
 						<span className="senroflux-ledger-verb">{ stepVerb( call.step ) }</span>
 						<TierBadge gateMode={ gateMode } tier={ stepTier( call.step ) } />
 						{ call.approvedByViewer && (
