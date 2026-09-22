@@ -28,11 +28,15 @@ function extractUsedClassNames() {
 	for ( const file of files ) {
 		// A `senroflux-` prefix is also used for values that are not classes
 		// and must never demand a rule: the radio `name` attributes that
-		// group ParkCard's choices, and element ids. Drop those attributes
+		// group ParkCard's choices, element ids, and the S22 pseudo-locale
+		// `data-senroflux-content` marker (a bare boolean JSX attribute,
+		// not a class — it exists so a test can find DATA text nodes to
+		// EXCLUDE from a translation check, never to be styled). Drop those
 		// before matching, so the gate cannot be satisfied by dead CSS.
 		const source = fs
 			.readFileSync( file, 'utf8' )
-			.replace( /\b(?:name|id|htmlFor)\s*=\s*"[^"]*"/g, '' );
+			.replace( /\b(?:name|id|htmlFor)\s*=\s*"[^"]*"/g, '' )
+			.replace( /\bdata-senroflux-content\b/g, '' );
 		const matches = source.match( /senroflux-[a-zA-Z0-9-]+/g ) || [];
 		matches.forEach( ( m ) => names.add( m ) );
 	}
