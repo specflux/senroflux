@@ -29,12 +29,12 @@ const { assertNoSeriousA11y } = require( '../support/a11y' );
  * Against this worktree's own wp-env that round trip is fast enough
  * (observed empirically) that the busy render can commit and unmount
  * between two Playwright DOM polls with nothing left to assert against —
- * so the `senroflux_start` admin-ajax POST is deliberately delayed via
+ * so every `senroflux_tick` admin-ajax POST is deliberately delayed via
  * `page.route()` for this spec only, to give the busy state time to paint.
  * This delays only this spec's own request; it does not touch app code.
  */
 
-/** Delay the one `senroflux_start` admin-ajax POST so the typing bubble has time to paint. */
+/** Delay each `senroflux_tick` admin-ajax POST so the typing bubble has time to paint. */
 async function delayTickAjax( page ) {
 	await page.route( '**/admin-ajax.php', async ( route ) => {
 		const postData = route.request().postData() || '';
