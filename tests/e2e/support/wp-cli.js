@@ -47,4 +47,35 @@ function deactivateAgentSafety() {
 	wpCli( [ 'plugin', 'deactivate', 'agent-safety' ] );
 }
 
-module.exports = { wpCli, setScript, resetRuns, activateAgentSafety, deactivateAgentSafety, ROOT };
+/** Idempotent: `wp plugin activate` on an already-active plugin is a no-op. */
+function activatePlugin( slug ) {
+	wpCli( [ 'plugin', 'activate', slug ] );
+}
+
+/** @return {boolean} */
+function isPluginActive( slug ) {
+	try {
+		wpCli( [ 'plugin', 'is-active', slug ] );
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/** @return {boolean} */
+function tableExists( name ) {
+	const rows = wpCli( [ 'db', 'query', `SHOW TABLES LIKE '${ name }'`, '--skip-column-names' ] ).trim();
+	return rows === name;
+}
+
+module.exports = {
+	wpCli,
+	setScript,
+	resetRuns,
+	activateAgentSafety,
+	deactivateAgentSafety,
+	activatePlugin,
+	isPluginActive,
+	tableExists,
+	ROOT,
+};

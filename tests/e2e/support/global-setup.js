@@ -1,8 +1,36 @@
 const { request } = require( '@playwright/test' );
 const path = require( 'path' );
-const { activateAgentSafety, deactivateAgentSafety, resetRuns, wpCli } = require( './wp-cli' );
+const {
+	activateAgentSafety,
+	deactivateAgentSafety,
+	activatePlugin,
+	isPluginActive,
+	tableExists,
+	resetRuns,
+	wpCli,
+} = require( './wp-cli' );
 
 const BASE_URL = process.env.SENROFLUX_E2E_BASE_URL || 'http://localhost:8895';
+
+/**
+ * Every plugin the suite needs active regardless of gate mode. A cold
+ * wp-env mounts these but leaves them inactive, so senroflux's activation
+ * hook (which creates wp_senroflux_runs/steps) never runs and the first
+ * spec dies deep inside an unrelated SQL error instead of at setup.
+ */
+const ALWAYS_ACTIVE_PLUGINS = [ 'abilities-api', 'mcp-adapter', 'senroflux' ];
+
+/** Fail setup itself, with a clear cause, instead of leaving it to a spec. */
+function assertEnvironmentReady() {
+	for ( const slug of ALWAYS_ACTIVE_PLUGINS ) {
+		if ( ! isPluginActive( slug ) ) {
+			throw new Error( `e2e setup: plugin "${ slug }" did not report active after activation` );
+		}
+	}
+	if ( ! tableExists( 'wp_senroflux_runs' ) ) {
+		throw new Error( 'e2e setup: wp_senroflux_runs table is missing; senroflux activation hook did not run' );
+	}
+}
 
 /** wp-env's default admin credentials. */
 const ADMIN_USER = 'admin';
@@ -32,12 +60,18 @@ async function loginAndSaveState( storageStatePath ) {
  * @param {'built_in'|'agent_safety'} gateMode
  */
 async function setupFor( gateMode, storageStatePath ) {
+	for ( const slug of ALWAYS_ACTIVE_PLUGINS ) {
+		activatePlugin( slug );
+	}
+
 	if ( 'agent_safety' === gateMode ) {
 		activateAgentSafety();
 		wpCli( [ 'option', 'update', 'agsafe_pack_bindings', '{"role:administrator":"senroflux-e2e-pack","role:editor":"senroflux-e2e-pack"}', '--format=json' ] );
 	} else {
 		deactivateAgentSafety();
 	}
+
+	assertEnvironmentReady();
 	resetRuns();
 
 	const target = storageStatePath || path.join( __dirname, `storage-state.${ gateMode }.json` );
