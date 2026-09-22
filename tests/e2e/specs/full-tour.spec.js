@@ -1,9 +1,9 @@
 // @ts-check
 const { test, expect } = require( '@playwright/test' );
-const AxeBuilder = require( '@axe-core/playwright' ).default;
 const { setScript, resetRuns } = require( '../support/wp-cli' );
 const { fullTour } = require( '../support/scenarios' );
 const { wpCli } = require( '../support/wp-cli' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 const {
 	gotoRuns,
 	waitLoaded,
@@ -14,12 +14,6 @@ const {
 	approveCall,
 	waitSettled,
 } = require( '../support/actions' );
-
-async function assertNoSeriousA11y( page, label ) {
-	const results = await new AxeBuilder( { page } ).include( '#senroflux-runs-root' ).analyze();
-	const serious = results.violations.filter( ( v ) => [ 'serious', 'critical' ].includes( v.impact ) );
-	expect( serious, `${ label }: ${ JSON.stringify( serious, null, 2 ) }` ).toEqual( [] );
-}
 
 test.describe( 'S10/S12 full run tour (built-in mode)', () => {
 	test.beforeEach( () => {

@@ -3,6 +3,7 @@ const { test, expect } = require( '@playwright/test' );
 const { resetRuns, setScript } = require( '../support/wp-cli' );
 const { keyboardTour } = require( '../support/scenarios' );
 const { gotoRuns, waitLoaded } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * S22: "A keyboard-only spec goes from palette launch through question, plan
@@ -30,6 +31,7 @@ test.describe( 'S22 keyboard-only run: question, plan, approval', () => {
 		await page.locator( '#senroflux-park-heading' ).waitFor( { state: 'visible', timeout: 30000 } );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toHaveText( 'Question for you' );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toBeFocused();
+		await assertNoSeriousA11y( page, 'question park' );
 
 		await page.keyboard.press( 'Tab' ); // into the choice radiogroup
 		await page.keyboard.press( 'Space' ); // pick the first radio (News)
@@ -43,6 +45,7 @@ test.describe( 'S22 keyboard-only run: question, plan, approval', () => {
 		await page.locator( '#senroflux-park-heading' ).waitFor( { state: 'visible', timeout: 30000 } );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toHaveText( 'Plan: needs your OK' );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toBeFocused();
+		await assertNoSeriousA11y( page, 'plan park' );
 
 		while ( ! ( await page.locator( '.senroflux-park-actions button:has-text("Accept plan")' ).evaluate( ( el ) => el === document.activeElement ) ) ) {
 			await page.keyboard.press( 'Tab' );
@@ -53,6 +56,7 @@ test.describe( 'S22 keyboard-only run: question, plan, approval', () => {
 		await page.locator( '#senroflux-park-heading' ).waitFor( { state: 'visible', timeout: 30000 } );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toHaveText( 'Approve this change?' );
 		await expect( page.locator( '#senroflux-park-heading' ) ).toBeFocused();
+		await assertNoSeriousA11y( page, 'approval park' );
 
 		while ( ! ( await page.locator( '.senroflux-park-actions button:has-text("Approve")' ).evaluate( ( el ) => el === document.activeElement ) ) ) {
 			await page.keyboard.press( 'Tab' );

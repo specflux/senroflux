@@ -45,7 +45,7 @@ export default function RunList( { runs, activeTab, onTabChange, selectedRunId, 
 				) ) }
 				{ 0 === visible.length && (
 					<li className="senroflux-run-rows-empty">
-						{ sprintf( __( 'No runs in %s.', 'senroflux' ), RUN_TABS.find( ( t ) => t.key === activeTab )?.label || activeTab ) }
+						{ /* translators: %s: run list tab label. */ sprintf( __( 'No runs in %s.', 'senroflux' ), RUN_TABS.find( ( t ) => t.key === activeTab )?.label || activeTab ) }
 					</li>
 				) }
 			</ul>

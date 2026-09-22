@@ -21,7 +21,7 @@ export default function LedgerGroup( { calls, gateMode } ) {
 	return (
 		<details className="senroflux-ledger-group" open={ open } onToggle={ ( e ) => setOpen( e.target.open ) }>
 			<summary>
-				{ sprintf( _n( '%d action', '%d actions', count, 'senroflux' ), count ) }
+				{ /* translators: %d: number of actions in this ledger group. */ sprintf( _n( '%d action', '%d actions', count, 'senroflux' ), count ) }
 				{ lastLabel && `: ${ lastLabel }` }
 			</summary>
 			<ol className="senroflux-ledger">

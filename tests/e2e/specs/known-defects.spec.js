@@ -12,6 +12,7 @@ const {
 	approveCall,
 	waitSettled,
 } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 /**
  * Product defects found by this suite while building 0.3 S10/S12/S22
@@ -49,8 +50,10 @@ test.describe( 'S12 known defect: a live-ticked suggestion is invisible until re
 			await waitForPark( page, 'question', 'Question for you' );
 			await answerChoice( page, 'Launch Day' );
 			await waitForPark( page, 'approval', 'Approve this change?' );
+			await assertNoSeriousA11y( page, 'approval park' );
 			await approveCall( page );
 			await waitSettled( page );
+			await assertNoSeriousA11y( page, 'terminal report view' );
 
 			// This is the assertion that SHOULD hold once fixed: the
 			// suggestion card appears from the SAME tick that created it,

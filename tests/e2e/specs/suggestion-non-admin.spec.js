@@ -3,6 +3,7 @@ const { test, expect } = require( '@playwright/test' );
 const { resetRuns, setScript, wpCli } = require( '../support/wp-cli' );
 const { fullTour } = require( '../support/scenarios' );
 const { gotoRuns, waitLoaded, startRun, waitForPark, answerChoice, acceptPlan, approveCall, waitSettled } = require( '../support/actions' );
+const { assertNoSeriousA11y } = require( '../support/a11y' );
 
 const EDITOR_USER = 'senroflux-e2e-editor';
 const EDITOR_PASS = 'senroflux-e2e-editor-pass';
@@ -32,10 +33,13 @@ test.describe( 'S12 brief-suggestion card, non-admin viewer', () => {
 		await waitLoaded( page );
 		await startRun( page, 'Build the launch page' );
 		await waitForPark( page, 'plan', 'Plan: needs your OK' );
+		await assertNoSeriousA11y( page, 'plan park' );
 		await acceptPlan( page );
 		await waitForPark( page, 'question', 'Question for you' );
+		await assertNoSeriousA11y( page, 'question park' );
 		await answerChoice( page, 'Launch Day' );
 		await waitForPark( page, 'approval', 'Approve this change?' );
+		await assertNoSeriousA11y( page, 'approval park' );
 		await approveCall( page );
 		await waitSettled( page );
 
@@ -62,6 +66,8 @@ test.describe( 'S12 brief-suggestion card, non-admin viewer', () => {
 		await editorPage.goto( `/wp-admin/admin.php?page=senroflux-runs&run_id=${ runId }` );
 		await editorPage.waitForSelector( '#senroflux-runs-root' );
 		await editorPage.waitForSelector( '.senroflux-loading', { state: 'detached' } ).catch( () => {} );
+
+		await assertNoSeriousA11y( editorPage, 'non-admin report view' );
 
 		const suggestion = editorPage.locator( '.senroflux-suggestion-card' );
 		await expect( suggestion ).toBeVisible();
