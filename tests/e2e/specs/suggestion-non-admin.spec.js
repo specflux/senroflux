@@ -4,6 +4,7 @@ const { resetRuns, setScript, wpCli } = require( '../support/wp-cli' );
 const { fullTour } = require( '../support/scenarios' );
 const { gotoRuns, waitLoaded, startRun, waitForPark, answerChoice, acceptPlan, approveCall, waitSettled } = require( '../support/actions' );
 const { assertNoSeriousA11y } = require( '../support/a11y' );
+const { BASE_URL } = require( '../support/global-setup' );
 
 const EDITOR_USER = 'senroflux-e2e-editor';
 const EDITOR_PASS = 'senroflux-e2e-editor-pass';
@@ -58,10 +59,32 @@ test.describe( 'S12 brief-suggestion card, non-admin viewer', () => {
 		// reported a pass.
 		const editorContext = await browser.newContext( { storageState: undefined } );
 		const editorPage = await editorContext.newPage();
-		await editorPage.goto( '/wp-login.php' );
-		await editorPage.fill( '#user_login', EDITOR_USER );
-		await editorPage.fill( '#user_pass', EDITOR_PASS );
-		await editorPage.click( '#wp-submit' );
+
+		// Log in via HTTP POST on the context's own request API (same
+		// pattern as global-setup.js / locale-users.js) instead of filling
+		// the wp-login form: wp-login.php's wp_attempt_focus() steals focus
+		// back to #user_login ~200ms after load, and Playwright's fill()
+		// commits its typed text to whatever is focused at the moment it
+		// runs, not necessarily the field it just focused. Under load the
+		// timer can win the race, the password lands in #user_login instead
+		// of #user_pass, the required-field check blocks the submit, and
+		// the next goto() silently lands back on wp-login — a 120s timeout
+		// with no indication login ever failed. A POST has no such race.
+		await editorContext.request.post( '/wp-login.php', {
+			form: {
+				log: EDITOR_USER,
+				pwd: EDITOR_PASS,
+				'wp-submit': 'Log In',
+				redirect_to: `${ BASE_URL }/wp-admin/`,
+				testcookie: '1',
+			},
+		} );
+
+		// Fail loudly here, not 120s later at an unrelated selector wait,
+		// if the login above did not actually authenticate the context.
+		const cookies = await editorContext.cookies();
+		const loggedIn = cookies.some( ( cookie ) => cookie.name.startsWith( 'wordpress_logged_in_' ) );
+		expect( loggedIn, 'Editor login POST to /wp-login.php did not set a wordpress_logged_in_ cookie' ).toBe( true );
 
 		await editorPage.goto( `/wp-admin/admin.php?page=senroflux-runs&run_id=${ runId }` );
 		await editorPage.waitForSelector( '#senroflux-runs-root' );
