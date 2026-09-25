@@ -173,6 +173,13 @@ jobs:
         working-directory: research/mcp-adapter
         run: composer install --no-dev --prefer-dist --no-interaction
 
+      # Same trap for Agent Safety: without vendor/ its bootstrap bails, the
+      # plugin still lists as active, and SenroFlux quietly falls back to its
+      # built-in gate — so the Agent Safety mode specs would run ungoverned.
+      - name: Install Agent Safety runtime dependencies
+        working-directory: agent-safety/plugin
+        run: composer install --no-dev --prefer-dist --no-interaction
+
       - name: Start wp-env
         working-directory: senroflux
         run: npx @wordpress/env start
