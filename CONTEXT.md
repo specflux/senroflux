@@ -49,6 +49,16 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   needs, the verbs it exposes with their tiers, its skills, its pattern vocabulary, the run
   capability it requires and the setup checks it declares. A SenroFlux pack produces the Agent
   Safety capability pack that governs it.
+- **Extension API** — the part of SenroFlux another plugin may build a pack against, under a
+  semver promise from 1.0: the pack contract, the pack registration hook, pack skills, budget
+  defaults and a pack's namespace preferences. Everything else is internal and may change in any
+  release. A pack registered through it is governed exactly like a bundled one.
+- **Breaking change** — a change to the extension API that removes or renames part of it, changes
+  a signature or return shape, or changes what a hook's result means. Tightening the gate (a
+  higher tier, a new park, a newly withheld role) is never a breaking change, whatever it breaks.
+- **Add-on** — a separate plugin that adds packs through the extension API; SenroFlux itself
+  never contains an add-on's code or checks its licence. **SenroFlux Pro** is Specflux's paid
+  add-on, sold outside wordpress.org; paying for it never buys a weaker gate.
 - **Setup check** — a condition shown on the Runs screen before a run can be started, declared
   by the harness or by a registered pack and identified by a namespaced id. **Blocking** checks
   disable Start while they fail (no model provider); **advisory** ones only recommend (Agent
@@ -65,19 +75,30 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   required; pack skills may be disabled for a run; skills are always on, never conditional.
 - **Role** — what a pack needs an ability *for* (read, create, update, preview, patterns),
   independent of which registered ability fills it — core's when it exists and fits, a
-  polyfill otherwise.
+  polyfill otherwise. A role may also name the capability it needs from the person starting
+  the run (adding images needs `upload_files`), separately from the pack's run capability.
 - **Run capability** — the WordPress capability a pack requires of whoever starts a run with it
   (`edit_posts` for the posts pack, `edit_pages` for the pages pack, `manage_options` for the site
   pack, `manage_woocommerce` for commerce). It answers "may this
   person set this pack going at all", which is a different question from what the gate lets the
   run do once started, and a different word from **Role** above. Holding no pack's run
   capability is what makes SenroFlux invisible to a user.
+- **Withheld role** — a pack role removed from a run's tool set at start because the starting
+  user lacks the capability that role names (a Contributor's posts run has no images). The
+  model is told the role is unavailable, and the run view and **Report** name it. It is decided
+  once, at start, from who is running, which is different from a gate refusal, decided per call
+  from the verb's tier.
 - **Site navigation** — the one navigation the active theme actually renders to visitors, named as
   a single domain object so a run never has to know which of WordPress's two menu worlds it is in:
   in a block theme, the navigation entry the theme's header refers to; in a classic theme, the menu
   assigned to the theme's location. Creating a navigation, or choosing where it appears, is not part
   of the concept — a run edits the navigation the site already has. Because it is by definition the
   one visitors see, every change to it is Tier 2.
+  Where it renders a Page List, publishing a page changes it with no navigation write at all, so a
+  plan that publishes pages must say so.
+- **Adopted object** — an existing page, navigation or setting that a plan takes into a run's scope
+  instead of creating it. The plan names it with its ID and status, and the run changes it only
+  where the plan says so; adopting a page links it as-is unless the human asked for a rewrite.
 
 - **Verb** — the unit Agent Safety tiers, grants and audits. A pack maps each (role, input
   shape) to a verb, so one ability can be several verbs (editing a draft and publishing it
@@ -88,9 +109,18 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   always lives in SenroFlux's own namespace, never in one another plugin owns. Upstream is core where core is the natural home, and a canonical
   upstream plugin where it is not.
 - **Pattern vocabulary** — the curated set of core-block patterns a pack ships and the model
-  composes content from. Content is a sequence of pattern instances and nothing else; anything
+  composes content from, plus, for the pages and site packs, the active theme's theme-derived
+  patterns. Content is a sequence of pattern instances and nothing else; anything
   outside the vocabulary is refused, never trimmed. A vocabulary separates **prose patterns**,
   which may repeat without limit, from **feature patterns**, which carry per-vocabulary caps.
+  A theme-derived pattern is always a feature pattern.
+- **Theme-derived pattern** — a pattern the active theme (or its parent) registers that passes
+  the eligibility filter, with its shape, text slots and word limits derived from its own
+  markup rather than written by hand. The model never writes its markup: it supplies the text
+  slots and SenroFlux fills them into the theme's markup. A theme switch removes it from the
+  vocabulary, so instances left in a draft are refused like any unknown pattern.
+- **Text slot** — a rich-text element or link target in a theme-derived pattern. Every slot must
+  be supplied; an empty value, or the theme's shipped sample text, is refused.
 - **Pattern shape** — the structural definition of a pattern: which blocks nest in which, and
   how many of each repeated part are allowed. Shape is how the harness recognises a pattern
   in what the model wrote; the name the model gives it is only a hint.
@@ -102,6 +132,9 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
   the run trying to write it. The refusal belongs to the ability that performs the write, not to the
   model's judgement, so a run parked for days cannot silently overwrite an edit a human made in the
   meantime. A stale write is a refusal the model must react to, never a warning it may proceed past.
+- **Slug collision** — a create refused because a non-trashed object already holds the slug. The
+  refusal belongs to the ability, like a stale write, because WordPress leaves draft slugs
+  un-deduplicated and would otherwise surface the duplicate as `-2` only at publish.
 - **Report** — the run's closing summary: the model's prose plus a harness-built list of every
   object written (status, edit and preview links, verified or not). Links come from the
   harness, never from the model. Cancelled and failed runs still get a partial report.

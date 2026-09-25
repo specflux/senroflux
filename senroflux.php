@@ -25,6 +25,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux;
 
+use Specflux\SenroFlux\MultisiteGuard;
 use Specflux\SenroFlux\Plugin;
 
 // Bail on direct access (must precede any other runtime code so static
@@ -33,6 +34,13 @@ defined( 'ABSPATH' ) || exit;
 
 if ( ! defined( 'SENROFLUX_URL' ) ) {
 	define( 'SENROFLUX_URL', plugin_dir_url( __FILE__ ) );
+}
+
+if ( ! defined( 'SENROFLUX_PATH' ) ) {
+	// 0.3 S10/S17: the React Runs screen's build assets are read from disk
+	// (its `index.asset.php` dependency/version manifest) before being
+	// enqueued by URL via `SENROFLUX_URL` above.
+	define( 'SENROFLUX_PATH', plugin_dir_path( __FILE__ ) );
 }
 
 
@@ -48,6 +56,15 @@ register_activation_hook( __FILE__, __NAMESPACE__ . '\senroflux_activate' );
  * @return void
  */
 function senroflux_activate(): void {
+	// Multisite is refused (0.3 S2). Checked inline as well as through the
+	// guard class so a broken autoloader cannot let activation through.
+	if ( function_exists( 'is_multisite' ) && is_multisite() ) {
+		if ( class_exists( MultisiteGuard::class ) ) {
+			MultisiteGuard::refuse_activation( __FILE__ );
+		}
+		wp_die( esc_html__( 'SenroFlux does not support WordPress multisite. It was not activated.', 'senroflux' ) );
+	}
+
 	if ( ! class_exists( Schema::class ) || ! function_exists( 'dbDelta' ) ) {
 		return;
 	}
@@ -55,6 +72,13 @@ function senroflux_activate(): void {
 	global $wpdb;
 	if ( isset( $wpdb ) ) {
 		Schema::maybe_upgrade( $wpdb );
+	}
+
+	// 0.3 S10: no redirect, no site-wide notice — one one-time notice on the
+	// Plugins screen only, rendered by RunsScreen::maybeRenderActivationNotice()
+	// and cleared the first time it shows.
+	if ( function_exists( 'set_transient' ) ) {
+		set_transient( \Specflux\SenroFlux\Admin\RunsScreen::ACTIVATION_NOTICE_TRANSIENT, 1, WEEK_IN_SECONDS );
 	}
 }
 
@@ -92,7 +116,7 @@ require_once __DIR__ . '/src/api.php';
 add_action(
 	'plugins_loaded',
 	static function (): void {
-		if ( class_exists( Plugin::class ) ) {
+		if ( class_exists( Plugin::class ) && ! MultisiteGuard::refused() ) {
 			Plugin::instance()->govern();
 		}
 	},
@@ -118,6 +142,12 @@ add_action(
 					);
 				}
 			);
+
+			return;
+		}
+
+		if ( MultisiteGuard::refused() ) {
+			MultisiteGuard::refuse_runtime( __FILE__ );
 
 			return;
 		}

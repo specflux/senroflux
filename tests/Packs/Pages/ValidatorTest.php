@@ -10,7 +10,8 @@
  * rather than against a stub that agrees with them by construction.
  *
  * Covers EVERY S10 refusal code — invalid_markup | unknown_block |
- * disallowed_markup | unresolved_placeholder | unknown_pattern | slot_count |
+ * disallowed_markup | decorative_color | unresolved_placeholder |
+ * unknown_pattern | slot_count | block_mismatch |
  * page_shape (pattern_count, hero_first, max_cta, max_repeat) — plus the step-5
  * mutations and the stored-XSS payloads the pack must refuse.
  *
@@ -22,6 +23,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Packs\Pages;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
 use WP_Error;
@@ -378,22 +380,160 @@ final class ValidatorTest extends TestCase {
 		);
 	}
 
-	// --- Step 5: mutations ------------------------------------------------
+	// --- Step 2c: decorative_color --------------------------------------
 
-	public function test_clean_strips_decorative_color_and_normalises_meta(): void {
+	/**
+	 * @return array<string, array{string, string, string, string}>
+	 */
+	public static function colorProvider(): array {
+		return array(
+			'backgroundColor preset' => array(
+				'"align":"full"',
+				'"align":"full","backgroundColor":"base-2"',
+				'wp-block-group alignfull has-base-2-background-color has-background',
+				'backgroundColor',
+			),
+			'textColor preset'       => array(
+				'"align":"full"',
+				'"align":"full","textColor":"contrast"',
+				'wp-block-group alignfull has-contrast-color has-text-color',
+				'textColor',
+			),
+			'gradient preset'        => array(
+				'"align":"full"',
+				'"align":"full","gradient":"vivid-cyan-blue"',
+				'wp-block-group alignfull has-vivid-cyan-blue-gradient-background has-background',
+				'gradient',
+			),
+			'custom style.color'     => array(
+				'"style":{"spacing"',
+				'"style":{"color":{"background":"#5140A5"},"spacing"',
+				'wp-block-group alignfull has-background',
+				'style.color',
+			),
+		);
+	}
+
+	/**
+	 * Stripping the colour from the block comment would leave it in the HTML:
+	 * an inline colour style then fails editor validation, and preset classes
+	 * survive as a custom class. So colour is refused, not stripped.
+	 *
+	 * @dataProvider colorProvider
+	 */
+	public function test_decorative_color_is_refused_not_stripped( string $search, string $replace, string $classes, string $attr ): void {
 		$hero    = str_replace(
-			'"align":"full"',
-			'"align":"full","backgroundColor":"base-2","textColor":"contrast"',
+			array( $search, 'wp-block-group alignfull' ),
+			array( $replace, $classes ),
 			$this->markup( 'hero' )
 		);
 		$content = $hero . "\n\n" . $this->markup( 'text-section' );
 
 		$result = $this->validator->clean( $content );
 
+		$this->assertFalse( $result['ok'] );
+		$this->assertInstanceOf( WP_Error::class, $result['wp_error'] );
+		$this->assertSame( 'decorative_color', $result['wp_error']->get_error_code() );
+		$this->assertSame( 0, $result['wp_error']->get_error_data()['index'] );
+		$this->assertSame( $attr, $result['wp_error']->get_error_data()['attr'] );
+		$this->assertSame( $content, $result['content'], 'a refusal returns the input untouched' );
+	}
+
+	public function test_decorative_color_on_a_nested_block_reports_its_pattern_index(): void {
+		$section = str_replace(
+			'<!-- wp:paragraph -->',
+			'<!-- wp:paragraph {"textColor":"contrast"} -->',
+			$this->markup( 'text-section' )
+		);
+
+		$result = $this->validator->validate( $this->markup( 'hero' ) . "\n\n" . $section );
+
+		$this->assertSame( 'decorative_color', $this->errorCode( $result ) );
+		$this->assertSame( 1, $result->get_error_data()['index'] );
+		$this->assertSame( 'core/paragraph', $result->get_error_data()['name'] );
+	}
+
+	// --- Step 4b: block_mismatch (editor parity) --------------------------
+
+	public function test_block_mismatch_refuses_html_that_disagrees_with_attributes(): void {
+		$content = str_replace(
+			'<h3 class="wp-block-heading">First feature</h3>',
+			'<h4 class="wp-block-heading">First feature</h4>',
+			$this->page( 'hero', 'feature-grid' )
+		);
+
+		$result = $this->validator->validate( $content );
+
+		$this->assertSame( 'block_mismatch', $this->errorCode( $result ) );
+		$data = $result->get_error_data();
+		$this->assertSame( 1, $data['index'] );
+		$this->assertSame( 'core/heading', $data['name'] );
+		$this->assertSame( 'html', $data['reason'] );
+		$this->assertStringContainsString( '<h3 class="wp-block-heading">…</h3>', $result->get_error_message() );
+		$this->assertStringContainsString( '<h4 class="wp-block-heading">…</h4>', $result->get_error_message() );
+	}
+
+	public function test_block_mismatch_refuses_a_missing_base_class(): void {
+		$content = str_replace(
+			'wp-block-button__link wp-element-button',
+			'wp-block-button__link',
+			$this->page( 'hero', 'text-section' )
+		);
+
+		$result = $this->validator->validate( $content );
+
+		$this->assertSame( 'block_mismatch', $this->errorCode( $result ) );
+		$this->assertSame( 'core/button', $result->get_error_data()['name'] );
+	}
+
+	public function test_block_mismatch_refuses_attributes_the_vocabulary_never_uses(): void {
+		$content = str_replace( '<!-- wp:button -->', '<!-- wp:button {"width":50} -->', $this->page( 'hero', 'text-section' ) );
+
+		$result = $this->validator->validate( $content );
+
+		$this->assertSame( 'block_mismatch', $this->errorCode( $result ) );
+		$data = $result->get_error_data();
+		$this->assertSame( 'attributes', $data['reason'] );
+		$this->assertSame( '{"width":50}', $data['found'] );
+		$this->assertSame( '{}', $data['expected'] );
+	}
+
+	public function test_block_mismatch_refuses_a_preset_changed_on_one_side_only(): void {
+		$content = preg_replace( '#spacing\|60#', 'spacing|40', $this->page( 'hero', 'text-section' ), 1 );
+
+		$result = $this->validator->validate( (string) $content );
+
+		$this->assertSame( 'block_mismatch', $this->errorCode( $result ) );
+		$this->assertSame( 'attributes', $result->get_error_data()['reason'] );
+	}
+
+	public function test_a_preset_changed_consistently_is_accepted(): void {
+		$content = str_replace(
+			array( 'spacing|60', 'spacing--60', '"fontSize":"large"', 'has-large-font-size' ),
+			array( 'spacing|40', 'spacing--40', '"fontSize":"x-large"', 'has-x-large-font-size' ),
+			$this->page( 'hero', 'text-section' )
+		);
+
+		$this->assertTrue( $this->validator->validate( $content ) );
+	}
+
+	public function test_extra_classes_are_accepted(): void {
+		$content = str_replace( 'wp-block-group alignfull', 'wp-block-group alignfull is-style-hero', $this->page( 'hero', 'text-section' ) );
+
+		$this->assertTrue( $this->validator->validate( $content ) );
+	}
+
+	// --- Step 5: mutations ------------------------------------------------
+
+	public function test_clean_normalises_pattern_metadata_name(): void {
+		$hero    = str_replace( '"name":"senroflux/hero"', '"name":"My hero"', $this->markup( 'hero' ) );
+		$content = $hero . "\n\n" . $this->markup( 'text-section' );
+
+		$result = $this->validator->clean( $content );
+
 		$this->assertTrue( $result['ok'] );
-		$this->assertStringNotContainsString( 'backgroundColor', $result['content'] );
-		$this->assertStringNotContainsString( 'textColor', $result['content'] );
 		$this->assertStringContainsString( '"name":"senroflux/hero"', $result['content'] );
+		$this->assertStringNotContainsString( 'My hero', $result['content'] );
 	}
 
 	public function test_clean_is_idempotent_on_shipped_markup(): void {
@@ -426,5 +566,57 @@ final class ValidatorTest extends TestCase {
 		$this->assertFalse( $result['ok'] );
 		$this->assertSame( 'disallowed_markup', $result['wp_error']->get_error_code() );
 		$this->assertSame( $content, $result['content'] );
+	}
+
+	// --- 0.3 S21: curated wins a shape tie against a theme pattern ---------
+
+	/**
+	 * A theme pattern structurally IDENTICAL to the curated `hero` (same
+	 * blockName tree, same layout-defining attrs — the only thing
+	 * {@see Validator::matchesShape()} keys on) still resolves to the
+	 * CURATED slug, because {@see Vocabulary::all()} appends theme-derived
+	 * patterns AFTER the curated seven and `matchPatternSchema()` returns the
+	 * first structural match it finds.
+	 */
+	public function test_curated_pattern_wins_a_shape_tie_against_a_theme_pattern(): void {
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
+
+		$hero_markup = $this->markup( 'hero' );
+
+		$GLOBALS['senroflux_test_theme_patterns'] = array(
+			array(
+				'name'        => 'twentytwentyfive/fake-hero',
+				'title'       => 'Fake hero',
+				'description' => 'A theme pattern with the exact same shape as the curated hero.',
+				// Same structure, different sample copy — matchesShape() never
+				// looks at rich-text content, only block names/layout attrs.
+				'content'     => str_replace(
+					array( 'A headline that states the promise', 'One supporting sentence saying who this is for and what they get.' ),
+					array( 'A totally different headline', 'A totally different supporting line here.' ),
+					$hero_markup
+				),
+				'filePath'    => dirname( __DIR__, 2 ) . '/ThemePatterns/fake-hero.php',
+				'categories'  => array( 'banner' ),
+			),
+		);
+		ThemePatterns::resetCache();
+		$GLOBALS['senroflux_test_stylesheet_dir'] = dirname( __DIR__, 2 ) . '/ThemePatterns';
+
+		// A fresh Vocabulary/Validator pair so `all()` picks up the stubbed
+		// theme pattern registered just above.
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$this->assertNotEmpty( $vocabulary->themeDerived(), 'the stub must actually register a theme pattern' );
+
+		$content = $hero_markup . "\n\n" . $this->markup( 'text-section' );
+		$result  = $validator->clean( $content );
+
+		$this->assertTrue( $result['ok'] );
+		$this->assertStringContainsString( '"name":"senroflux/hero"', $result['content'], 'the curated slug wins the tie' );
+		$this->assertStringNotContainsString( 'fake-hero', $result['content'] );
+
+		ThemePatterns::resetCache();
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'] );
 	}
 }

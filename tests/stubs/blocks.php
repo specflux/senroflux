@@ -172,6 +172,22 @@ if ( ! function_exists( 'serialize_blocks' ) ) {
 $GLOBALS['senroflux_test_posts']          = array();
 $GLOBALS['senroflux_test_inserted_posts'] = array();
 $GLOBALS['senroflux_test_next_post_id']   = 100;
+$GLOBALS['senroflux_test_modified_seq']   = 0;
+
+/**
+ * A deterministic, ever-increasing `post_modified_gmt` stand-in (0.3 S8):
+ * real WordPress bumps this on every insert/update, which is exactly the
+ * signal the stale-write compare needs. A counter (not `gmdate()`) keeps two
+ * writes in the same test process guaranteed distinct regardless of wall-clock
+ * resolution.
+ */
+if ( ! function_exists( 'senroflux_test_next_modified_marker' ) ) {
+	function senroflux_test_next_modified_marker(): string {
+		$GLOBALS['senroflux_test_modified_seq'] = (int) ( $GLOBALS['senroflux_test_modified_seq'] ?? 0 ) + 1;
+
+		return 'modified-' . $GLOBALS['senroflux_test_modified_seq'];
+	}
+}
 
 if ( ! function_exists( 'wp_insert_post' ) ) {
 	function wp_insert_post( array $postarr, bool $wp_error = false ): int|WP_Error {
@@ -182,17 +198,20 @@ if ( ! function_exists( 'wp_insert_post' ) ) {
 		$id                                     = (int) ( $GLOBALS['senroflux_test_next_post_id'] ?? 100 );
 		$GLOBALS['senroflux_test_next_post_id'] = $id + 1;
 
-		$post                = new stdClass();
-		$post->ID            = $id;
-		$post->post_type     = $postarr['post_type'] ?? 'page';
-		$post->post_title    = $postarr['post_title'] ?? '';
-		$post->post_content  = $postarr['post_content'] ?? '';
-		$post->post_status   = $postarr['post_status'] ?? 'draft';
-		$post->post_name     = $postarr['post_name'] ?? '';
-		$post->post_parent   = (int) ( $postarr['post_parent'] ?? 0 );
-		$post->post_excerpt  = $postarr['post_excerpt'] ?? '';
-		$post->post_date     = '';
-		$post->post_modified = '';
+		$post                    = new stdClass();
+		$post->ID                = $id;
+		$post->post_type         = $postarr['post_type'] ?? 'page';
+		$post->post_title        = $postarr['post_title'] ?? '';
+		$post->post_content      = $postarr['post_content'] ?? '';
+		$post->post_status       = $postarr['post_status'] ?? 'draft';
+		$post->post_name         = $postarr['post_name'] ?? '';
+		$post->post_parent       = (int) ( $postarr['post_parent'] ?? 0 );
+		$post->post_excerpt      = $postarr['post_excerpt'] ?? '';
+		$post->post_mime_type    = $postarr['post_mime_type'] ?? '';
+		$post->guid              = 'https://example.test/wp-content/uploads/' . ( $postarr['post_title'] ?? (string) $id );
+		$post->post_date         = '';
+		$post->post_modified     = '';
+		$post->post_modified_gmt = senroflux_test_next_modified_marker();
 
 		$GLOBALS['senroflux_test_posts'][ $id ] = $post;
 
@@ -220,6 +239,11 @@ if ( ! function_exists( 'wp_update_post' ) ) {
 					$post->{$key} = $value;
 				}
 			}
+			// 0.3 S8: every real update bumps the modified marker — a
+			// write's own after-write re-record (Content\Abilities) relies on
+			// this changing, and the "two consecutive writes" scenario would
+			// be untested if it never did.
+			$post->post_modified_gmt = senroflux_test_next_modified_marker();
 		}
 
 		return $id;
@@ -280,5 +304,71 @@ if ( ! function_exists( 'get_edit_post_link' ) ) {
 if ( ! function_exists( 'get_userdata' ) ) {
 	function get_userdata( int $id ): mixed {
 		return $GLOBALS['senroflux_test_users'][ $id ] ?? false;
+	}
+}
+
+// --- WP_Query shim (0.3 S4: read-content list mode + slug-collision) -------
+
+if ( ! class_exists( 'WP_Query', false ) ) {
+	/**
+	 * Minimal in-memory stand-in over `$GLOBALS['senroflux_test_posts']`.
+	 * Supports exactly the args this codebase's own queries use: post_type,
+	 * post_status (array or string), author, post_parent, post__in, paged and
+	 * posts_per_page (-1 = all). Not a general WP_Query re-implementation.
+	 */
+	class WP_Query {
+
+		/** @var list<object> */
+		public array $posts = array();
+
+		public int $found_posts = 0;
+
+		public int $max_num_pages = 1;
+
+		/**
+		 * @param array<string,mixed> $args Query args.
+		 */
+		public function __construct( array $args = array() ) {
+			$post_type = (string) ( $args['post_type'] ?? 'post' );
+			$statuses  = $args['post_status'] ?? array( 'publish' );
+			$statuses  = is_array( $statuses ) ? $statuses : array( $statuses );
+
+			$matches = array();
+			foreach ( (array) ( $GLOBALS['senroflux_test_posts'] ?? array() ) as $post ) {
+				if ( ! is_object( $post ) ) {
+					continue;
+				}
+				if ( (string) ( $post->post_type ?? '' ) !== $post_type ) {
+					continue;
+				}
+				if ( ! in_array( (string) ( $post->post_status ?? '' ), $statuses, true ) ) {
+					continue;
+				}
+				if ( isset( $args['author'] ) && (int) ( $post->post_author ?? 0 ) !== (int) $args['author'] ) {
+					continue;
+				}
+				if ( isset( $args['post_parent'] ) && (int) ( $post->post_parent ?? 0 ) !== (int) $args['post_parent'] ) {
+					continue;
+				}
+				if ( isset( $args['post__in'] ) && is_array( $args['post__in'] )
+					&& ! in_array( (int) ( $post->ID ?? 0 ), array_map( 'intval', $args['post__in'] ), true )
+				) {
+					continue;
+				}
+
+				$matches[] = $post;
+			}
+
+			$per_page          = (int) ( $args['posts_per_page'] ?? -1 );
+			$this->found_posts = count( $matches );
+
+			if ( $per_page > 0 ) {
+				$this->max_num_pages = (int) ceil( $this->found_posts / $per_page );
+				$page                = max( 1, (int) ( $args['paged'] ?? 1 ) );
+				$matches             = array_slice( $matches, ( $page - 1 ) * $per_page, $per_page );
+			}
+
+			$this->posts = array_values( $matches );
+		}
 	}
 }

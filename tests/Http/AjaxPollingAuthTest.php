@@ -44,6 +44,10 @@ final class AjaxPollingAuthTest extends TestCase {
 		$GLOBALS['senroflux_test_transients']      = array();
 		$GLOBALS['senroflux_test_filters']         = array();
 		unset( $_POST );
+		// 0.3 S10: the screen capability is now computed from the registered
+		// packs; this file is about the DELEGATION allowance, not that
+		// computation — pin the pre-0.3 fixed value.
+		add_filter( 'senroflux_runs_capability', static fn (): string => 'manage_options' );
 	}
 
 	protected function tearDown(): void {

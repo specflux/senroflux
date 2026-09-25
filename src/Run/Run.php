@@ -21,7 +21,7 @@ final class Run {
 
 	/**
 	 * @param list<string>   $allow      Ability-name allow-list (globs allowed).
-	 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int} $budget
+	 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int} $budget
 	 * @param array<string,mixed>|null $error Structured failure info (our own convention; code + message keys expected).
 	 *
 	 * 0.2 S4 additions: the pack name (null for direct-allow starts), the
@@ -56,6 +56,22 @@ final class Run {
 		public readonly ?int $acceptedPlanStepId = null,
 		public readonly ?string $conversationLocale = null,
 		public readonly ?string $contentLocale = null,
+		/** 0.3 S3: pinned at start(), never changes afterwards. */
+		public readonly GateMode $gateMode = GateMode::AgentSafety,
+		/**
+		 * 0.3 S6: role names withheld from this run at start(), because the
+		 * starting user lacked the capability the pack named for them. Pinned
+		 * at start(), never changes afterwards — like {@see $gateMode}.
+		 *
+		 * @var list<string>
+		 */
+		public readonly array $withheldRoles = array(),
+		/**
+		 * 0.3 S20: the source run's id when this run was started as a
+		 * follow-up (`follow_up_of`); pinned at start(), never changes
+		 * afterwards. Null for an ordinary run.
+		 */
+		public readonly ?int $followUpOf = null,
 	) {
 	}
 
@@ -65,14 +81,15 @@ final class Run {
 	 * @param array<string,mixed> $row Raw row.
 	 */
 	public static function fromRow( array $row ): self {
-		$allow   = json_decode( (string) ( $row['allow_json'] ?? '[]' ), true );
-		$budget  = json_decode( (string) ( $row['budget_json'] ?? '{}' ), true );
-		$error   = json_decode( (string) ( $row['error_json'] ?? 'null' ), true );
-		$status  = RunStatus::tryFrom( (string) ( $row['status'] ?? '' ) );
-		$skills  = json_decode( (string) ( $row['skills_json'] ?? 'null' ), true );
-		$disable = json_decode( (string) ( $row['skills_disable_json'] ?? 'null' ), true );
-		$result  = json_decode( (string) ( $row['result_json'] ?? 'null' ), true );
-		$objects = json_decode( (string) ( $row['objects_json'] ?? 'null' ), true );
+		$allow    = json_decode( (string) ( $row['allow_json'] ?? '[]' ), true );
+		$budget   = json_decode( (string) ( $row['budget_json'] ?? '{}' ), true );
+		$error    = json_decode( (string) ( $row['error_json'] ?? 'null' ), true );
+		$status   = RunStatus::tryFrom( (string) ( $row['status'] ?? '' ) );
+		$skills   = json_decode( (string) ( $row['skills_json'] ?? 'null' ), true );
+		$disable  = json_decode( (string) ( $row['skills_disable_json'] ?? 'null' ), true );
+		$result   = json_decode( (string) ( $row['result_json'] ?? 'null' ), true );
+		$objects  = json_decode( (string) ( $row['objects_json'] ?? 'null' ), true );
+		$withheld = json_decode( (string) ( $row['withheld_roles_json'] ?? 'null' ), true );
 
 		return new self(
 			id: (int) ( $row['id'] ?? 0 ),
@@ -97,6 +114,9 @@ final class Run {
 			acceptedPlanStepId: isset( $row['accepted_plan_step_id'] ) && '' !== (string) $row['accepted_plan_step_id'] ? (int) $row['accepted_plan_step_id'] : null,
 			conversationLocale: isset( $row['conversation_locale'] ) && is_string( $row['conversation_locale'] ) && '' !== $row['conversation_locale'] ? $row['conversation_locale'] : null,
 			contentLocale: isset( $row['content_locale'] ) && is_string( $row['content_locale'] ) && '' !== $row['content_locale'] ? $row['content_locale'] : null,
+			gateMode: GateMode::tryFrom( (string) ( $row['gate_mode'] ?? 'agent_safety' ) ) ?? GateMode::AgentSafety,
+			withheldRoles: is_array( $withheld ) ? array_values( array_filter( $withheld, 'is_string' ) ) : array(),
+			followUpOf: isset( $row['follow_up_of'] ) && '' !== (string) $row['follow_up_of'] ? (int) $row['follow_up_of'] : null,
 		);
 	}
 
@@ -129,6 +149,9 @@ final class Run {
 			'accepted_plan_step_id' => $this->acceptedPlanStepId,
 			'conversation_locale'   => $this->conversationLocale,
 			'content_locale'        => $this->contentLocale,
+			'gate_mode'             => $this->gateMode->value,
+			'withheld_roles_json'   => (string) wp_json_encode( $this->withheldRoles ),
+			'follow_up_of'          => $this->followUpOf,
 		);
 	}
 }

@@ -21,7 +21,6 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Packs\Pages;
 
 use Specflux\SenroFlux\Packs\Pack;
-use Specflux\SenroFlux\Run\Tail;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
@@ -34,16 +33,13 @@ defined( 'ABSPATH' ) || exit;
  */
 final class PagesPack extends Pack {
 
-	/**
-	 * @param string|null $content_locale The site content locale (S15); null → the
-	 *                                    content-language skill says "the site language".
-	 */
-	public function __construct( private readonly ?string $content_locale = null ) {
+	public function __construct() {
 		parent::__construct(
 			array(
 				'read'     => 'read-content',
 				'create'   => 'create-post',
 				'update'   => 'update-post',
+				'publish'  => 'publish-post',
 				'preview'  => 'get-preview-url',
 				'patterns' => 'list-patterns',
 			)
@@ -70,6 +66,13 @@ final class PagesPack extends Pack {
 	}
 
 	/**
+	 * @return string 'edit_pages' (S3/S7: the pages pack's run capability).
+	 */
+	public function runCapability(): string {
+		return 'edit_pages';
+	}
+
+	/**
 	 * The input-property keys this pack's client actually sends, per ability
 	 * template (S9 shape-compat seam). A core ability is adopted only when its
 	 * schema accepts every one of these.
@@ -80,8 +83,9 @@ final class PagesPack extends Pack {
 	protected function inputProperties( string $template ): array {
 		return match ( $template ) {
 			'read-content'    => array( 'id', 'post_type', 'slug', 'status', 'author', 'parent', 'fields' ),
-			'create-post'     => array( 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
-			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'status', 'slug', 'parent', 'excerpt' ),
+			'create-post'     => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
+			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
+			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
 			'get-preview-url' => array( 'id' ),
 			'list-patterns'   => array(),
 			default           => array(),
@@ -117,6 +121,10 @@ final class PagesPack extends Pack {
 	 * resolved to `senroflux/update-post` or a shape-compatible `core/update-post`
 	 * (S9: for a core-filled role the pack still names the verb).
 	 *
+	 * 0.3 S4: `update-post` is draft-state edits only, so it is always
+	 * `pages/update-draft` regardless of args — the publish/update-live split
+	 * that used to live on ONE ability now lives on `publish-post`.
+	 *
 	 * @param string              $ability The concrete ability id.
 	 * @param array<string,mixed> $input   Call input.
 	 */
@@ -126,7 +134,8 @@ final class PagesPack extends Pack {
 			'list-patterns'   => 'pages/list-patterns',
 			'get-preview-url' => 'pages/preview',
 			'create-post'     => 'pages/create-draft',
-			'update-post'     => $this->updateVerb( $input ),
+			'update-post'     => 'pages/update-draft',
+			'publish-post'    => $this->publishVerb( $input ),
 			// S9: an ability this pack does not name keeps the ability id as
 			// its verb, which no entry of verbMap() answers — the fence then
 			// fails closed on it.
@@ -135,30 +144,22 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The update-post predicate (S10): a transition to publish is
-	 * `pages/publish` (tier 2); a publish target with the status unchanged is
-	 * `pages/update-live` (tier 2); a draft|pending target (or no status at
-	 * all) is `pages/update-draft` (tier 1).
+	 * The publish-post predicate (0.3 S4): a transition to publish or future is
+	 * `pages/publish` (tier 2); any other call reaching this ability — editing
+	 * an already-public target, or re-asserting its current public status — is
+	 * `pages/update-live` (tier 2).
 	 *
 	 * @param array<string,mixed> $input Call input.
 	 */
-	private function updateVerb( array $input ): string {
+	private function publishVerb( array $input ): string {
 		$desired = $input['status'] ?? null;
-		if ( ! is_string( $desired ) || '' === $desired ) {
-			return 'pages/update-draft';
-		}
-
 		$current = $this->currentStatus( $input );
 
-		if ( 'publish' === $desired && $desired !== $current ) {
-			return 'pages/publish';
-		}
+		$transitioning = is_string( $desired )
+			&& in_array( $desired, array( 'publish', 'future' ), true )
+			&& $desired !== $current;
 
-		if ( 'publish' === $desired ) {
-			return 'pages/update-live';
-		}
-
-		return 'pages/update-draft';
+		return $transitioning ? 'pages/publish' : 'pages/update-live';
 	}
 
 	/**
@@ -180,10 +181,13 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The S10 role => pack-verb split. `update` is the one role that spans more
-	 * than one verb, which is exactly what {@see Pack::agentSafetyVerbMap()}
-	 * collapses (upwards) into the single tier Agent Safety can carry for
-	 * `senroflux/update-post`.
+	 * The S10 role => pack-verb split. 0.3 S4: `update` and `publish` are now
+	 * SEPARATE roles/abilities, each spanning the verbs its own ability can
+	 * produce — `update` (Tier 1, `update-post`) never spans a Tier-2 verb any
+	 * more, which is exactly what keeps {@see Pack::agentSafetyVerbMap()} from
+	 * collapsing a draft edit up to Tier 2 (0.2's bug: one ability spanning
+	 * both draft and publish verbs forced every draft edit to Agent Safety's
+	 * irreversible classification).
 	 *
 	 * @return array<string,list<string>>
 	 */
@@ -192,14 +196,18 @@ final class PagesPack extends Pack {
 		return array(
 			'read'     => array( 'pages/read' ),
 			'create'   => array( 'pages/create-draft' ),
-			'update'   => array( 'pages/update-draft', 'pages/update-live', 'pages/publish' ),
+			'update'   => array( 'pages/update-draft' ),
+			'publish'  => array( 'pages/update-live', 'pages/publish' ),
 			'preview'  => array( 'pages/preview' ),
 			'patterns' => array( 'pages/list-patterns' ),
 		);
 	}
 
 	/**
-	 * The three pack skills, in render order (source Pack, version '1').
+	 * The two pack skills, in render order (source Pack, version '1').
+	 * `pages/content-language` used to be a third (0.2 S15); 0.3 S5 promotes
+	 * it to the harness's own `harness/content-language`, shared with every
+	 * pack (and no pack), so it is no longer declared here.
 	 *
 	 * @return list<Skill>
 	 */
@@ -219,14 +227,6 @@ final class PagesPack extends Pack {
 				'pages/copy-rules',
 				'Copy rules',
 				$this->copyRulesBody( $vocabulary->all() ),
-				false,
-				SkillSource::Pack,
-				'1'
-			),
-			new Skill(
-				'pages/content-language',
-				'Content language',
-				$this->contentLanguageBody(),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -253,7 +253,7 @@ final class PagesPack extends Pack {
 				'To publish a page you already created, call the update ability with the id and status only and OMIT content entirely — do not send an empty content either. Omitted or empty content means "content unchanged": the stored markup is kept as it is. Never resend content you have not changed; re-sending it risks a whole-write refusal on markup that is already stored and accepted.',
 				'Close everything you open: every `<!-- wp:x -->` needs its matching `<!-- /wp:x -->`, and every wrapper element a block opens (a group\'s <div>, a details, a list) must be closed before that block ends. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
 				'When you propose a plan, spell each step\'s verbs exactly as one of: pages/read, pages/list-patterns, pages/preview, pages/create-draft, pages/update-draft, pages/update-live, pages/publish. Creating the page as a draft is pages/create-draft; making a draft live is pages/publish. Any other word is refused as unknown_verb.',
-				'Give a block ONLY the attributes its shape names below. An attribute the shape does not name — an extra align, an extra layout — changes the pattern\'s identity and the write is refused as unknown_pattern. In particular only the hero and the cta give their buttons block `{"layout":{"type":"flex"}}`; a buttons block anywhere else carries no layout at all.',
+				'Give a block ONLY the attributes its shape names below. An attribute the shape does not name — an extra align, an extra layout — changes the pattern\'s identity and the write is refused as unknown_pattern. In particular only the hero and the cta give their buttons block `{"layout":{"type":"flex"}}`; a buttons block anywhere else carries no layout at all. Exception: a top-level group\'s `style.spacing.padding` is optional decoration, accepted whichever way you write it — call pages/list-patterns for each pattern\'s exact sample markup and copy it (with or without that one attribute); every OTHER attribute in the sample is load-bearing.',
 				'Shapes (">" = child, "(n–m)" = how many of that child):',
 				'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
 				'text-section: group > heading level 2, paragraph (1–4)',
@@ -288,22 +288,6 @@ final class PagesPack extends Pack {
 		$lines[] = 'Give prices as "$—/month (price TBC)" unless the user supplied a price.';
 
 		return implode( "\n", $lines );
-	}
-
-	/**
-	 * The `pages/content-language` body (S15): names the site content language,
-	 * or "the site language" when unknown.
-	 */
-	private function contentLanguageBody(): string {
-		$name = 'the site language';
-		if ( null !== $this->content_locale ) {
-			$resolved = Tail::languageName( $this->content_locale );
-			if ( null !== $resolved && '' !== $resolved ) {
-				$name = $resolved;
-			}
-		}
-
-		return sprintf( 'Write page content in %s unless the goal says otherwise.', $name );
 	}
 
 	/**

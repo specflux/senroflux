@@ -29,11 +29,15 @@ final class ConsumerPolicy {
 	/**
 	 * Resolve the allow-list and budget for an HTTP start.
 	 *
-	 * @param string $consumer         Consumer id from the request.
-	 * @param mixed  $requested_budget Budget-ish input from the request.
+	 * @param string             $consumer              Consumer id from the request.
+	 * @param mixed              $requested_budget      Budget-ish input from the request.
+	 * @param array<string,int>  $pack_budget_overrides S7: the chosen pack's own
+	 *                                                   {@see \Specflux\SenroFlux\Packs\Pack::defaultBudget()},
+	 *                                                   when the start names one. Empty for a packless
+	 *                                                   start, which keeps this seam pack-agnostic.
 	 * @return array{allow:list<string>,budget:array{max_steps:int,max_tool_calls:int,max_tokens:int}}|WP_Error
 	 */
-	public static function resolve( string $consumer, mixed $requested_budget ): array|WP_Error {
+	public static function resolve( string $consumer, mixed $requested_budget, array $pack_budget_overrides = array() ): array|WP_Error {
 		/**
 		 * Filters the consumers allowed to start runs over HTTP.
 		 *
@@ -59,7 +63,19 @@ final class ConsumerPolicy {
 			);
 		}
 
-		$ceiling = Budget::sanitize( is_array( $policy ) ? ( $policy['budget'] ?? null ) : null );
+		// S7: the pack's own (flat-and-high) defaults become the BASELINE the
+		// ceiling is built from, but the registered consumer's own policy
+		// budget still caps every key it sets — Budget::sanitize()'s
+		// mergeOverCapped keeps a key the consumer didn't set at the
+		// pack-adjusted default while never letting a key the consumer DID
+		// set rise back toward or past the pack's own baseline. Applying this
+		// unconditionally (rather than only when the pack has no overrides)
+		// avoids silently loosening a third-party consumer's registered
+		// budget on every pack-driven start.
+		$ceiling = Budget::sanitize(
+			is_array( $policy ) ? ( $policy['budget'] ?? null ) : null,
+			$pack_budget_overrides
+		);
 
 		return array(
 			'allow'  => $allow,

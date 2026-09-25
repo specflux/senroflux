@@ -9,6 +9,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Tools;
 
+use WP_Error;
+
 // Bail on direct access.
 defined( 'ABSPATH' ) || exit;
 
@@ -33,10 +35,36 @@ final class ToolExecutor {
 	/**
 	 * Run one tool call to its terminal outcome.
 	 *
-	 * @param string      $ability_name Ability id (ns/name form).
-	 * @param mixed|null  $args         Call arguments; null when argument-less.
+	 * 0.3 S3: in {@see \Specflux\SenroFlux\Run\GateMode::BuiltIn}, `$gate`
+	 * carries the Runner's classification of this call. When it is active
+	 * (tier above 0, or unmapped) and not yet approved, the call parks HERE —
+	 * BEFORE `check_permissions` — because SenroFlux never registers
+	 * permission filters of its own (that would change the ability for every
+	 * consumer on the site, not just this run). On the re-run of an approved
+	 * park, `$gate->approved` is true and this check is skipped entirely, so
+	 * the ability's OWN `check_permissions`/`execute()` run exactly as they
+	 * would in AS mode.
+	 *
+	 * @param string           $ability_name Ability id (ns/name form).
+	 * @param mixed|null       $args         Call arguments; null when argument-less.
+	 * @param BuiltinGate|null $gate         Built-in gate classification, or null in AS mode.
+	 * @param callable(string,array<string,mixed>):(WP_Error|null)|null $validate
+	 *   S19 (stage 12): the run's pack's pre-execution validator
+	 *   ({@see \Specflux\SenroFlux\Packs\Pack::validateCall()}), run BEFORE
+	 *   the ability's own `check_permissions()`/`execute()` — the seam for a
+	 *   pack rule over an ability ANOTHER plugin registers and this class
+	 *   never owns (e.g. WooCommerce's `product-update`). Null = no opinion
+	 *   (a direct-allow run, or a pack that declares none).
 	 */
-	public function call( string $ability_name, mixed $args = null ): ToolOutcome {
+	public function call( string $ability_name, mixed $args = null, ?BuiltinGate $gate = null, mixed $validate = null ): ToolOutcome {
+		if ( null !== $gate && $gate->active && ! $gate->approved ) {
+			return ToolOutcome::approvalRequired(
+				$gate->approvalId,
+				'' !== $gate->verb ? $gate->verb : $ability_name,
+				(string) $gate->tier
+			);
+		}
+
 		if ( ! function_exists( 'wp_get_ability' ) ) {
 			return ToolOutcome::unknownTool( $ability_name );
 		}
@@ -45,6 +73,13 @@ final class ToolExecutor {
 
 		if ( null === $ability || ! is_object( $ability ) ) {
 			return ToolOutcome::unknownTool( $ability_name );
+		}
+
+		if ( is_callable( $validate ) ) {
+			$violation = $validate( $ability_name, is_array( $args ) ? $args : array() );
+			if ( $violation instanceof WP_Error ) {
+				return ToolOutcome::denied( (string) $violation->get_error_code(), (string) $violation->get_error_message() );
+			}
 		}
 
 		$permission = $ability->check_permissions( $args );

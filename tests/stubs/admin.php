@@ -13,6 +13,15 @@
 
 declare ( strict_types = 1 );
 
+if ( ! function_exists( 'add_query_arg' ) ) {
+	/** Minimal shim: appends/overrides query args on a URL (S10 redirect). */
+	function add_query_arg( array $args, string $url ): string {
+		$separator = str_contains( $url, '?' ) ? '&' : '?';
+
+		return array() === $args ? $url : $url . $separator . http_build_query( $args );
+	}
+}
+
 if ( ! function_exists( 'wp_unslash' ) ) {
 	/** Identity shim (WP's slash-removal is a no-op on already-unslashed input). */
 	function wp_unslash( $value ) {
@@ -33,6 +42,13 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	/** Strip-shim: keeps text fields printable. */
 	function sanitize_text_field( string $text ): string {
 		return trim( strip_tags( (string) $text ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags -- test shim; wp_strip_all_tags may not exist in tests.
+	}
+}
+
+if ( ! function_exists( 'sanitize_key' ) ) {
+	/** Lower-cases and strips to `[a-z0-9_-]`, same shape as WP core's own. */
+	function sanitize_key( string $key ): string {
+		return preg_replace( '/[^a-z0-9_-]/', '', strtolower( $key ) ) ?? '';
 	}
 }
 
@@ -119,5 +135,30 @@ if ( ! function_exists( 'wp_localize_script' ) ) {
 		unset( $handle, $object_name, $data );
 
 		return true;
+	}
+}
+
+if ( ! function_exists( 'add_menu_page' ) ) {
+	/** No-op shim: records nothing, just satisfies the call (0.3 S10/S20). */
+	function add_menu_page( ...$args ): string {
+		unset( $args );
+
+		return '';
+	}
+}
+
+if ( ! function_exists( 'add_submenu_page' ) ) {
+	/** No-op shim: records nothing, just satisfies the call (0.3 S20). */
+	function add_submenu_page( ...$args ): string|false {
+		unset( $args );
+
+		return '';
+	}
+}
+
+if ( ! function_exists( 'esc_textarea' ) ) {
+	/** Same shape as esc_html (a textarea body is HTML-escaped, no attribute quoting needed). */
+	function esc_textarea( string $text ): string {
+		return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' );
 	}
 }

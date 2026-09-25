@@ -25,6 +25,11 @@ defined( 'ABSPATH' ) || exit;
  *                   message_json, the harness tool name in tool_name. Park.
  *   - system      — budget/cancel/error notes written by the harness itself
  *                   (S4's `note` convention lives in message_json).
+ *   - suggestion  — the model's suggest-brief-addition call (0.3 S20): the
+ *                   validated payload in message_json, the harness tool name
+ *                   in tool_name. Parks nothing; resolution (save/dismiss)
+ *                   rides a LATER `suggestion_resolved` system note, never a
+ *                   rewrite of this row.
  */
 enum StepKind: string {
 
@@ -35,6 +40,7 @@ enum StepKind: string {
 	case Question   = 'question';
 	case Plan       = 'plan';
 	case System     = 'system';
+	case Suggestion = 'suggestion';
 
 	/**
 	 * Kinds whose message_json re-enters the prompt as history verbatim.

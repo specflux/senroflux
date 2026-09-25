@@ -14,8 +14,10 @@ use Specflux\SenroFlux\Approval\GrantBridge;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\BuiltinGate;
 use Specflux\SenroFlux\Tools\HarnessTools;
 use Specflux\SenroFlux\Tools\PlanTools;
+use Specflux\SenroFlux\Tools\SuggestBriefTool;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\ToolOutcome;
 use Specflux\SenroFlux\Tools\ToolRegistry;
@@ -70,6 +72,30 @@ final class Runner {
 		private readonly GrantBridge $grants = new GrantBridge(),
 		/** @var callable(Run,string):(string|null)|null Gate-verb resolver (S14): pack verb => the AGENT SAFETY verb (the resolved ability id) a grant must name; absent = the pack verb IS the ability id (direct-allow, S9). */
 		private readonly mixed $grant_verb_resolver = null,
+		/** @var callable():GateMode|null S3: the environment's CURRENT gate mode; absent = always {@see GateMode::AgentSafety} (0.2 behaviour, never mismatches). */
+		private readonly mixed $gate_mode_probe = null,
+		/** @var callable(Run):list<string>|null S6: the concrete ability ids withheld from this run's execution (a role's resolved ability, for every role in `Run::$withheldRoles`); absent = none. Defence in depth alongside the tool-set drop at start() — this is re-checked on every call, never trusting the allow-list alone. */
+		private readonly mixed $withheld_abilities_resolver = null,
+		/** @var callable(Run):list<string>|null S19: the run's UNGRANTABLE pack verbs (a pack's `ungrantableVerbs()`); absent/null = none, every Tier-2 verb stays grantable (0.2/0.3-pre-S19 behaviour). {@see grantCounts()} skips issuing a grant for any verb this names, however many times the accepted plan lists it. */
+		private readonly mixed $ungrantable_verbs_resolver = null,
+		/** @var callable(Run,string):(string|null)|null Object-id PREFIX resolver (S12 defect fix): a per-verb string prepended to the id {@see $object_id_key_resolver} extracts, before it is tracked/verified/looked up — lets a pack keep two object kinds that share a raw id space (a post and an attachment can both be `63`) from colliding in one run's `objects_json`; absent/null = no prefix (every pre-existing pack's ids are unchanged). */
+		private readonly mixed $object_id_prefix_resolver = null,
+		/**
+		 * @var callable(Run,string,array<string,mixed>,array<string,mixed>):(string|null)|null
+		 * Write object-id resolver (S12 defect fix, live run 56): given the
+		 * run, the pack verb, the call's args and its output, answers the id
+		 * a Tier >= 1 write just wrote, or null to fall back to
+		 * {@see $object_id_key_resolver}'s output[key] extraction. A pack
+		 * verb whose write has no natural id in its own OUTPUT — a singleton
+		 * object like the site navigation or the front-page setting, whose
+		 * ability output schema carries no id at all — uses this instead of
+		 * adding a tracker-only field to a model-visible, schema-validated
+		 * ability response. Absent/null = every pre-existing pack keeps the
+		 * output[key] behaviour unchanged.
+		 */
+		private readonly mixed $write_object_id_resolver = null,
+		/** @var callable():(int|null)|null S14: the highest run id that existed when a pre-0.3 install was upgraded; a non-terminal run at or below it started under 0.2 and cannot continue. Absent/null = no 0.2 run was ever live here (a fresh install), so nothing is refused. */
+		private readonly mixed $legacy_run_watermark_probe = null,
 	) {
 	}
 
@@ -194,6 +220,10 @@ final class Runner {
 	private function tickBody( Run $run, ?array $resume ): array|WP_Error {
 		$run_id = $run->id;
 
+		// S9: snapshot BEFORE any resume drain or new step this tick appends
+		// — see self::$tick_elapsed_gap_seconds.
+		$this->elapsedGapAtTickStart( $run );
+
 		try {
 			// S5: a park resolution only makes sense on a parked run — a
 			// pending/running/terminal run carrying one is a protocol error,
@@ -211,6 +241,24 @@ final class Runner {
 
 			if ( $run->status->isTerminal() ) {
 				return $this->state( $run, array(), null );
+			}
+
+			// 0.3 S14: a run that started under 0.2 is checked FIRST — "this
+			// run predates 0.3" subsumes any gate-mode question about it, and
+			// a completed 0.2 run (already excluded by the terminal check
+			// inside legacyRunRefusal()) must keep rendering untouched.
+			$legacy_report = $this->legacyRunRefusal( $run );
+			if ( null !== $legacy_report ) {
+				return $this->state( $this->refresh( $run ), array(), array( 'report' => $legacy_report ) );
+			}
+
+			// 0.3 S3: the environment's mode vs. the one pinned at start().
+			// Checked at the top, before any park resolution or fresh work —
+			// a mismatch fails the run with a partial report rather than
+			// silently switching enforcement under it.
+			$mismatch_report = $this->gateModeMismatch( $run );
+			if ( null !== $mismatch_report ) {
+				return $this->state( $this->refresh( $run ), array(), array( 'report' => $mismatch_report ) );
 			}
 
 			$new_steps = array();
@@ -298,7 +346,7 @@ final class Runner {
 				$new_steps[] = $this->appendStep(
 					$run_id,
 					StepKind::User,
-					new UserMessage( array( new MessagePart( $run->goal ) ) )
+					new UserMessage( array( new MessagePart( $this->goalWithFollowUpSeed( $run ) ) ) )
 				);
 			}
 
@@ -388,7 +436,9 @@ final class Runner {
 			if ( null !== $refusal ) {
 				$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
 			} else {
-				$outcome = $this->executeCall( $registry, $call );
+				// 0.3 S3: this is the approved re-run — the built-in gate must
+				// not re-park the SAME call it already surfaced for approval.
+				$outcome = $this->executeCall( $registry, $run, $call, approved: true );
 
 				if ( 'approval_required' === $outcome->kind ) {
 					return array(
@@ -477,7 +527,8 @@ final class Runner {
 				// touch the permission-agnostic declaration surface only.
 				$harness_declarations = array_merge(
 					HarnessTools::declarations( $this->remainingQuestions( $run ) ),
-					PlanTools::declarations( $this->remainingPlans( $run ) )
+					PlanTools::declarations( $this->remainingPlans( $run ) ),
+					SuggestBriefTool::declarations()
 				);
 				$tools                = array() !== $harness_declarations
 					? $registry->withDeclarations( $harness_declarations )
@@ -568,6 +619,15 @@ final class Runner {
 					continue;
 				}
 
+				// S20: the brief-suggestion tool. Tier 0, parks nothing — it
+				// is answered synchronously, in this same tick.
+				if ( SuggestBriefTool::functionName() === $call['name'] ) {
+					$this->runSuggestBrief( $run, $call, $new_steps );
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
+
 				// S7 plan fence: before ANY ability executes, a Tier-1+ call
 				// must be inside the accepted plan's verb set. A refusal is a
 				// tool_result error the model sees, and is NEVER counted
@@ -579,7 +639,7 @@ final class Runner {
 					continue;
 				}
 
-				$outcome = $this->executeCall( $registry, $call );
+				$outcome = $this->executeCall( $registry, $run, $call );
 				++$tool_calls_used;
 
 				if ( 'approval_required' === $outcome->kind ) {
@@ -798,13 +858,18 @@ final class Runner {
 	 * @return array{approval:array<string,mixed>}
 	 */
 	private function approvalUi( ToolOutcome $outcome, array $call ): array {
+		// 0.3 S3: a built-in park's synthetic id is the only signal this
+		// method has (it is never handed the run) — no tier badge and no
+		// "Agent Safety pending actions" link belong on a built-in card.
+		$built_in = str_starts_with( (string) $outcome->approvalId, 'builtin:' );
+
 		return array(
 			'approval' => array(
 				'approval_id'  => $outcome->approvalId,
 				'verb'         => $outcome->verb ?? $call['name'],
-				'tier'         => $outcome->tier,
+				'tier'         => $built_in ? null : $outcome->tier,
 				'args_preview' => $call['args'] ?? array(),
-				'review_url'   => function_exists( 'admin_url' )
+				'review_url'   => ( ! $built_in && function_exists( 'admin_url' ) )
 					? admin_url( 'tools.php?page=agent-safety-pending' )
 					: '',
 			),
@@ -950,6 +1015,33 @@ final class Runner {
 		return false;
 	}
 
+	/**
+	 * 0.3 S20: for a follow-up run, prepend the source run's own harness-built
+	 * change rows (object type, id, title, status, edit link) to the goal, as
+	 * the first user turn. NO CHAINING — the seed is built from the source
+	 * run's `result.changes` only, never from whatever seed the source run
+	 * itself carried, and never from the source's model prose (its `summary`
+	 * is never read here). Empty when the source has no recorded changes, or
+	 * none is found, so a follow-up of a run that touched nothing carries no
+	 * misleading notice.
+	 */
+	private function goalWithFollowUpSeed( Run $run ): string {
+		if ( null === $run->followUpOf ) {
+			return $run->goal;
+		}
+
+		$source = $this->store->getRun( $run->followUpOf );
+		$raw    = ( null !== $source && is_array( $source->result ) && is_array( $source->result['changes'] ?? null ) )
+			? $source->result['changes']
+			: array();
+		/** @var list<array<string,mixed>> $changes Only array-shaped rows; a corrupt entry is dropped here, not passed on. */
+		$changes = array_values( array_filter( $raw, 'is_array' ) );
+
+		$seed = FollowUpSeed::render( $changes );
+
+		return '' === $seed ? $run->goal : $seed . "\n\n" . $run->goal;
+	}
+
 	private function addTokens( int $run_id, int $tokens_in, int $tokens_out ): void {
 		$current = $this->store->getRun( $run_id );
 		if ( null === $current ) {
@@ -1058,19 +1150,28 @@ final class Runner {
 	 */
 	private function instructionFor( Run $run, array &$new_steps ): string|WP_Error {
 		$pack   = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
-		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable );
+		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale );
 
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
 			return $ceiling;
 		}
 
-		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ) );
+		// S6: the pack's own words for its withheld roles — the harness
+		// itself never learns what a role's ability does (B0 rule 3).
+		$withheld_notice = ( null !== $pack && array() !== $run->withheldRoles )
+			? $pack->withheldRoleNotice( $run->withheldRoles )
+			: null;
+
+		// 0.3 S20: the site owner's standing notes, opaque to the harness.
+		$brief = SiteBrief::get();
+
+		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice, $brief );
 
 		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
 
-		$this->auditInstruction( $run, $skills, $text, $new_steps );
+		$this->auditInstruction( $run, $skills, $text, $new_steps, $brief );
 
 		return $text;
 	}
@@ -1110,7 +1211,55 @@ final class Runner {
 			conversation_language: ( null !== $run->conversationLocale && '' !== $run->conversationLocale )
 				? Tail::languageName( $run->conversationLocale )
 				: null,
+			// S9: the elapsed gap AS OF THIS TICK'S START — snapshotted once
+			// by tickBody() before any resume drain appends its own steps
+			// (which would otherwise look like the "previous step" and mask
+			// a long park). See self::$tickElapsedGapSeconds.
+			elapsed_gap_seconds: $this->tick_elapsed_gap_seconds,
 		);
+	}
+
+	/**
+	 * S9: seconds since the run's previous step, computed ONCE per tick by
+	 * {@see self::elapsedGapAtTickStart()} and reused by every {@see tailFor()}
+	 * call this tick — never recomputed against the live step list, which
+	 * would include this SAME tick's own resume-drain step and mask a park's
+	 * real age. Null on a run's very first tick, or below the threshold.
+	 */
+	private ?int $tick_elapsed_gap_seconds = null;
+
+	/**
+	 * Snapshot the S9 elapsed gap from the run's LAST STEP AS OF TICK START —
+	 * called once at the top of {@see tickBody()}, before any resume drain or
+	 * new step is appended.
+	 */
+	private function elapsedGapAtTickStart( Run $run ): void {
+		$last_step_time_utc = null;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( null !== $step->createdAtUtc && '' !== $step->createdAtUtc ) {
+				$last_step_time_utc = $step->createdAtUtc;
+			}
+		}
+
+		$gap = null === $last_step_time_utc ? null : $this->elapsedSince( $last_step_time_utc );
+
+		$this->tick_elapsed_gap_seconds = ( null !== $gap && $gap > Tail::ELAPSED_GAP_THRESHOLD_SECONDS ) ? $gap : null;
+	}
+
+	/**
+	 * Seconds between `$created_at_utc` (a stored `Y-m-d H:i:s` UTC
+	 * timestamp) and {@see Clock::now()}. Never negative — a clock skew or a
+	 * malformed timestamp reports zero rather than a bogus negative gap.
+	 *
+	 * @param string $created_at_utc `Y-m-d H:i:s`, UTC.
+	 */
+	private function elapsedSince( string $created_at_utc ): int {
+		$then = strtotime( $created_at_utc . ' UTC' );
+		if ( false === $then ) {
+			return 0;
+		}
+
+		return max( 0, Clock::now() - $then );
 	}
 
 	/**
@@ -1166,8 +1315,9 @@ final class Runner {
 	 *
 	 * @param list<Skill>               $skills     Freshly collected set.
 	 * @param list<array<string,mixed>> $new_steps  Accumulator.
+	 * @param string                    $brief      0.3 S20: the brief text this render saw.
 	 */
-	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps ): void {
+	private function auditInstruction( Run $run, array $skills, string $text, array &$new_steps, string $brief = '' ): void {
 		$fingerprints = array();
 		foreach ( $skills as $skill ) {
 			$fingerprints[ $skill->id ] = hash( 'sha256', $skill->body );
@@ -1176,12 +1326,16 @@ final class Runner {
 		$recorded = $this->findInstructionRecord( $run->id );
 
 		if ( null === $recorded ) {
+			// S20: the brief's hash rides next to the skills hashes, ONLY on
+			// the seq-0 record — a report can show which brief a run saw,
+			// without re-recording it on every drift note.
 			$this->store->prependSystemStep(
 				$run->id,
 				array(
-					'note'   => 'system_instruction',
-					'text'   => $text,
-					'skills' => $fingerprints,
+					'note'       => 'system_instruction',
+					'text'       => $text,
+					'skills'     => $fingerprints,
+					'brief_hash' => SiteBrief::hash( $brief ),
 				)
 			);
 			return;
@@ -1295,9 +1449,25 @@ final class Runner {
 	 * `unknown_tool` and never reaches the executor (S5).
 	 *
 	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param bool $approved 0.3 S3: true on the re-run of an already-approved
+	 *                       built-in park — skips the built-in gate's own
+	 *                       re-classification so the SAME call is never
+	 *                       parked twice.
 	 */
-	private function executeCall( ToolRegistry $registry, array $call ): ToolOutcome {
+	private function executeCall( ToolRegistry $registry, Run $run, array $call, bool $approved = false ): ToolOutcome {
 		$name = ToolRegistry::abilityName( $call['name'] );
+
+		// S6 defence in depth: a withheld role's ability is refused here even
+		// if it somehow still reached the model (a stale allow-list, a
+		// hallucinated/injected call) — checked BEFORE the allow-list so the
+		// refusal names the real reason, never a generic unknown_tool.
+		if ( in_array( $name, $this->withheldAbilities( $run ), true ) ) {
+			return ToolOutcome::denied(
+				'role_withheld',
+				__( 'This run cannot use that ability: your account is missing the capability it needs.', 'senroflux' )
+			);
+		}
+
 		if ( ! $registry->admits( $name ) ) {
 			return ToolOutcome::unknownTool( $name );
 		}
@@ -1312,7 +1482,70 @@ final class Runner {
 
 		return $this->executor->call(
 			$name,
-			is_array( $args ) ? $args : null
+			is_array( $args ) ? $args : null,
+			$this->builtinGateFor( $run, $name, is_array( $args ) ? $args : array(), (string) ( $call['id'] ?? '' ), $approved ),
+			$this->validateCallFor( $run )
+		);
+	}
+
+	/**
+	 * S19 (stage 12): the run's pack's pre-execution call validator
+	 * ({@see \Specflux\SenroFlux\Packs\Pack::validateCall()}), for a rule a
+	 * pack must enforce on an ability ANOTHER plugin owns and registers —
+	 * WooCommerce's `product-update`/`product-create` accepting HTML the
+	 * commerce pack's description validator refuses — where the pack has no
+	 * other seam to bind a check to (it never owns that ability's
+	 * `check_permissions()`/`execute()`). Null when the run has no pack
+	 * (direct-allow runs have no pack rules to enforce here).
+	 *
+	 * @return callable(string,array<string,mixed>):(WP_Error|null)|null
+	 */
+	private function validateCallFor( Run $run ): ?callable {
+		$pack = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
+
+		return ( null !== $pack )
+			? static fn ( string $ability, array $args ): ?WP_Error => $pack->validateCall( $ability, $args )
+			: null;
+	}
+
+	/**
+	 * The concrete ability ids withheld from this run's execution (0.3 S6),
+	 * via the injected resolver; an empty list when none are, or the resolver
+	 * is absent (a direct-allow run has no roles to withhold).
+	 *
+	 * @return list<string>
+	 */
+	private function withheldAbilities( Run $run ): array {
+		if ( ! is_callable( $this->withheld_abilities_resolver ) ) {
+			return array();
+		}
+
+		$abilities = ( $this->withheld_abilities_resolver )( $run );
+
+		return is_array( $abilities ) ? array_values( array_filter( $abilities, 'is_string' ) ) : array();
+	}
+
+	/**
+	 * 0.3 S3: the built-in gate's classification of one call, or null when the
+	 * run's pinned mode is {@see GateMode::AgentSafety} (nothing for
+	 * ToolExecutor to decide itself).
+	 *
+	 * @param array<string,mixed> $args Call args (already normalised to an array).
+	 */
+	private function builtinGateFor( Run $run, string $ability, array $args, string $call_id, bool $approved ): ?BuiltinGate {
+		if ( GateMode::BuiltIn !== $run->gateMode ) {
+			return null;
+		}
+
+		$verb = $this->verbFor( $run, $ability, $args );
+		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
+
+		return new BuiltinGate(
+			active: $tier > VerbTier::TIER_0,
+			tier: $tier,
+			verb: $verb,
+			approvalId: 'builtin:' . $run->id . ':' . $call_id,
+			approved: $approved
 		);
 	}
 
@@ -1344,15 +1577,19 @@ final class Runner {
 	private function state( Run $run, array $new_steps, ?array $ui ): array {
 		return array(
 			'run'       => array(
-				'id'         => $run->id,
-				'user_id'    => $run->userId,
-				'consumer'   => $run->consumer,
-				'goal'       => $run->goal,
-				'status'     => $run->status->value,
-				'step_count' => $run->stepCount,
-				'tokens_in'  => $run->tokensIn,
-				'tokens_out' => $run->tokensOut,
-				'error'      => $run->error,
+				'id'           => $run->id,
+				'user_id'      => $run->userId,
+				'consumer'     => $run->consumer,
+				'goal'         => $run->goal,
+				'status'       => $run->status->value,
+				'step_count'   => $run->stepCount,
+				'tokens_in'    => $run->tokensIn,
+				'tokens_out'   => $run->tokensOut,
+				'error'        => $run->error,
+				// 0.3 S3: pinned at start(), rendered once by the run header.
+				'gate_mode'    => $run->gateMode->value,
+				// 0.3 S20: the source run id when this run is a follow-up.
+				'follow_up_of' => $run->followUpOf,
 			),
 			'new_steps' => $new_steps,
 			'ui'        => $ui ?? array(),
@@ -1430,6 +1667,152 @@ final class Runner {
 					),
 				),
 			),
+		);
+	}
+
+	/**
+	 * Handle a `senroflux__suggest-brief-addition` call (0.3 S20). Parks
+	 * nothing: it always appends exactly one `suggestion` step (invalid input
+	 * still counts against nothing but the tool call — no step is recorded)
+	 * and answers with a tool_result in the SAME tick.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param list<array<string,mixed>>               $new_steps Accumulator.
+	 */
+	private function runSuggestBrief( Run $run, array $call, array &$new_steps ): void {
+		$payload = SuggestBriefTool::validate( $call['args'] ?? null );
+		if ( is_wp_error( $payload ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_INVALID );
+			return;
+		}
+
+		$accepted             = 0;
+		$dismissed_normalized = array();
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Suggestion === $step->kind ) {
+				++$accepted;
+				continue;
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'suggestion_resolved' === ( $step->messageArray['note'] ?? '' )
+				&& 'dismiss' === ( $step->messageArray['action'] ?? '' )
+			) {
+				$dismissed_normalized[] = SuggestBriefTool::normalize( (string) ( $step->messageArray['text'] ?? '' ) );
+			}
+		}
+
+		if ( $accepted >= SuggestBriefTool::MAX_PER_RUN ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_LIMIT );
+			return;
+		}
+
+		if ( in_array( SuggestBriefTool::normalize( $payload['text'] ), $dismissed_normalized, true ) ) {
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_DISMISSED );
+			return;
+		}
+
+		$seq         = $this->store->appendStep(
+			$run->id,
+			StepKind::Suggestion,
+			$payload,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+		$new_steps[] = array(
+			'seq'         => $seq,
+			'kind'        => StepKind::Suggestion->value,
+			'message'     => $payload,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+
+		$new_steps[] = $this->appendSuggestBriefResult( $run->id, $call, array( 'recorded' => true ) );
+	}
+
+	/**
+	 * Tool_result for a recorded suggestion. The FunctionResponse NAME is the
+	 * harness function name, matching the ask-user/plan convention.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call     Call shape.
+	 * @param array<string,mixed>                      $response FunctionResponse payload.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefResult( int $run_id, array $call, array $response ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'ok'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
+	 * Tool_result error to the model for an invalid/limited/dismissed
+	 * suggest-brief-addition call. Counts as a tool call (the caller bumps
+	 * the counter).
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @param string                                  $code invalid_suggestion | suggestion_limit | suggestion_dismissed.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendSuggestBriefError( int $run_id, array $call, string $code ): array {
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							SuggestBriefTool::functionName(),
+							array( 'error' => $code )
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			SuggestBriefTool::toolName(),
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => SuggestBriefTool::toolName(),
+			'approval_id' => null,
+			'status'      => 'error',
 		);
 	}
 
@@ -2056,8 +2439,10 @@ final class Runner {
 	 * @return array<string,int>
 	 */
 	private function grantCounts( Run $run, array $payload ): array {
-		$map    = $this->packVerbMap( $run );
-		$counts = array();
+		$map         = $this->packVerbMap( $run );
+		$ungrantable = $this->ungrantableVerbs( $run );
+		$poisoned    = $this->poisonedGateVerbs( $run, $ungrantable );
+		$counts      = array();
 
 		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
 			if ( ! is_array( $step ) ) {
@@ -2072,9 +2457,28 @@ final class Runner {
 				if ( VerbTier::tierFor( $verb, $map, $run->id ) < VerbTier::TIER_2 ) {
 					continue;
 				}
+				if ( in_array( $verb, $ungrantable, true ) ) {
+					// S19: this PACK verb never gets a pre-approval grant,
+					// however many times the plan lists it — it asks every
+					// time instead.
+					continue;
+				}
 
 				$gate_verb = $this->gateVerbFor( $run, $verb );
 				if ( null === $gate_verb || isset( $seen[ $gate_verb ] ) ) {
+					continue;
+				}
+
+				if ( isset( $poisoned[ $gate_verb ] ) ) {
+					// S19 guard (stage 12): this GATE ABILITY is also what one of
+					// the pack's own ungrantable verbs resolves to. Agent Safety
+					// keys a grant on the ability id, not the pack verb, so a
+					// grant issued here for the grantable verb could be SPENT by
+					// the ungrantable call instead — silently turning "asks every
+					// time" into "pre-approved once the grantable sibling is
+					// approved". No grant at all is the only safe reading: the
+					// call still executes (it just parks every time, like any
+					// other ungrantable verb sharing this ability would).
 					continue;
 				}
 
@@ -2084,6 +2488,35 @@ final class Runner {
 		}
 
 		return $counts;
+	}
+
+	/**
+	 * S19 guard (stage 12, item 0): the GATE ABILITY ids (resolved ability,
+	 * {@see gateVerbFor()}) that any of this run's pack's ungrantable PACK
+	 * verbs also resolves to.
+	 *
+	 * Agent Safety grants key on the ability id, never on the pack verb
+	 * (S14) — so if a grantable verb and an ungrantable verb of the SAME
+	 * pack both resolve to one ability (e.g. a Woo-owned ability whose tier
+	 * an argument can raise from SideEffecting to Irreversible), a grant
+	 * issued for the grantable verb is indistinguishable, at the gate, from
+	 * permission to spend it on the ungrantable call. {@see grantCounts()}
+	 * therefore never issues a grant for any ability in the returned set,
+	 * however the plan names the grantable verb that shares it.
+	 *
+	 * @param list<string> $ungrantable This run's pack's ungrantable verbs.
+	 * @return array<string,true>
+	 */
+	private function poisonedGateVerbs( Run $run, array $ungrantable ): array {
+		$poisoned = array();
+		foreach ( $ungrantable as $verb ) {
+			$gate_verb = $this->gateVerbFor( $run, $verb );
+			if ( null !== $gate_verb ) {
+				$poisoned[ $gate_verb ] = true;
+			}
+		}
+
+		return $poisoned;
 	}
 
 	/**
@@ -2548,7 +2981,13 @@ final class Runner {
 	public function report( int $run_id ): array {
 		$fresh   = $this->store->getRun( $run_id );
 		$objects = ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
-		$report  = Report::build( $this->latestModelText( $run_id ), $objects, $this->post_lookup );
+		$report  = Report::build(
+			$this->latestModelText( $run_id ),
+			$objects,
+			$this->post_lookup,
+			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety,
+			null !== $fresh ? $fresh->withheldRoles : array()
+		);
 
 		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );
 
@@ -2588,20 +3027,26 @@ final class Runner {
 		$before  = ( null !== $current && is_array( $current->objects ) ) ? $current->objects : array();
 		$objects = $before;
 
-		$verb = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
-		$tier = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
-		$key  = $this->objectIdKeyFor( $run, $verb );
+		$verb   = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
+		$tier   = VerbTier::tierFor( $verb, $this->packVerbMap( $run ), $run->id );
+		$key    = $this->objectIdKeyFor( $run, $verb );
+		$prefix = $this->objectIdPrefixFor( $run, $verb );
 
 		if ( $tier >= VerbTier::TIER_1 ) {
-			$write_id = self::objectIdIn( $outcome->output ?? array(), $key );
+			$args     = $call['args'] ?? null;
+			$write_id = $this->writeObjectIdFor( $run, $verb, is_array( $args ) ? $args : array(), $outcome->output ?? array() )
+				?? self::objectIdIn( $outcome->output ?? array(), $key );
 			if ( null !== $write_id ) {
-				$objects = Tracker::recordWrite( $objects, $write_id, $seq );
+				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq );
 			}
 		} elseif ( VerbTier::TIER_0 === $tier ) {
 			$args    = $call['args'] ?? null;
 			$read_id = is_array( $args ) ? self::objectIdIn( $args, $key ) : null;
-			if ( null !== $read_id && array_key_exists( $read_id, $objects ) ) {
-				$objects = Tracker::recordVerification( $objects, $read_id, $seq );
+			if ( null !== $read_id ) {
+				$qualified = $prefix . $read_id;
+				if ( array_key_exists( $qualified, $objects ) ) {
+					$objects = Tracker::recordVerification( $objects, $qualified, $seq );
+				}
 			}
 		}
 
@@ -2626,6 +3071,40 @@ final class Runner {
 	}
 
 	/**
+	 * The write object id for one verb (S12 defect fix): whatever the
+	 * injected resolver answers, else null (fall back to the output[key]
+	 * extraction, S12's pre-existing behaviour). A resolver that misbehaves
+	 * (a non-string, non-null return) is treated as null.
+	 *
+	 * @param array<string,mixed> $args   The call's args.
+	 * @param array<string,mixed> $output The call's output.
+	 */
+	private function writeObjectIdFor( Run $run, string $verb, array $args, array $output ): ?string {
+		if ( ! is_callable( $this->write_object_id_resolver ) ) {
+			return null;
+		}
+
+		$id = ( $this->write_object_id_resolver )( $run, $verb, $args, $output );
+
+		return ( is_string( $id ) && '' !== $id ) ? $id : null;
+	}
+
+	/**
+	 * The object-id PREFIX for one verb: whatever the injected resolver
+	 * answers, else '' (no prefix, S12 pre-existing behaviour). A resolver
+	 * that misbehaves falls back to '' rather than corrupting every id.
+	 */
+	private function objectIdPrefixFor( Run $run, string $verb ): string {
+		if ( ! is_callable( $this->object_id_prefix_resolver ) ) {
+			return '';
+		}
+
+		$prefix = ( $this->object_id_prefix_resolver )( $run, $verb );
+
+		return is_string( $prefix ) ? $prefix : '';
+	}
+
+	/**
 	 * The object id at `$key` in a result output or a call's args, normalised
 	 * to a non-empty string; null when absent or unusable.
 	 *
@@ -2642,6 +3121,85 @@ final class Runner {
 	}
 
 	/**
+	 * The environment's gate mode right now, through the injected probe.
+	 * Absent (or a probe that misbehaves) is fail-safe to
+	 * {@see GateMode::AgentSafety}, the 0.2 (and pre-S3-test) behaviour — it
+	 * can never MISMATCH a run pinned to the same default.
+	 */
+	private function currentGateMode(): GateMode {
+		if ( ! is_callable( $this->gate_mode_probe ) ) {
+			return GateMode::AgentSafety;
+		}
+
+		$mode = ( $this->gate_mode_probe )();
+
+		return $mode instanceof GateMode ? $mode : GateMode::AgentSafety;
+	}
+
+	/**
+	 * S3: compare the run's pinned gate mode with the environment's current
+	 * one. A terminal run is never checked — nothing left to govern. A
+	 * mismatch fails the run (`gate_mode_changed`, partial report) and
+	 * returns that report; null means "carry on".
+	 *
+	 * Public so {@see \Specflux\SenroFlux\Plugin::cancel()} can run the same
+	 * check before a user-initiated cancel, which never passes through
+	 * {@see tick()}.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function gateModeMismatch( Run $run ): ?array {
+		if ( $run->status->isTerminal() ) {
+			return null;
+		}
+
+		if ( $this->currentGateMode() === $run->gateMode ) {
+			return null;
+		}
+
+		return $this->failError(
+			$run,
+			'gate_mode_changed',
+			__( 'The gate mode changed after this run started; it cannot continue safely.', 'senroflux' )
+		);
+	}
+
+	/**
+	 * S14 ("Upgrade from 0.2"): a run whose id is at or below the legacy
+	 * watermark ({@see \Specflux\SenroFlux\Schema::maybe_upgrade()}) started
+	 * under 0.2 and cannot continue — the `update-post` tier (among others)
+	 * changed under it, and nothing is ever silently re-tiered. A terminal
+	 * run is never checked — a completed 0.2 run's history and report must
+	 * keep rendering untouched. No watermark (a fresh install, or a site
+	 * that never had a live 0.2 run) means nothing is ever refused here.
+	 *
+	 * Public for the same reason {@see gateModeMismatch()} is: {@see
+	 * \Specflux\SenroFlux\Plugin::cancel()} runs the same check before a
+	 * plain cancel, which never passes through {@see tick()}.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function legacyRunRefusal( Run $run ): ?array {
+		if ( $run->status->isTerminal() ) {
+			return null;
+		}
+
+		$watermark = is_callable( $this->legacy_run_watermark_probe )
+			? ( $this->legacy_run_watermark_probe )()
+			: null;
+
+		if ( ! is_int( $watermark ) || $run->id > $watermark ) {
+			return null;
+		}
+
+		return $this->failError(
+			$run,
+			'started_under_0_2',
+			__( 'This run started under SenroFlux 0.2 and cannot continue; start a new run.', 'senroflux' )
+		);
+	}
+
+	/**
 	 * The run's pack verb map, or null when it has none (direct-allow: the
 	 * site-wide `senroflux_verb_map` filter answers instead).
 	 *
@@ -2652,6 +3210,20 @@ final class Runner {
 
 		/** @var array<string,int>|null */
 		return is_array( $pack_map ) ? $pack_map : null;
+	}
+
+	/**
+	 * S19: the run's ungrantable PACK verbs, or an empty list with no
+	 * resolver / no pack (fail open toward the pre-S19 behaviour: nothing was
+	 * ungrantable then, and a run with no pack has no such concept).
+	 *
+	 * @return list<string>
+	 */
+	private function ungrantableVerbs( Run $run ): array {
+		$verbs = is_callable( $this->ungrantable_verbs_resolver ) ? ( $this->ungrantable_verbs_resolver )( $run ) : null;
+
+		/** @var list<string> */
+		return is_array( $verbs ) ? array_values( $verbs ) : array();
 	}
 
 	/**
@@ -2692,6 +3264,27 @@ final class Runner {
 			'tool_name'   => null,
 			'approval_id' => null,
 			'status'      => 'ok',
+		);
+
+		// The `system` step above is audit-only (S12): it never re-enters the
+		// prompt as history (StepKind::historyKinds()). Left there, the
+		// conversation still ends on the model's own (text-only) turn, and a
+		// real AI Client refuses the next call outright — "The last message
+		// must be from a user role, not from model" (live run 54). Append a
+		// real history-bearing user turn carrying the same sentence the tail
+		// already renders, so the conversation the NEXT tick sends is valid
+		// on the wire as well as informative in the system instruction.
+		$titles      = $this->verifyObjectTitles( $fresh );
+		$new_steps[] = $this->appendStep(
+			$run->id,
+			StepKind::User,
+			new UserMessage(
+				array(
+					new MessagePart(
+						'Before finishing, re-read: ' . implode( ', ', (array) $titles ) . '.'
+					),
+				)
+			)
 		);
 
 		return true;

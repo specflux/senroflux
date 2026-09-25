@@ -49,9 +49,11 @@ final class Report {
 	 * @param array<string,mixed> $objects     The objects_json map.
 	 * @param callable|null       $post_lookup (string|int $object_id): array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}.
 	 *                                         Null means the default wpAdapter.
-	 * @return array{summary:string,changes:list<array<string,mixed>>}
+	 * @param GateMode            $gate_mode   The run's pinned gate mode (0.3 S3).
+	 * @param list<string>        $withheld_roles The run's withheld role names (0.3 S6).
+	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string,withheld_roles:list<string>}
 	 */
-	public static function build( string $summary, array $objects, ?callable $post_lookup = null ): array {
+	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array() ): array {
 		$lookup  = $post_lookup ?? self::wpPostLookup();
 		$changes = array();
 
@@ -66,18 +68,34 @@ final class Report {
 				continue;
 			}
 
-			$last_write  = $entry['last_write_seq'] ?? null;
+			$last_write = $entry['last_write_seq'] ?? null;
+			if ( null === $last_write ) {
+				// Defect fix: a READ-ONLY marker (e.g. Navigation/FrontPage's
+				// read-time recordRead()) is not a change — nothing was
+				// written, so it must never open a report row.
+				continue;
+			}
+
 			$verified    = $entry['verified_seq'] ?? null;
 			$is_verified = is_int( $verified ) || is_numeric( $verified );
-			$is_verified = $is_verified && null !== $last_write && ( (int) $verified >= (int) $last_write );
+			$is_verified = $is_verified && ( (int) $verified >= (int) $last_write );
 
 			$changes[] = self::changeRow( $object_id, $is_verified, $lookup, $object_id );
 		}
 
-		return array(
-			'summary' => $summary,
-			'changes' => $changes,
+		$report = array(
+			'summary'        => $summary,
+			'changes'        => $changes,
+			'gate_mode'      => $gate_mode->value,
+			// 0.3 S6: next to the gate mode, as the spec asks.
+			'withheld_roles' => array_values( array_filter( $withheld_roles, 'is_string' ) ),
 		);
+
+		if ( GateMode::BuiltIn === $gate_mode ) {
+			$report['gate_mode_note'] = __( 'Approvals for this run are recorded only on this page.', 'senroflux' );
+		}
+
+		return $report;
 	}
 
 	/**
@@ -146,6 +164,45 @@ final class Report {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Strip the common markdown tokens the model's summary prose sometimes
+	 * carries despite the harness telling it to write plain sentences
+	 * (defect fix — a live run showed literal `**text**` in the rendered
+	 * report). This is a DISPLAY-time defence, not a content rewrite: it
+	 * never touches the stored `summary`, only what a renderer shows, and it
+	 * strips MARKUP TOKENS only — it is not a markdown-to-HTML conversion
+	 * and never introduces any HTML of its own. The caller must still escape
+	 * the result for its output context (e.g. `esc_html()`); this method
+	 * carries no opinion on HTML and passes angle brackets through
+	 * unchanged, exactly as it received them.
+	 *
+	 * Handles: `**bold**`/`__bold__` → `bold`, `*em*`/`_em*` → `em`,
+	 * `` `code` `` → `code`, and a leading `#`+space heading marker on any
+	 * line. Anything else (the model's actual words) passes through
+	 * unchanged.
+	 */
+	public static function plainSummary( string $raw ): string {
+		$text = $raw;
+
+		// Bold/italic emphasis: strip the wrapping asterisks/underscores,
+		// keep the text between them. Longest markers first so `**bold**`
+		// is not left with stray single asterisks by the `*em*` pass.
+		$text = preg_replace( '/\*\*\*(.+?)\*\*\*/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/___(.+?)___/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/\*\*(.+?)\*\*/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/__(.+?)__/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/s', '$1', $text ) ?? $text;
+		$text = preg_replace( '/(?<!_)_(?!_)(.+?)(?<!_)_(?!_)/s', '$1', $text ) ?? $text;
+
+		// Inline code.
+		$text = preg_replace( '/`([^`]*)`/', '$1', $text ) ?? $text;
+
+		// A leading heading marker ("# ", "## ", …) at the start of a line.
+		$text = preg_replace( '/^#{1,6}\s+/m', '', $text ) ?? $text;
+
+		return $text;
 	}
 
 	/**

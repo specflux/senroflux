@@ -83,6 +83,21 @@ provider's terms if you have connected a different one.
 
 == Changelog ==
 
+= 0.3.0 =
+* Breaking (B0): `senroflux/update-post` is now draft-state edits only
+  (Tier 1) — it refuses an already-public target (publish/future/private) and
+  a requested publish/future transition. New `senroflux/publish-post` covers
+  every publish/future transition and any edit to an already-public post
+  (Tier 2). Update your integration to call `publish-post` for those cases.
+* Breaking (B0): `senroflux/create-post` now refuses `slug_collision` (409)
+  when a non-trashed page or post of the same type already holds the
+  requested slug, or matches the title case-insensitively.
+* Breaking (B0/S10): the Runs screen moved out of Tools to its own top-level
+  "SenroFlux" menu; `tools.php?page=senroflux-runs` redirects there. The
+  screen is now a React app (`assets/src/runs/` built with
+  `@wordpress/scripts`) — 0.2's server-rendered run list, new-run form and
+  park cards are retired in its favour.
+
 = 0.2.0 =
 * Schema v2: run status/step-kind enums, `resume` object replaces the
   0.1 `approval_action` parameter (breaking), `max_questions`/`max_plans`

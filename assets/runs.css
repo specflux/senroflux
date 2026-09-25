@@ -207,6 +207,18 @@
 	max-height: 240px;
 	background: #f6f7f7;
 	padding: 8px;
+	/* Defect E (live run): a long argument (e.g. a "prompt" string) ran off
+	   the card instead of wrapping, so the approver could not see the full
+	   call they were being asked to approve. */
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+/* Defect E (live run): the run header renders the MODEL-AUTHORED goal
+   (S15) verbatim, which can be a long unbroken string that overflowed the
+   viewport instead of wrapping. */
+.senroflux-run-heading {
+	overflow-wrap: anywhere;
 }
 
 /* The args box is keyboard-focusable (it scrolls), so the focus ring has to

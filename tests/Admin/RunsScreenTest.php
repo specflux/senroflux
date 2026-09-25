@@ -19,7 +19,9 @@ use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\WpdbRunStore;
+use Specflux\SenroFlux\Setup\Checks;
 use Specflux\SenroFlux\Tools\ToolExecutor;
+use SenroFluxJsonResponse;
 use WP_Error;
 use wpdb;
 
@@ -39,6 +41,14 @@ final class RunsScreenTest extends TestCase {
 		remove_all_filters( 'senroflux_packs' );
 		remove_all_filters( 'senroflux_can_tick' );
 		remove_all_filters( ConsumerPolicy::FILTER );
+		// 0.3 S10: the screen capability is now computed from the registered
+		// packs. Most of this file registers a NAMELESS fixture pack that
+		// never overrides runCapability() (it is about the new-run form/
+		// preflight gate, not S10's computation, which has its own coverage
+		// in ScreenCapabilityTest and the dedicated tests below) — pin the
+		// pre-0.3 fixed value so every other test here keeps its original
+		// meaning.
+		add_filter( 'senroflux_runs_capability', static fn (): string => 'manage_options' );
 	}
 
 	protected function tearDown(): void {
@@ -124,7 +134,13 @@ final class RunsScreenTest extends TestCase {
 	// New-run form + preflight gate
 	// ------------------------------------------------------------------
 
-	public function test_new_run_form_renders_with_pack_select_when_preflight_passes(): void {
+	/**
+	 * 0.3 S10: `render()` no longer server-renders a new-run form at all — it
+	 * mounts the React app's root element. This is now the ONE test covering
+	 * that (the retired form's own render tests, which asserted on
+	 * `name="goal"`/`<option>` markup, are gone with the form itself).
+	 */
+	public function test_render_mounts_the_react_root_and_a_noscript_fallback(): void {
 		Plugin::set_dependency_probe( true );
 		$this->seedRunnerGraph();
 		$this->registerFakePack( true );
@@ -133,27 +149,9 @@ final class RunsScreenTest extends TestCase {
 		( new RunsScreen() )->render();
 		$html = (string) ob_get_clean();
 
-		$this->assertStringContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( 'name="pack"', $html );
-		$this->assertStringContainsString( '<option value="pages"', $html );
-		$this->assertStringContainsString( 'value="senroflux_new_run"', $html );
-		$this->assertStringContainsString( 'name="max_steps"', $html );
-		$this->assertStringContainsString( 'name="action"', $html );
-	}
-
-	public function test_preflight_failure_renders_notice_and_renders_no_form(): void {
-		Plugin::set_dependency_probe( true );
-		$this->seedRunnerGraph();
-		$this->registerFakePack( new WP_Error( 'pack_unbound', 'This pack is not bound to your user. Bind `user:1` to the pages pack.', array( 'status' => 400 ) ) );
-
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
-
-		$this->assertStringContainsString( 'This pack is not bound', $html );
-		$this->assertStringContainsString( 'agent-safety-packs', $html, 'the notice links to the Agent Capability Packs screen' );
-		$this->assertStringNotContainsString( 'name="goal"', $html, 'NO form is rendered when preflight fails' );
-		$this->assertStringNotContainsString( '<option value="pages"', $html );
+		$this->assertStringContainsString( '<div id="senroflux-runs-root">', $html );
+		$this->assertStringContainsString( '<noscript>', $html );
+		$this->assertStringNotContainsString( 'name="goal"', $html, '0.2\'s server-rendered new-run form is retired' );
 	}
 
 	// ------------------------------------------------------------------
@@ -418,7 +416,13 @@ final class RunsScreenTest extends TestCase {
 	// S13 preflight is PER PACK
 	// ------------------------------------------------------------------
 
-	public function test_a_blocked_pack_is_disabled_while_a_runnable_pack_stays_selectable(): void {
+	/**
+	 * 0.3 S10: per-pack preflight still gates `exampleGoals()` (the empty
+	 * state's examples come only from packs the viewer can actually run) —
+	 * the retired new-run form's own "disabled option" rendering is gone
+	 * with the form.
+	 */
+	public function test_example_goals_only_name_packs_whose_preflight_passes(): void {
 		Plugin::set_dependency_probe( true );
 		$this->seedRunnerGraph();
 		$this->registerFakePack( true );
@@ -427,33 +431,21 @@ final class RunsScreenTest extends TestCase {
 			'widgets'
 		);
 
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
+		$screen = new class() extends RunsScreen {
+			/** @return list<string> */
+			public function exposeExampleGoals(): array {
+				return $this->exampleGoals();
+			}
+		};
 
-		// The form still stands, because ONE pack is runnable…
-		$this->assertStringContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( '<option value="pages" selected>', $html );
-		// …and the blocked one is visible but unselectable, with its reason.
-		$this->assertStringContainsString( '<option value="widgets" disabled>', $html );
-		$this->assertStringContainsString( 'Bind `user:1` to the widgets pack.', $html );
-	}
+		$examples = $screen->exposeExampleGoals();
 
-	public function test_every_pack_blocked_renders_the_notice_and_no_form(): void {
-		Plugin::set_dependency_probe( true );
-		$this->seedRunnerGraph();
-		$this->registerFakePack( new WP_Error( 'pack_unbound', 'Bind `user:1` to the pages pack.', array( 'status' => 400 ) ) );
-		$this->registerFakePack(
-			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
-			'widgets'
+		$this->assertNotEmpty(
+			array_filter( $examples, static fn ( string $e ): bool => str_contains( $e, 'pages' ) )
 		);
-
-		ob_start();
-		( new RunsScreen() )->render();
-		$html = (string) ob_get_clean();
-
-		$this->assertStringNotContainsString( 'name="goal"', $html );
-		$this->assertStringContainsString( 'agent-safety-packs', $html );
+		$this->assertEmpty(
+			array_filter( $examples, static fn ( string $e ): bool => str_contains( $e, 'widgets' ) )
+		);
 	}
 
 	// ------------------------------------------------------------------
@@ -471,6 +463,82 @@ final class RunsScreenTest extends TestCase {
 		$this->assertSame( 'edit_pages', ( new RunsScreen() )->capability() );
 	}
 
+	/** S10: the menu/screen capability is computed from the REGISTERED packs, no filter needed. */
+	public function test_an_editor_with_edit_pages_gets_the_menu_capability_edit_pages(): void {
+		remove_all_filters( 'senroflux_runs_capability' ); // Override this file's blanket pin.
+		$this->fakePackWithCapability( 'pages', 'edit_pages' );
+		$this->fakePackWithCapability( 'site', 'manage_options' );
+		$GLOBALS['senroflux_test_user_caps'] = array( 'edit_pages' => true );
+
+		$this->assertSame( 'edit_pages', ( new RunsScreen() )->capability() );
+	}
+
+	/** S10: a Subscriber holding no pack's run capability gets `do_not_allow`. */
+	public function test_a_subscriber_gets_do_not_allow(): void {
+		remove_all_filters( 'senroflux_runs_capability' );
+		$this->fakePackWithCapability( 'pages', 'edit_pages' );
+		$GLOBALS['senroflux_test_user_caps'] = array( 'read' => true );
+
+		$this->assertSame( 'do_not_allow', ( new RunsScreen() )->capability() );
+	}
+
+	/** S10: an editor may start the pages pack but not the (manage_options) site pack. */
+	public function test_an_editor_can_start_pages_but_not_site(): void {
+		remove_all_filters( 'senroflux_runs_capability' );
+		Plugin::set_dependency_probe( false ); // built-in mode: runCapability() is the whole test.
+		$this->seedRunnerGraph();
+		$this->fakePackWithCapability( 'pages', 'edit_pages' );
+		$this->fakePackWithCapability( 'site', 'manage_options' );
+		$GLOBALS['senroflux_test_user_caps'] = array( 'edit_pages' => true );
+		$this->registerAdminConsumer();
+
+		$screen = $this->recordingScreen();
+		$_POST  = array(
+			'goal' => 'Write a page',
+			'pack' => 'site',
+		);
+		$screen->handleNewRun();
+
+		// The screen itself is reachable (edit_pages unlocks it), but the
+		// SITE pack's own capability check still refuses — pack-level
+		// governance, unwidened by the screen capability computation.
+		$this->assertSame( 'pack_unbound', $screen->redirectedListError );
+	}
+
+	/** A fixture pack with a chosen run capability, registered under `senroflux_packs`. */
+	private function fakePackWithCapability( string $name, string $capability ): void {
+		$pack = new class( $name, $capability ) extends Pack {
+			public function __construct( private readonly string $packName, private readonly string $capability ) {
+				parent::__construct( array( 'read' => 'read-content' ) );
+			}
+
+			public function name(): string {
+				return $this->packName;
+			}
+
+			public function verbMap(): array {
+				return array();
+			}
+
+			public function runCapability(): string {
+				return $this->capability;
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+		};
+
+		add_filter(
+			'senroflux_packs',
+			static fn ( array $packs ): array => $packs + array( $name => $pack ),
+			10,
+			1
+		);
+	}
+
 	public function test_register_wires_menu_assets_and_all_post_endpoints(): void {
 		( new RunsScreen() )->register();
 
@@ -482,6 +550,215 @@ final class RunsScreenTest extends TestCase {
 		$this->assertContains( 'admin_post_senroflux_answer', $hooks );
 		$this->assertContains( 'admin_post_senroflux_plan_decision', $hooks );
 		$this->assertContains( 'admin_post_senroflux_approval_decision', $hooks );
+		$this->assertContains( 'admin_init', $hooks, 'the old tools.php URL redirect (S10)' );
+		$this->assertContains( 'wp_ajax_senroflux_setup_panel', $hooks );
+		$this->assertContains( 'wp_ajax_senroflux_dismiss_agent_safety_check', $hooks );
+		$this->assertContains( 'admin_notices', $hooks, 'the one-time activation notice (S10)' );
+	}
+
+	// ------------------------------------------------------------------
+	// S10: old tools.php URL redirect + the Plugins-screen activation notice
+	// ------------------------------------------------------------------
+
+	private function redirectingScreen(): RunsScreen {
+		return new class() extends RunsScreen {
+			public ?string $redirectedUrl = null;
+
+			protected function redirectAndExit( string $url ): void {
+				$this->redirectedUrl = $url;
+			}
+		};
+	}
+
+	public function test_the_old_tools_url_redirects_to_the_top_level_menu(): void {
+		global $pagenow;
+		$pagenow = 'tools.php';
+		$_GET    = array(
+			'page'   => 'senroflux-runs',
+			'run_id' => '7',
+		);
+
+		$screen = $this->redirectingScreen();
+		$screen->redirectOldToolsUrl();
+
+		$this->assertNotNull( $screen->redirectedUrl );
+		$this->assertStringContainsString( 'admin.php', $screen->redirectedUrl );
+		$this->assertStringContainsString( 'page=senroflux-runs', $screen->redirectedUrl );
+		$this->assertStringContainsString( 'run_id=7', $screen->redirectedUrl );
+
+		unset( $_GET );
+	}
+
+	public function test_a_different_tools_page_is_left_alone(): void {
+		global $pagenow;
+		$pagenow = 'tools.php';
+		$_GET    = array( 'page' => 'something-else' );
+
+		$screen = $this->redirectingScreen();
+		$screen->redirectOldToolsUrl();
+
+		$this->assertNull( $screen->redirectedUrl );
+
+		unset( $_GET );
+	}
+
+	public function test_a_non_tools_page_is_left_alone(): void {
+		global $pagenow;
+		$pagenow = 'admin.php';
+		$_GET    = array( 'page' => 'senroflux-runs' );
+
+		$screen = $this->redirectingScreen();
+		$screen->redirectOldToolsUrl();
+
+		$this->assertNull( $screen->redirectedUrl );
+
+		unset( $_GET );
+	}
+
+	public function test_the_activation_notice_shows_once_on_the_plugins_screen_only(): void {
+		global $pagenow;
+		$pagenow                              = 'plugins.php';
+		$GLOBALS['senroflux_test_transients'] = array( RunsScreen::ACTIVATION_NOTICE_TRANSIENT => 1 );
+
+		ob_start();
+		( new RunsScreen() )->maybeRenderActivationNotice();
+		$first = (string) ob_get_clean();
+
+		ob_start();
+		( new RunsScreen() )->maybeRenderActivationNotice();
+		$second = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'SenroFlux is active', $first );
+		$this->assertSame( '', $second, 'the transient is cleared after the first render — it never shows twice' );
+	}
+
+	public function test_the_activation_notice_never_renders_off_the_plugins_screen(): void {
+		global $pagenow;
+		$pagenow                              = 'admin.php';
+		$GLOBALS['senroflux_test_transients'] = array( RunsScreen::ACTIVATION_NOTICE_TRANSIENT => 1 );
+
+		ob_start();
+		( new RunsScreen() )->maybeRenderActivationNotice();
+		$html = (string) ob_get_clean();
+
+		$this->assertSame( '', $html );
+	}
+
+	// ------------------------------------------------------------------
+	// S11: the setup panel (harness checks) + its two ajax endpoints
+	// ------------------------------------------------------------------
+
+	public function test_the_setup_panel_shows_the_agent_safety_advisory_when_absent(): void {
+		Plugin::set_dependency_probe( false );
+		Checks::setProviderProbe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'senroflux-setup-panel', $html );
+		$this->assertStringContainsString( 'data-check-id="senroflux/agent-safety"', $html );
+		$this->assertStringContainsString( 'senroflux-dismiss-check', $html );
+		// The React root still mounts below a merely-advisory panel (S11:
+		// "a blocked screen still renders the empty state").
+		$this->assertStringContainsString( '<div id="senroflux-runs-root">', $html );
+
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+	}
+
+	/**
+	 * Defect 3 (0.3 live run + S11): WordPress core's admin JS relocates
+	 * every `.wrap .notice` element below the page heading EXCEPT
+	 * `.notice.inline` — a setup-check notice left as a bare `.notice`
+	 * therefore gets pulled out of `#senroflux-setup-panel` and shown a
+	 * second time (and, after the panel's own focus refresh re-renders it,
+	 * a stale relocated copy can linger).
+	 */
+	public function test_setup_check_notices_carry_the_inline_class_core_skips(): void {
+		Plugin::set_dependency_probe( false );
+		Checks::setProviderProbe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertMatchesRegularExpression(
+			'/<div class="notice [^"]*\binline\b[^"]*senroflux-setup-check"/',
+			$html,
+			'a setup-check notice must carry the "inline" class core skips when relocating .wrap .notice elements'
+		);
+
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+	}
+
+	public function test_the_setup_panel_is_empty_when_everything_is_clear(): void {
+		Plugin::set_dependency_probe( true );
+		Checks::setProviderProbe( true );
+
+		ob_start();
+		( new RunsScreen() )->render();
+		$html = (string) ob_get_clean();
+
+		$this->assertStringNotContainsString( 'senroflux-setup-check', $html );
+
+		Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+	}
+
+	public function test_handle_setup_panel_reports_start_disabled_when_the_provider_check_fails(): void {
+		Checks::setProviderProbe( false );
+
+		$screen = new RunsScreen();
+		$_POST  = array( 'nonce' => 'x' );
+
+		try {
+			$screen->handleSetupPanel();
+			$this->fail( 'handleSetupPanel() returned without sending a JSON response.' );
+		} catch ( SenroFluxJsonResponse $json ) {
+			$this->assertTrue( $json->success );
+			$this->assertFalse( $json->data['start_enabled'] );
+			$this->assertStringContainsString( 'senroflux-setup-panel', $json->data['html'] );
+		} finally {
+			Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+		}
+	}
+
+	public function test_handle_setup_panel_refuses_without_the_capability(): void {
+		remove_all_filters( 'senroflux_runs_capability' );
+		$GLOBALS['senroflux_test_user_caps'] = array( 'read' => true );
+
+		$screen = new RunsScreen();
+		$_POST  = array( 'nonce' => 'x' );
+
+		try {
+			$screen->handleSetupPanel();
+			$this->fail( 'handleSetupPanel() returned without sending a JSON response.' );
+		} catch ( SenroFluxJsonResponse $json ) {
+			$this->assertFalse( $json->success );
+			$this->assertSame( 403, $json->status );
+		}
+	}
+
+	public function test_handle_dismiss_agent_safety_check_records_the_dismissal_for_the_current_user_only(): void {
+		Plugin::set_dependency_probe( false );
+		$GLOBALS['senroflux_test_current_user_id'] = 5;
+
+		$screen = new RunsScreen();
+		$_POST  = array( 'nonce' => 'x' );
+
+		try {
+			$screen->handleDismissAgentSafetyCheck();
+			$this->fail( 'handleDismissAgentSafetyCheck() returned without sending a JSON response.' );
+		} catch ( SenroFluxJsonResponse $json ) {
+			$this->assertTrue( $json->success );
+			$this->assertStringNotContainsString( 'senroflux/agent-safety', $json->data['html'] );
+		}
+
+		$this->assertTrue( Checks::agentSafetyDismissedBy( 5 ) );
+		$this->assertFalse( Checks::agentSafetyDismissedBy( 6 ), 'a different user is unaffected' );
 	}
 
 	/**

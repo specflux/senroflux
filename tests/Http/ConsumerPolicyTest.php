@@ -57,6 +57,8 @@ final class ConsumerPolicyTest extends TestCase {
 				'max_tokens'     => 10000,
 				'max_questions'  => 5,
 				'max_plans'      => 3,
+				'images'         => 6,
+				'refunds'        => 1,
 			),
 			$result['budget']
 		);
@@ -66,5 +68,68 @@ final class ConsumerPolicyTest extends TestCase {
 		add_filter( ConsumerPolicy::FILTER, static fn (): array => array( 'mac' => array( 'allow' => array() ) ) );
 
 		$this->assertInstanceOf( WP_Error::class, ConsumerPolicy::resolve( 'mac', null ) );
+	}
+
+	/**
+	 * S7's pack-baseline ceiling must never LOOSEN a consumer's own registered
+	 * budget: a third-party consumer that registered `max_tool_calls => 10`
+	 * must still be capped at 10 on a pack run whose own defaults raise the
+	 * shipped 30 up to 120 — not silently reset to 120.
+	 */
+	public function test_pack_override_never_loosens_a_registered_consumer_budget(): void {
+		add_filter(
+			ConsumerPolicy::FILTER,
+			static fn (): array => array(
+				'mac' => array(
+					'allow'  => array( 'marketing-analytics/*' ),
+					'budget' => array( 'max_tool_calls' => 10 ),
+				),
+			)
+		);
+
+		$result = ConsumerPolicy::resolve( 'mac', null, array( 'max_tool_calls' => 120 ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 10, $result['budget']['max_tool_calls'] );
+	}
+
+	/**
+	 * A consumer that registered no budget of its own gets the pack's raised
+	 * defaults, per S7.
+	 */
+	public function test_pack_override_applies_when_consumer_sets_no_budget(): void {
+		add_filter(
+			ConsumerPolicy::FILTER,
+			static fn (): array => array(
+				'mac' => array( 'allow' => array( 'marketing-analytics/*' ) ),
+			)
+		);
+
+		$result = ConsumerPolicy::resolve( 'mac', null, array( 'max_tool_calls' => 120 ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 120, $result['budget']['max_tool_calls'] );
+	}
+
+	/**
+	 * A request may still only lower the resolved ceiling, never raise it,
+	 * even once a pack override is in play.
+	 */
+	public function test_requested_budget_can_still_only_lower_with_pack_override(): void {
+		add_filter(
+			ConsumerPolicy::FILTER,
+			static fn (): array => array(
+				'mac' => array( 'allow' => array( 'marketing-analytics/*' ) ),
+			)
+		);
+
+		$result = ConsumerPolicy::resolve(
+			'mac',
+			array( 'max_tool_calls' => 999999 ),
+			array( 'max_tool_calls' => 120 )
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 120, $result['budget']['max_tool_calls'] );
 	}
 }

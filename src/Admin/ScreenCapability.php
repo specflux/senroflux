@@ -30,6 +30,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Admin;
 
+use Specflux\SenroFlux\Packs\PackRegistry;
 use WP_Error;
 
 // Bail on direct access.
@@ -40,28 +41,67 @@ defined( 'ABSPATH' ) || exit;
  */
 final class ScreenCapability {
 
-	/** The default capability that unlocks the Runs screen (S13). */
+	/**
+	 * Pre-0.3 fallback only: the fixed capability the screen used before S10's
+	 * per-viewer computation. No 0.3 code path reads this any more; it exists
+	 * so a caller that imported the constant keeps compiling.
+	 */
 	public const DEFAULT_CAPABILITY = 'manage_options';
+
+	/** The capability nobody holds (WP_Role has no such cap) — the fail-closed floor. */
+	public const NOBODY = 'do_not_allow';
 
 	/** The filter a site uses to move the screen to another capability. */
 	public const FILTER = 'senroflux_runs_capability';
 
 	/**
-	 * The capability required for the Runs screen; filterable per S10/S13.
+	 * The capability required for the Runs screen (0.3 S10): the FIRST
+	 * registered pack's run capability the CURRENT viewer holds, else
+	 * {@see NOBODY}. `senroflux_runs_capability` is applied AFTER that
+	 * computation, as the existing escape hatch.
 	 *
-	 * Writes STILL require `edit_pages` at the ability (S13) — this only
-	 * controls who may drive a run from the screen.
+	 * This one capability gates the top-level menu's visibility (S10) and
+	 * every screen action (start/answer/act/cancel, S13) — a site that wants
+	 * a fixed capability for both still gets it by filtering as before; the
+	 * computed default just means an editor who can run only the pages pack
+	 * sees the menu and can start pages, without an owner having to filter
+	 * anything (S10's "editor with edit_pages… gets the menu capability
+	 * edit_pages").
+	 *
+	 * Packs are asked in REGISTRATION order, which is a deliberate priority:
+	 * the first pack a viewer is capable of running decides the screen
+	 * capability for everything they see there (a viewer capable of more than
+	 * one pack still only needs ONE to unlock the screen; which pack they may
+	 * actually start is decided again, per pack, by {@see \Specflux\SenroFlux\Packs\Pack::preflight()}).
 	 */
 	public static function current(): string {
+		$computed = self::computedDefault();
+
 		// The hook name is spelled out (not `self::FILTER`) so static analysis
 		// and hook scanners can see it; the constant exists for callers/tests.
 		/** Filters the capability required for the Runs screen. */
-		$capability = apply_filters( 'senroflux_runs_capability', self::DEFAULT_CAPABILITY );
+		$capability = apply_filters( 'senroflux_runs_capability', $computed );
 
 		// Fail closed: a filter that returns something unusable must not turn
 		// into an empty capability string (which `current_user_can` treats as
 		// an unknown cap, i.e. deny — but be explicit rather than lucky).
-		return ( is_string( $capability ) && '' !== $capability ) ? $capability : self::DEFAULT_CAPABILITY;
+		return ( is_string( $capability ) && '' !== $capability ) ? $capability : $computed;
+	}
+
+	/**
+	 * The first registered pack's run capability the CURRENT user holds, or
+	 * {@see NOBODY} when none is (S10). A pack with no run capability of its
+	 * own (`runCapability() === ''`) is skipped — it declares nothing to test.
+	 */
+	private static function computedDefault(): string {
+		foreach ( PackRegistry::fromFilters()->all() as $pack ) {
+			$capability = $pack->runCapability();
+			if ( '' !== $capability && function_exists( 'current_user_can' ) && current_user_can( $capability ) ) {
+				return $capability;
+			}
+		}
+
+		return self::NOBODY;
 	}
 
 	/** Does the CURRENT user hold the screen capability? */

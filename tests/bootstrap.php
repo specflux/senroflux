@@ -40,6 +40,8 @@ require_once __DIR__ . '/stubs/agent-safety.php';
 require_once __DIR__ . '/stubs/agent-safety-context.php';
 // Runner test doubles (FakeGateway, RecordingBridge) — class_exists-guarded.
 require_once __DIR__ . '/stubs/run-doubles.php';
+// wp_ai_client_prompt() double (defect 2): AiClientMediaGateway's timeout tests.
+require_once __DIR__ . '/stubs/ai-client-prompt-builder.php';
 // Admin-screen shims (S13): nonce/fields/enqueue for the Runs screen handlers.
 require_once __DIR__ . '/stubs/admin.php';
 // HTTP-surface shims (S9/S17): wp_send_json_*, check_ajax_referer, REST doubles.
@@ -54,8 +56,14 @@ $GLOBALS['senroflux_test_abilities'] = array();
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
 }
+if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
+	define( 'MINUTE_IN_SECONDS', 60 );
+}
 if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
 	define( 'HOUR_IN_SECONDS', 3600 );
+}
+if ( ! defined( 'DAY_IN_SECONDS' ) ) {
+	define( 'DAY_IN_SECONDS', 86400 );
 }
 
 // --- Working mini hook registry -------------------------------------------
@@ -155,6 +163,53 @@ if ( ! function_exists( 'current_user_can' ) ) {
 	}
 }
 
+if ( ! function_exists( 'user_can' ) ) {
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_caps_by_id'][$user_id][$cap] = bool.
+	 * Falls back to the current-user knob when no per-user entry exists, so
+	 * tests that only set current_user_can()'s knob keep working.
+	 */
+	function user_can( int $user_id, string $capability ): bool {
+		if ( isset( $GLOBALS['senroflux_test_user_caps_by_id'][ $user_id ][ $capability ] ) ) {
+			return (bool) $GLOBALS['senroflux_test_user_caps_by_id'][ $user_id ][ $capability ];
+		}
+
+		return (bool) ( $GLOBALS['senroflux_test_user_caps'][ $capability ] ?? false );
+	}
+}
+
+if ( ! function_exists( 'get_user_meta' ) ) {
+	$GLOBALS['senroflux_test_user_meta'] = array();
+
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_meta'][$user_id][$key] = mixed.
+	 * `$single` is always honoured (the harness never reads a meta array).
+	 */
+	function get_user_meta( int $user_id, string $key = '', bool $single = false ) {
+		unset( $single );
+
+		return $GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] ?? '';
+	}
+}
+
+if ( ! function_exists( 'update_user_meta' ) ) {
+	/** Test knob: records the write in $GLOBALS['senroflux_test_user_meta']. */
+	function update_user_meta( int $user_id, string $key, $value ) {
+		$GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] = $value;
+
+		return true;
+	}
+}
+
+if ( ! function_exists( 'delete_user_meta' ) ) {
+	/** Test knob: clears one meta key for one user. */
+	function delete_user_meta( int $user_id, string $key ) {
+		unset( $GLOBALS['senroflux_test_user_meta'][ $user_id ][ $key ] );
+
+		return true;
+	}
+}
+
 if ( ! function_exists( 'wp_trim_words' ) ) {
 	/** Truncate shim. */
 	function wp_trim_words( string $text, int $num_words = 55, string $more = '…' ): string {
@@ -200,10 +255,50 @@ if ( ! function_exists( 'wp_safe_redirect' ) ) {
 	}
 }
 
+if ( ! function_exists( 'is_multisite' ) ) {
+	/** Toggle shim: tests set $GLOBALS['senroflux_test_multisite']. */
+	function is_multisite(): bool {
+		return ! empty( $GLOBALS['senroflux_test_multisite'] );
+	}
+}
+
+if ( ! function_exists( 'plugin_basename' ) ) {
+	/** Identity-ish shim: strips nothing, tests don't depend on the shape. */
+	function plugin_basename( string $file ): string {
+		return basename( dirname( $file ) ) . '/' . basename( $file );
+	}
+}
+
+if ( ! function_exists( 'deactivate_plugins' ) ) {
+	$GLOBALS['senroflux_test_deactivated_plugins'] = array();
+
+	/** Recording shim: $GLOBALS['senroflux_test_deactivated_plugins'][]. */
+	function deactivate_plugins( $plugins ): void {
+		foreach ( (array) $plugins as $plugin ) {
+			$GLOBALS['senroflux_test_deactivated_plugins'][] = $plugin;
+		}
+	}
+}
+
 if ( ! function_exists( 'wp_die' ) ) {
 	/** Throwing shim so tests can observe a death. */
 	function wp_die( string $message ): void {
 		throw new RuntimeException( $message );
+	}
+}
+
+if ( ! function_exists( '_n' ) ) {
+	/**
+	 * Identity shim: picks singular/plural by count, no actual translation.
+	 *
+	 * @param string $single Singular text.
+	 * @param string $plural Plural text.
+	 * @param int    $number Count.
+	 * @param string $domain Text domain.
+	 * @return string
+	 */
+	function _n( string $single, string $plural, int $number, string $domain = 'default' ): string {
+		return 1 === $number ? $single : $plural;
 	}
 }
 
@@ -345,3 +440,15 @@ if ( ! function_exists( 'delete_option' ) ) {
 		return true;
 	}
 }
+
+// 0.3 S11 follow-up: `Plugin::start()` now asks the SAME `senroflux/provider`
+// harness check the setup panel renders (Checks::providerCheck()). Most of
+// the suite starts runs without ever configuring a model provider and is not
+// testing that check at all, so the suite-wide default is "configured" —
+// exactly like `Plugin::set_dependency_probe()` already defaults Agent Safety
+// presence per test. Tests that ARE about the provider check (tests/Setup/ChecksTest.php,
+// tests/Admin/RunsScreenTest.php, tests/PluginProviderCheckTest.php) override
+// this explicitly and restore it to `true` (never to `null`, which would fall
+// through to the real, unconfigured `wordpress/php-ai-client` registry and
+// strand every OTHER test file that runs afterwards in the same process).
+\Specflux\SenroFlux\Setup\Checks::setProviderProbe( true );

@@ -31,8 +31,11 @@ use Specflux\SenroFlux\Http\ConsumerPolicy;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Report;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
+use Specflux\SenroFlux\Setup\Checks;
+use Specflux\SenroFlux\Setup\SetupCheck;
 use Specflux\SenroFlux\Tools\VerbTier;
 use WP_Error;
 
@@ -64,24 +67,35 @@ class RunsScreen {
 
 	private const SLUG = 'senroflux-runs';
 
-	/** The consumer id label for admin-started runs (S13). */
-	private const CONSUMER = 'senroflux-admin';
+	/**
+	 * The consumer id label for admin-started runs (S13). Public (0.3 S3): the
+	 * only consumer allowed to drive a built-in-mode run — its approval park
+	 * can only be resolved on this screen, so a third-party consumer starting
+	 * or ticking one is refused (`senroflux_ungoverned`, Plugin::start/tick).
+	 */
+	public const CONSUMER = 'senroflux-admin';
 
 	/** Goal length cap (S13: required, ≤ 1000 chars). */
 	private const MAX_GOAL = 1000;
 
-	/** The id the question card's rationale <p> carries for aria-describedby (S15). */
-	private const RATIONALE_ID = 'senroflux-rationale';
+	/** Transient set on activation, cleared the first time the Plugins-screen notice renders (S10). */
+	public const ACTIVATION_NOTICE_TRANSIENT = 'senroflux_activation_notice';
 
 	/** Register on admin_menu (+ posts + assets). */
 	public function register(): void {
 		add_action( 'admin_menu', array( $this, 'menu' ) );
+		add_action( 'admin_init', array( $this, 'redirectOldToolsUrl' ) );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
+		add_action( 'admin_enqueue_scripts', array( $this, 'commandPaletteAssets' ) );
 		add_action( 'admin_post_senroflux_cancel_run', array( $this, 'handleCancel' ) );
 		add_action( 'admin_post_senroflux_new_run', array( $this, 'handleNewRun' ) );
 		add_action( 'admin_post_senroflux_answer', array( $this, 'handleAnswer' ) );
 		add_action( 'admin_post_senroflux_plan_decision', array( $this, 'handlePlanDecision' ) );
 		add_action( 'admin_post_senroflux_approval_decision', array( $this, 'handleApprovalDecision' ) );
+		add_action( 'admin_post_senroflux_suggestion_decision', array( $this, 'handleSuggestionDecision' ) );
+		add_action( 'wp_ajax_senroflux_setup_panel', array( $this, 'handleSetupPanel' ) );
+		add_action( 'wp_ajax_senroflux_dismiss_agent_safety_check', array( $this, 'handleDismissAgentSafetyCheck' ) );
+		add_action( 'admin_notices', array( $this, 'maybeRenderActivationNotice' ) );
 		add_filter( ConsumerPolicy::FILTER, array( $this, 'registerAdminConsumer' ) );
 	}
 
@@ -146,59 +160,224 @@ class RunsScreen {
 		return $consumers;
 	}
 
-	/** Add the Tools submenu. */
+	/**
+	 * The top-level "SenroFlux" menu (0.3 S10 — moved out of Tools).
+	 *
+	 * The capability is computed fresh on every `admin_menu` call
+	 * ({@see ScreenCapability::current()}: the first registered pack's run
+	 * capability the CURRENT viewer holds, else `do_not_allow`), so a
+	 * Subscriber never sees the menu item at all while an editor who can run
+	 * one pack does.
+	 */
 	public function menu(): void {
-		add_management_page(
-			__( 'SenroFlux Runs', 'senroflux' ),
-			__( 'SenroFlux Runs', 'senroflux' ),
+		add_menu_page(
+			__( 'SenroFlux', 'senroflux' ),
+			__( 'SenroFlux', 'senroflux' ),
 			$this->capability(),
 			self::SLUG,
-			array( $this, 'render' )
+			array( $this, 'render' ),
+			'dashicons-format-chat'
 		);
 	}
 
-	/** Enqueue the screen assets only on this page. */
+	/**
+	 * 0.3 S10 `[assumed]`: the old Tools submenu URL
+	 * (`tools.php?page=senroflux-runs`) redirects to the new top-level one,
+	 * preserving `run_id`/`senroflux_filter` so a bookmarked review link keeps
+	 * working.
+	 */
+	public function redirectOldToolsUrl(): void {
+		global $pagenow;
+
+		if ( 'tools.php' !== $pagenow ) {
+			return;
+		}
+
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect, no state change.
+		$page = sanitize_key( wp_unslash( $_GET['page'] ?? '' ) );
+		if ( self::SLUG !== $page ) {
+			return;
+		}
+
+		$query = $_GET; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+		unset( $query['page'] );
+		$query = array_map( 'sanitize_text_field', wp_unslash( $query ) );
+		$query = array( 'page' => self::SLUG ) + $query;
+
+		$this->redirectAndExit( add_query_arg( $query, admin_url( 'admin.php' ) ) );
+	}
+
+	/**
+	 * The one place every redirect-then-stop goes through — a test subclass
+	 * overrides THIS, not `wp_safe_redirect()` + `exit` directly, so a test
+	 * can observe the destination without killing the PHPUnit process.
+	 */
+	protected function redirectAndExit( string $url ): void {
+		wp_safe_redirect( $url );
+		exit;
+	}
+
+	/**
+	 * Enqueue the React screen's build output only on this page (0.3 S10/S17).
+	 *
+	 * `assets/runs.js`/`assets/runs.css` (0.2's server-rendered screen) are no
+	 * longer enqueued here — the cards they drove are retired. The build's
+	 * own `index.asset.php` (generated by `@wordpress/scripts`) supplies the
+	 * dependency list and a content-hash version, so this never hand-lists
+	 * `@wordpress/*` handles that could drift from what actually got bundled.
+	 */
 	public function assets( string $hook ): void {
 		if ( ! str_contains( $hook, self::SLUG ) ) {
 			return;
 		}
 
-		wp_enqueue_style( 'senroflux-runs', SENROFLUX_URL . 'assets/runs.css', array(), '0.2.0' );
-		wp_enqueue_script( 'senroflux-runs', SENROFLUX_URL . 'assets/runs.js', array( 'wp-i18n' ), '0.2.0', true );
+		$asset_file = SENROFLUX_PATH . 'build/runs/index.asset.php';
+		if ( ! file_exists( $asset_file ) ) {
+			return;
+		}
 
-		// S15 recorded `wp_set_script_translations` as "added with runs.js's
-		// first string" — runs.js now carries strings, so it is wired here.
+		/** @var array{dependencies:list<string>,version:string} $asset */
+		$asset = require $asset_file;
+
+		// `wp_enqueue_script()` wants `array<non-empty-string>`; the build's
+		// own manifest already only ever lists real handles, but this is
+		// re-checked (fail closed) rather than trusted blindly from disk.
+		$dependencies = array_values( array_filter( $asset['dependencies'], static fn ( string $handle ): bool => '' !== $handle ) );
+
+		wp_enqueue_style( 'senroflux-runs', SENROFLUX_URL . 'build/runs/style-index.css', array(), $asset['version'] );
+		// S22 RTL gate: `wp-scripts build` emits a `style-index-rtl.css`
+		// alongside the LTR stylesheet, but nothing loads it unless the
+		// handle is told an RTL replacement exists — `wp_style_add_data()`
+		// with the `rtl` key is how core wires that swap in for any locale
+		// whose `WP_Locale::is_rtl()` is true (arabic, hebrew, etc.).
+		wp_style_add_data( 'senroflux-runs', 'rtl', 'replace' );
+		wp_enqueue_script( 'senroflux-runs', SENROFLUX_URL . 'build/runs/index.js', $dependencies, $asset['version'], true );
+
 		if ( function_exists( 'wp_set_script_translations' ) ) {
 			wp_set_script_translations( 'senroflux-runs', 'senroflux' );
 		}
 
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only, decides which run opens first.
+		$run_id = absint( $_GET['run_id'] ?? ( $_GET['run'] ?? 0 ) );
+
+		// 0.3 S10: the command palette's "SenroFlux: run "<text>"" command
+		// (see `commandPaletteAssets()`) links here with `goal` set — it only
+		// ever PRE-FILLS the message box, never starts a run itself, so this
+		// is read-only same as `run_id` above. Capped at the same length the
+		// no-JS New-run form enforces (`MAX_GOAL`) so a very long deep link
+		// can't paste something the form would itself have refused.
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only prefill, no state change.
+		$goal = sanitize_textarea_field( wp_unslash( $_GET['goal'] ?? '' ) );
+		if ( $this->strLen( $goal ) > self::MAX_GOAL ) {
+			$goal = function_exists( 'mb_substr' ) ? mb_substr( $goal, 0, self::MAX_GOAL ) : substr( $goal, 0, self::MAX_GOAL );
+		}
+
 		wp_localize_script(
 			'senroflux-runs',
-			'senrofluxRuns',
+			'senrofluxRunsConfig',
 			array(
-				'cancelConfirm'  => __( 'Cancel this run?', 'senroflux' ),
-				'pollInterval'   => 3000,
-				// The poll uses the SAME admin-ajax tick surface as any other
-				// logged-in consumer; a screen-capability holder answers by
-				// submitting the park-card form, not by polling (polling drives
-				// running pendings only).
-				'ajaxUrl'        => function_exists( 'admin_url' ) ? admin_url( 'admin-ajax.php' ) : '',
-				'nonce'          => function_exists( 'wp_create_nonce' ) ? wp_create_nonce( 'senroflux_run' ) : '',
-				// Every string runs.js renders, translated server-side so the
-				// script never hardcodes English (S15). The status map is the
-				// SAME one the server render uses.
-				'i18n'           => array(
-					'statuses'       => self::statusLabels(),
-					/* translators: %s is the translated run status label. */
-					'statusAnnounce' => __( 'Status: %s', 'senroflux' ),
-					'json'           => __( 'JSON', 'senroflux' ),
-					'pollError'      => __( 'Live updates stopped. Use Refresh to see the latest state.', 'senroflux' ),
-				),
-				// The park reload waits this long so the aria-live status
-				// announcement is actually spoken before the page goes away.
-				'parkAnnounceMs' => 1500,
+				'initialRunId'       => $run_id > 0 ? $run_id : null,
+				'initialGoal'        => '' !== $goal ? $goal : null,
+				// 0.3 S3: the SITE-WIDE mode a NEW run would start under —
+				// the empty state's promise sentence and the tier badge both
+				// read this, never a per-run value, since no run may be
+				// selected yet.
+				'gateMode'           => Plugin::currentGateMode()->value,
+				'examples'           => $this->exampleGoals(),
+				// 0.3 S10 (17c): the admin-ajax surface's tick/cancel/start
+				// actions carry the SAME `senroflux_run` nonce + `read`
+				// capability check the admin-post handlers use, RE-CHECKED
+				// server-side in `Ajax` — this is only the browser's half.
+				// admin-ajax (not REST) is the interaction layer's surface:
+				// {@see \Specflux\SenroFlux\Admin\ScreenCapability::tickAsScreen()}
+				// only wraps the ajax tick handler, so it is the one path
+				// that lets a screen-capability holder resolve a run they do
+				// not own; REST's tick route has no such wrapper.
+				'nonce'              => wp_create_nonce( 'senroflux_run' ),
+				// The one HTTP consumer this screen is allowed to start as
+				// (S13); registered only for a holder of the screen
+				// capability ({@see registerAdminConsumer()}).
+				'consumer'           => self::CONSUMER,
+				// 0.3 S20: gates the React suggestion card's Save/Dismiss —
+				// server-computed, never re-derived from a role guess on the
+				// client, since `manage_options` (not the screen capability)
+				// is what the REST route itself checks.
+				'canManageSiteBrief' => current_user_can( 'manage_options' ),
 			)
 		);
+	}
+
+	/**
+	 * Register the "SenroFlux: run "<text>"" command palette command,
+	 * site-wide (0.3 S10) — Cmd/Ctrl+K is available on every wp-admin screen
+	 * since WP 6.9 (`wp_enqueue_command_palette_assets()`, hooked on this
+	 * same `admin_enqueue_scripts` action), not only the Runs screen, so this
+	 * runs unconditionally rather than being gated by `$hook` like
+	 * {@see self::assets()}.
+	 *
+	 * Fail closed: a user who does not hold the screen capability never gets
+	 * the script at all, so there is nothing for them to see or invoke.
+	 *
+	 * This command is a NAVIGATION only. It opens the Runs screen with the
+	 * typed text already in the message box (via the SAME read-only `goal`
+	 * query arg `assets()` reads above) and stops there — it never calls
+	 * `senroflux()->start()` or anything that ticks a run. A human still has
+	 * to look at the pre-filled box and click "Start run" themselves.
+	 */
+	public function commandPaletteAssets(): void {
+		if ( ! current_user_can( $this->capability() ) ) {
+			return;
+		}
+
+		$asset_file = SENROFLUX_PATH . 'build/commands/index.asset.php';
+		if ( ! file_exists( $asset_file ) ) {
+			return;
+		}
+
+		/** @var array{dependencies:list<string>,version:string} $asset */
+		$asset = require $asset_file;
+
+		$dependencies = array_values( array_filter( $asset['dependencies'], static fn ( string $handle ): bool => '' !== $handle ) );
+
+		wp_enqueue_script( 'senroflux-commands', SENROFLUX_URL . 'build/commands/index.js', $dependencies, $asset['version'], true );
+
+		if ( function_exists( 'wp_set_script_translations' ) ) {
+			wp_set_script_translations( 'senroflux-commands', 'senroflux' );
+		}
+
+		wp_localize_script(
+			'senroflux-commands',
+			'senrofluxCommandsConfig',
+			array(
+				'runsUrl' => admin_url( 'admin.php?page=' . self::SLUG ),
+			)
+		);
+	}
+
+	/**
+	 * Example goals for the empty state (S10), one per pack the CURRENT
+	 * viewer's preflight allows. `[assumed]`: `Pack` declares no example-goal
+	 * text of its own, so this names the pack rather than inventing a
+	 * plausible-sounding goal it never asked to run — flagged in the
+	 * stage-17a report.
+	 *
+	 * @return list<string>
+	 */
+	protected function exampleGoals(): array {
+		$user_id  = get_current_user_id();
+		$examples = array();
+
+		foreach ( PackRegistry::fromFilters()->all() as $pack ) {
+			if ( true === $pack->preflight( $user_id ) ) {
+				$examples[] = sprintf(
+					/* translators: %s: a capability pack's name, e.g. "pages". */
+					__( 'Try something with the %s pack', 'senroflux' ),
+					$pack->name()
+				);
+			}
+		}
+
+		return $examples;
 	}
 
 	// ------------------------------------------------------------------
@@ -268,10 +447,23 @@ class RunsScreen {
 			return;
 		}
 
+		// 0.3 S20: a follow-up run. start() forces the pack to the source
+		// run's own pack regardless of the $pack chosen above (fail closed —
+		// the form's pack choice is ignored, never trusted, once a source is
+		// named).
+		$follow_up_of = absint( $_POST['follow_up_of'] ?? 0 );
+
+		// S7: the chosen pack's own default-budget overrides become the
+		// ceiling ConsumerPolicy clamps against, instead of the generic
+		// registered-consumer table — otherwise a pack asking for a flat,
+		// high budget (the site pack) would be clamped straight back down.
+		$pack_obj              = PackRegistry::fromFilters()->get( $pack );
+		$pack_budget_overrides = null !== $pack_obj ? $pack_obj->defaultBudget() : array();
+
 		// The one policy seam: the server owns the allow-list and the ceiling,
 		// the request may only lower the budget (S13 "lower-only" is exactly
 		// `Budget::clamp( $requested, $ceiling )` inside ConsumerPolicy).
-		$policy = ConsumerPolicy::resolve( self::CONSUMER, $this->rawBudgetInput() );
+		$policy = ConsumerPolicy::resolve( self::CONSUMER, $this->rawBudgetInput(), $pack_budget_overrides );
 		if ( is_wp_error( $policy ) ) {
 			$this->redirectList( (string) $policy->get_error_code() );
 
@@ -283,7 +475,9 @@ class RunsScreen {
 			$goal,
 			$policy['allow'],   // Outer bound; start() narrows it to the pack (S9).
 			$policy['budget'],
-			$pack               // The pack is the single source of the allow-list.
+			$pack,              // The pack is the single source of the allow-list.
+			null,
+			0 !== $follow_up_of ? $follow_up_of : null
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -344,6 +538,31 @@ class RunsScreen {
 				$this->tickThroughScreen( $run_id, absint( $_POST['step_count'] ?? 0 ), array( 'action' => $action ) )
 			)
 		);
+	}
+
+	/**
+	 * admin-post endpoint backing a suggestion's Save/Dismiss (0.3 S20).
+	 *
+	 * `manage_options` and the nonce are BOTH checked here — RE-CHECKED
+	 * inside {@see \Specflux\SenroFlux\Plugin::resolveSuggestion()}'s callee
+	 * is not the point; this is the one human-click seam, and it fails
+	 * closed on its own, same as {@see \Specflux\SenroFlux\Http\Rest::routeSuggestionDecision()}.
+	 */
+	public function handleSuggestionDecision(): void {
+		$run_id = absint( $_POST['run_id'] ?? 0 );
+		check_admin_referer( 'senroflux_suggestion_' . $run_id );
+
+		if ( ! current_user_can( 'manage_options' ) ) {
+			wp_die( esc_html__( 'Insufficient permissions.', 'senroflux' ) );
+		}
+
+		$seq    = absint( $_POST['seq'] ?? 0 );
+		$action = sanitize_text_field( wp_unslash( $_POST['senroflux_suggestion_action'] ?? '' ) );
+		$text   = isset( $_POST['text'] ) ? sanitize_textarea_field( wp_unslash( $_POST['text'] ) ) : null;
+
+		$result = senroflux()->resolveSuggestion( $run_id, $seq, $action, $text );
+
+		$this->redirectBack( $run_id, is_wp_error( $result ) ? (string) $result->get_error_code() : null );
 	}
 
 	/**
@@ -504,268 +723,274 @@ class RunsScreen {
 		exit;
 	}
 
-	/** Render list or detail. */
+	/**
+	 * Render list or detail.
+	 *
+	 * 0.3 S11: a blocked setup state still renders the FULL screen (the setup
+	 * panel, then the empty state / example goals / palette command below it)
+	 * — the panel names what to fix, it never replaces the screen.
+	 */
+	/**
+	 * 0.3 S10: the screen is now the React app's mount point. The server
+	 * still renders the S11 setup panel (its OWN evaluator, independent of
+	 * the run list/detail this replaces) and a `<noscript>` fallback; every
+	 * run-list row, park card and report table that 0.2 rendered here is
+	 * RETIRED in favour of `assets/src/runs/` (S10, a breaking change named
+	 * in the readme changelog). The admin-post handlers below are UNCHANGED
+	 * — 17b still needs them (stage 16's suggestion Save/Dismiss UI, in
+	 * particular) even though their no-JS forms no longer render.
+	 */
 	public function render(): void {
 		if ( ! current_user_can( $this->capability() ) ) {
 			return;
 		}
 
-		// The canonical GET key is `run_id`; the UI-generated review URL in the
-		// parked steps uses `&run=<id>`, so accept both (read-only alias).
-		$run_id = absint( $_GET['run_id'] ?? ( $_GET['run'] ?? 0 ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only list navigation.
-
 		echo '<div class="wrap">';
-		printf( '<h1>%s</h1>', esc_html__( 'SenroFlux Runs', 'senroflux' ) );
+		printf( '<h1>%s</h1>', esc_html__( 'SenroFlux', 'senroflux' ) );
 
-		if ( $run_id > 0 ) {
-			$this->renderDetail( $run_id );
-		} else {
-			$this->renderList();
-		}
+		echo $this->renderSetupPanel( get_current_user_id() ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- pre-escaped fragment.
+
+		echo '<noscript><div class="notice notice-warning"><p>'
+			. esc_html__( 'The SenroFlux Runs screen needs JavaScript to be enabled in your browser.', 'senroflux' )
+			. '</p></div></noscript>';
+
+		echo '<div id="senroflux-runs-root"></div>';
 
 		echo '</div>';
 	}
 
-	/** The run list: New-run form (with preflight gate) + the runs table. */
-	private function renderList(): void {
-		echo '<h2>' . esc_html__( 'Start a new run', 'senroflux' ) . '</h2>';
-		$this->renderNewRunForm();
+	// ------------------------------------------------------------------
+	// Setup panel (0.3 S11): the harness's own checks (provider, Agent
+	// Safety advisory). Pack-level checks (`<pack>/capability`,
+	// `<pack>/binding`) render inline in the new-run form's pack picker
+	// (stage 8's per-pack preflight notice) — this panel is the harness's
+	// half of the SAME evaluator ({@see Checks}).
+	// ------------------------------------------------------------------
 
-		$runs = senroflux()->available() ? senroflux()->listRecent() : array();
-
-		echo '<h2>' . esc_html__( 'Recent runs', 'senroflux' ) . '</h2>';
-
-		// Column headers are harness chrome (S15): translated, not machine codes.
-		$columns = array(
-			__( 'ID', 'senroflux' ),
-			__( 'User', 'senroflux' ),
-			__( 'Consumer', 'senroflux' ),
-			__( 'Goal', 'senroflux' ),
-			__( 'Status', 'senroflux' ),
-			__( 'Steps', 'senroflux' ),
-			__( 'Tokens', 'senroflux' ),
-			__( 'Updated', 'senroflux' ),
-			'',
-		);
-
-		echo '<table class="widefat striped senroflux-runs-table"><thead><tr>';
-		foreach ( $columns as $col ) {
-			echo '<th>' . esc_html( $col ) . '</th>';
-		}
-		echo '</tr></thead><tbody>';
-
-		if ( array() === $runs ) {
-			echo '<tr><td colspan="9">' . esc_html__( 'No runs yet.', 'senroflux' ) . '</td></tr>';
+	/**
+	 * The setup panel markup: one notice per harness check that is either
+	 * failing (blocking) or showing (advisory, undismissed). Empty string
+	 * when everything is clear.
+	 */
+	private function renderSetupPanel( int $user_id ): string {
+		$checks = Checks::harnessChecks( $user_id );
+		if ( array() === $checks ) {
+			return '';
 		}
 
-		foreach ( $runs as $run ) {
-			printf(
-				'<tr><td>%1$d</td><td>%2$d</td><td>%3$s</td><td>%4$s</td><td><span class="senroflux-badge senroflux-badge-%5$s" data-status="%5$s">%6$s</span></td><td>%7$d</td><td>%8$d/%9$d</td><td>%10$s</td><td><a href="%11$s">%12$s</a></td></tr>',
-				(int) $run['id'],
-				(int) $run['user_id'],
-				esc_html( (string) $run['consumer'] ),
-				esc_html( wp_trim_words( (string) $run['goal'], 8, '…' ) ),
-				esc_attr( (string) $run['status'] ),
-				// The badge TEXT is chrome: a translated label, never the raw
-				// enum value (the machine value stays in the class + data-status).
-				esc_html( self::statusLabel( (string) $run['status'] ) ),
-				(int) $run['step_count'],
-				(int) $run['tokens_in'],
-				(int) $run['tokens_out'],
-				esc_html( (string) $run['updated_at'] ),
-				esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . (int) $run['id'] ) ),
-				esc_html__( 'View steps', 'senroflux' )
+		$html = '<div id="senroflux-setup-panel" class="senroflux-setup-panel">';
+		foreach ( $checks as $check ) {
+			if ( $check->isBlocking() && $check->passed() ) {
+				continue;
+			}
+			$html .= $this->renderSetupCheckNotice( $check, $user_id );
+		}
+		$html .= '</div>';
+
+		return $html;
+	}
+
+	/** One check's notice: an error for a failing blocking check, a dismissible warning for the advisory. */
+	private function renderSetupCheckNotice( SetupCheck $check, int $user_id ): string {
+		$css_class = $check->isBlocking() ? 'notice-error' : 'notice-warning';
+		$message   = $check->messageFor( $user_id );
+		$link      = '';
+
+		if ( $check->fixVisibleFor( $user_id ) && null !== $check->fixUrl() ) {
+			$link = sprintf(
+				' <a href="%s">%s</a>',
+				esc_url( $check->fixUrl() ),
+				esc_html__( 'Fix this', 'senroflux' )
 			);
 		}
 
-		echo '</tbody></table>';
+		// Only the Agent Safety advisory carries a dismissal (S11: "per-user
+		// dismissal in user meta"); no other check gets a Dismiss button.
+		$dismiss = 'senroflux/agent-safety' === $check->id() ? $this->renderDismissButton() : '';
+
+		// The "inline" class matters as much as "notice" does: it keeps the
+		// warning/error look core's own CSS gives `.notice`, but core's own
+		// admin JS skips `.notice.inline` when it relocates every other
+		// `.wrap .notice` below the page heading (0.3 defect 3) — without
+		// it, one copy of every check ends up duplicated outside this panel,
+		// and a stale copy can linger there after the panel re-renders.
+		return sprintf(
+			'<div class="notice %1$s inline senroflux-setup-check" data-check-id="%2$s"><p>%3$s%4$s</p>%5$s</div>',
+			esc_attr( $css_class ),
+			esc_attr( $check->id() ),
+			esc_html( $message ),
+			$link, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built from esc_url()/esc_html() above.
+			$dismiss // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built from esc_attr()/esc_html() below.
+		);
+	}
+
+	/** The Agent Safety advisory's own "Dismiss" button (nonce-protected, current user only). */
+	private function renderDismissButton(): string {
+		return sprintf(
+			'<p><button type="button" class="button senroflux-dismiss-check" data-nonce="%s">%s</button></p>',
+			esc_attr( wp_create_nonce( 'senroflux_dismiss_agent_safety_check' ) ),
+			esc_html__( 'Dismiss', 'senroflux' )
+		);
 	}
 
 	/**
-	 * The "New run" form, or the S13 preflight notice instead.
-	 *
-	 * Preflight is PER PACK, not per screen. The old code preflighted `pages`
-	 * and then offered EVERY registered pack in the `<select>`, so a user bound
-	 * to `pages` could pick an unbound pack and only discover it at `start()` —
-	 * and a user unbound to `pages` was blocked from packs they COULD run.
-	 *
-	 * Now every registered pack is preflighted and its state is shown in the
-	 * select: a blocked pack renders as a `disabled` option carrying the reason,
-	 * and a notice lists the blocked packs with a link to Agent Capability
-	 * Packs. If EVERY pack is blocked the form is not rendered at all — the S13
-	 * "preflight blocks" rule, evaluated over what the user can actually run.
-	 * SenroFlux never auto-binds; `start()` re-runs the chosen pack's preflight
-	 * regardless (fail closed).
+	 * admin-ajax: re-render the setup panel (S11 "refresh on window focus").
+	 * Nonce-protected; capability = the computed screen capability (the same
+	 * one that gates the whole screen).
 	 */
-	private function renderNewRunForm(): void {
-		$registry = PackRegistry::fromFilters();
-		$packs    = $registry->all();
+	public function handleSetupPanel(): void {
+		check_ajax_referer( 'senroflux_run', 'nonce' );
 
-		if ( array() === $packs ) {
-			echo '<div class="notice notice-error"><p>' . esc_html__( 'No capability pack is registered, so no run can be started from here.', 'senroflux' ) . '</p></div>';
+		if ( ! current_user_can( $this->capability() ) ) {
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'senroflux' ) ), 403 );
+		}
 
+		$user_id  = get_current_user_id();
+		$pack     = sanitize_text_field( wp_unslash( $_POST['pack'] ?? '' ) );
+		$pack_obj = '' !== $pack ? PackRegistry::fromFilters()->get( $pack ) : null;
+
+		$checks         = null !== $pack_obj ? Checks::forPack( $pack_obj, $user_id ) : Checks::harnessChecks( $user_id );
+		$start_disabled = null !== Checks::firstBlockingFailure( $checks );
+
+		wp_send_json_success(
+			array(
+				'html'          => $this->renderSetupPanel( $user_id ),
+				'start_enabled' => ! $start_disabled,
+			)
+		);
+	}
+
+	/**
+	 * admin-ajax: dismiss the Agent Safety advisory for the CURRENT user only
+	 * (S11: per-user dismissal, never re-arms).
+	 */
+	public function handleDismissAgentSafetyCheck(): void {
+		check_ajax_referer( 'senroflux_dismiss_agent_safety_check', 'nonce' );
+
+		if ( ! current_user_can( $this->capability() ) ) {
+			wp_send_json_error( array( 'message' => __( 'Insufficient permissions.', 'senroflux' ) ), 403 );
+		}
+
+		Checks::dismissAgentSafetyFor( get_current_user_id() );
+
+		wp_send_json_success( array( 'html' => $this->renderSetupPanel( get_current_user_id() ) ) );
+	}
+
+	/**
+	 * One-time notice on the Plugins screen only (S10 activation: no
+	 * redirect, no site-wide notice). The transient is set on activation
+	 * ({@see \Specflux\SenroFlux\senroflux_activate()}) and deleted the first
+	 * time this renders, so it never shows twice.
+	 */
+	public function maybeRenderActivationNotice(): void {
+		global $pagenow;
+
+		if ( 'plugins.php' !== $pagenow || ! function_exists( 'get_transient' ) ) {
 			return;
 		}
 
-		$user_id = get_current_user_id();
-
-		/** @var array<string,true|WP_Error> $states pack name => preflight outcome. */
-		$states  = array();
-		$blocked = array();
-		foreach ( $packs as $pack ) {
-			$state                   = $pack->preflight( $user_id );
-			$states[ $pack->name() ] = $state;
-			if ( is_wp_error( $state ) ) {
-				$blocked[ $pack->name() ] = $state;
-			}
-		}
-
-		// Every pack blocked → no form at all (S13), with the first reason shown.
-		if ( count( $blocked ) === count( $states ) ) {
-			$this->renderPreflightNotice( $this->firstPreflightError( $states ) );
-
+		if ( ! get_transient( self::ACTIVATION_NOTICE_TRANSIENT ) ) {
 			return;
 		}
 
-		// Some packs blocked → the form stands, but say which are unavailable.
-		if ( array() !== $blocked ) {
-			$this->renderPartialPreflightNotice( $blocked );
-		}
-
-		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '" class="senroflux-new-run-form">';
-		echo '<input type="hidden" name="action" value="senroflux_new_run">';
-		wp_nonce_field( 'senroflux_new_run' );
-
-		echo '<p>';
-		echo '<label for="senroflux-goal">' . esc_html__( 'Goal', 'senroflux' ) . '</label>';
-		echo '<textarea id="senroflux-goal" name="goal" rows="3" required maxlength="' . esc_attr( (string) self::MAX_GOAL ) . '" class="large-text code"></textarea>';
-		echo '</p>';
-
-		echo '<p>';
-		echo '<label for="senroflux-pack">' . esc_html__( 'Capability pack', 'senroflux' ) . '</label>';
-		echo '<select id="senroflux-pack" name="pack">';
-
-		$selected_done = false;
-		foreach ( $packs as $pack ) {
-			$name         = $pack->name();
-			$state        = $states[ $name ] ?? true;
-			$blocked_here = is_wp_error( $state );
-			$label        = $this->packLabel( $pack );
-
-			if ( $blocked_here ) {
-				/* translators: 1: pack label, 2: the reason the pack cannot be used. */
-				$label = sprintf( __( '%1$s — unavailable: %2$s', 'senroflux' ), $label, $state->get_error_message() );
-			}
-
-			// The first RUNNABLE pack is preselected, so the default choice is
-			// never one the user cannot start.
-			$select_this   = ( ! $blocked_here && ! $selected_done );
-			$selected_done = $selected_done || $select_this;
-
-			printf(
-				'<option value="%s"%s%s>%s</option>',
-				esc_attr( $name ),
-				$blocked_here ? ' disabled' : '',
-				$select_this ? ' selected' : '',
-				esc_html( $label )
-			);
-		}
-		echo '</select>';
-		echo '</p>';
-
-		echo '<details class="senroflux-advanced">';
-		echo '<summary>' . esc_html__( 'Advanced', 'senroflux' ) . '</summary>';
-
-		$labels = array(
-			'max_steps'      => __( 'Max steps', 'senroflux' ),
-			'max_tool_calls' => __( 'Max tool calls', 'senroflux' ),
-			'max_tokens'     => __( 'Max tokens', 'senroflux' ),
-			'max_questions'  => __( 'Max questions', 'senroflux' ),
-			'max_plans'      => __( 'Max plans', 'senroflux' ),
-		);
-
-		foreach ( $labels as $key => $label ) {
-			printf(
-				'<p class="senroflux-ceiling"><label for="senroflux-%1$s">%2$s</label><input id="senroflux-%1$s" name="%1$s" type="number" min="1" step="1" inputmode="numeric"></p>',
-				esc_attr( $key ),
-				esc_html( $label )
-			);
-		}
-
-		echo '</details>';
+		delete_transient( self::ACTIVATION_NOTICE_TRANSIENT );
 
 		printf(
-			'<p><button type="submit" class="button button-primary">%s</button></p>',
-			esc_html__( 'Start run', 'senroflux' )
-		);
-
-		echo '</form>';
-	}
-
-	/**
-	 * The first WP_Error in a preflight state map (there is always one when
-	 * this is called; the `true` fallback keeps the return type honest).
-	 *
-	 * @param array<string,true|WP_Error> $states pack name => preflight outcome.
-	 */
-	private function firstPreflightError( array $states ): WP_Error {
-		// Prefer the default `pages` pack's reason when it is one of the failures.
-		if ( isset( $states['pages'] ) && is_wp_error( $states['pages'] ) ) {
-			return $states['pages'];
-		}
-
-		foreach ( $states as $state ) {
-			if ( is_wp_error( $state ) ) {
-				return $state;
-			}
-		}
-
-		return new WP_Error(
-			'pack_unbound',
-			__( 'No capability pack is available to you.', 'senroflux' ),
-			array( 'status' => 400 )
+			'<div class="notice notice-success is-dismissible"><p>%s <a href="%s">%s</a></p></div>',
+			esc_html__( 'SenroFlux is active.', 'senroflux' ),
+			esc_url( admin_url( 'admin.php?page=' . self::SLUG ) ),
+			esc_html__( 'Start a run', 'senroflux' )
 		);
 	}
 
 	/**
-	 * A warning notice naming the packs this user cannot currently start.
+	 * 0.3 S9: a run "needs" the viewer when it is parked AND the viewer may
+	 * tick it (the same `senroflux_can_tick` delegation seam the Runner
+	 * itself gates on) — a stalled `running` run is NOT a park (S9 names
+	 * park kinds and the stalled state as two different things), so it never
+	 * qualifies here even though it also wants a human to reopen the tab.
 	 *
-	 * @param array<string,WP_Error> $blocked pack name => reason.
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
 	 */
-	private function renderPartialPreflightNotice( array $blocked ): void {
-		$packs_url = admin_url( 'tools.php?page=agent-safety-packs' );
+	public static function needsYou( array $run ): bool {
+		return self::isParkedStatus( (string) $run['status'] ) && (bool) ( $run['viewer_may_tick'] ?? false );
+	}
 
-		echo '<div class="notice notice-warning"><p>';
-		echo esc_html__( 'Some capability packs are unavailable to you and cannot be selected:', 'senroflux' );
-		echo '</p><ul class="senroflux-blocked-packs">';
-
-		foreach ( $blocked as $name => $error ) {
-			printf(
-				'<li><code>%s</code> — %s</li>',
-				esc_html( (string) $name ),
-				esc_html( $error->get_error_message() )
-			);
+	/**
+	 * 0.3 S20: eligible for "Follow up" — the run is `completed`, `failed` or
+	 * `cancelled`, it has a pack (a direct-allow run has no "source pack's
+	 * run capability" to check, so it is never eligible — fail closed), and
+	 * the CURRENT viewer holds that pack's run capability.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function eligibleForFollowUp( array $run ): bool {
+		if ( ! in_array(
+			(string) $run['status'],
+			array( RunStatus::Completed->value, RunStatus::Failed->value, RunStatus::Cancelled->value ),
+			true
+		) ) {
+			return false;
 		}
 
-		printf(
-			'</ul><p><a href="%s">%s</a></p></div>',
-			esc_url( $packs_url ),
-			esc_html__( 'Open Agent Capability Packs', 'senroflux' )
+		$pack_name = is_string( $run['pack'] ?? null ) ? $run['pack'] : '';
+		if ( '' === $pack_name ) {
+			return false;
+		}
+
+		$pack = PackRegistry::fromFilters()->get( $pack_name );
+		if ( null === $pack ) {
+			return false;
+		}
+
+		$capability = $pack->runCapability();
+
+		return '' !== $capability && function_exists( 'current_user_can' ) && current_user_can( $capability );
+	}
+
+	/** Whether `$status` is one of the three park statuses (S9). */
+	public static function isParkedStatus( string $status ): bool {
+		return in_array(
+			$status,
+			array( RunStatus::AwaitingApproval->value, RunStatus::AwaitingUser->value, RunStatus::AwaitingPlan->value ),
+			true
 		);
 	}
 
-	/** The preflight notice: message + a link to Agent Capability Packs. */
-	private function renderPreflightNotice( WP_Error $error ): void {
-		// `agent-safety-packs` is registered via add_management_page in the
-		// Agent Capability Packs screen, so it lives under the Tools menu.
-		$packs_url = admin_url( 'tools.php?page=agent-safety-packs' );
+	/**
+	 * The list row's status text (0.3 S9): the park kind for a parked run,
+	 * "paused while closed — open to continue" for a stalled `running` run,
+	 * or the ordinary status label otherwise.
+	 *
+	 * @param array<string,mixed> $run {@see \Specflux\SenroFlux\Plugin::listRecent()} row shape.
+	 */
+	public static function listRowLabel( array $run ): string {
+		$status = (string) $run['status'];
 
-		printf(
-			'<div class="notice notice-error"><p>%s <a href="%s">%s</a></p></div>',
-			esc_html( $error->get_error_message() ),
-			esc_url( $packs_url ),
-			esc_html__( 'Open Agent Capability Packs', 'senroflux' )
-		);
+		$park_kind = self::parkKindLabel( $status );
+		if ( null !== $park_kind ) {
+			return $park_kind;
+		}
+
+		if ( RunStatus::Running->value === $status && (bool) ( $run['stalled'] ?? false ) ) {
+			return __( 'paused while closed — open to continue', 'senroflux' );
+		}
+
+		return self::statusLabel( $status );
+	}
+
+	/**
+	 * The S9 park-kind phrasing for the Runs LIST row — distinct wording from
+	 * {@see self::statusLabel()}'s detail-screen badge, which S9 leaves
+	 * unchanged. Null for a non-parked status.
+	 */
+	public static function parkKindLabel( string $status ): ?string {
+		return match ( $status ) {
+			RunStatus::AwaitingUser->value => __( 'waiting for your answer', 'senroflux' ),
+			RunStatus::AwaitingApproval->value => __( 'waiting for approval', 'senroflux' ),
+			RunStatus::AwaitingPlan->value => __( 'waiting on the plan', 'senroflux' ),
+			default => null,
+		};
 	}
 
 	/**
@@ -794,589 +1019,6 @@ class RunsScreen {
 	/** One translated status label; an unknown value falls back to itself. */
 	public static function statusLabel( string $status ): string {
 		return self::statusLabels()[ $status ] ?? $status;
-	}
-
-	/** A human pack label for the <select> (name => label). */
-	private function packLabel( Pack $pack ): string {
-		// A pack may supply a translation-ready label; fall back to a readable
-		// form of the machine name. Either way it is harness chrome (translated).
-		if ( method_exists( $pack, 'label' ) && is_string( $pack->label() ) && '' !== $pack->label() ) {
-			return $pack->label();
-		}
-
-		/* translators: %s is the pack machine name. */
-		return sprintf( __( '%s pack', 'senroflux' ), ucwords( str_replace( array( '_', '-' ), ' ', $pack->name() ) ) );
-	}
-
-	/** One run: report/park cards + timeline + cancel. */
-	private function renderDetail( int $run_id ): void {
-		$state = senroflux()->get( $run_id );
-		if ( is_wp_error( $state ) ) {
-			printf(
-				'<div class="notice notice-error"><p>%s</p></div>',
-				esc_html( $state->get_error_message() )
-			);
-
-			return;
-		}
-
-		$run = $state['run'];
-
-		printf(
-			'<p><a href="%s">← %s</a></p>',
-			esc_url( admin_url( 'tools.php?page=' . self::SLUG ) ),
-			esc_html__( 'Back to runs', 'senroflux' )
-		);
-
-		// The detail container carries the polling preconditions (read by JS).
-		printf(
-			'<div id="senroflux-run-detail" class="senroflux-run-detail" data-run-id="%1$d" data-step-count="%2$d" data-status="%3$s">',
-			(int) $run['id'],
-			(int) $run['step_count'],
-			esc_attr( (string) $run['status'] )
-		);
-
-		// S15 aria-live region: status TRANSITIONS only, driven by JS.
-		echo '<div id="senroflux-live-status" class="senroflux-sr-only" aria-live="polite"></div>';
-
-		printf(
-			'<h2>%s <span id="senroflux-status-badge" class="senroflux-badge senroflux-badge-%s" data-status="%s">%s</span></h2>',
-			esc_html( (string) $run['goal'] ),
-			esc_attr( (string) $run['status'] ),
-			esc_attr( (string) $run['status'] ),
-			// Chrome: translated label; the machine value lives in data-status.
-			esc_html( self::statusLabel( (string) $run['status'] ) )
-		);
-
-		$this->renderRunErrorFlash();
-
-		if ( ! empty( $run['error'] ) && is_array( $run['error'] ) ) {
-			printf(
-				'<div class="notice notice-error inline"><p><strong>%s</strong> %s</p></div>',
-				esc_html( (string) ( $run['error']['code'] ?? '' ) ),
-				esc_html( (string) ( $run['error']['message'] ?? '' ) )
-			);
-		}
-
-		$status = RunStatus::tryFrom( (string) $run['status'] );
-		if ( null !== $status && $status->isParked() ) {
-			// The three park cards; each is a plain admin-post form (no JS).
-			match ( $status ) {
-				RunStatus::AwaitingUser     => $this->renderQuestionCard( $state ),
-				RunStatus::AwaitingPlan     => $this->renderPlanCard( $state ),
-				RunStatus::AwaitingApproval => $this->renderApprovalCard( $state ),
-				default                     => null,
-			};
-
-			// The review link for approvals still lives with Agent Safety.
-			if ( RunStatus::AwaitingApproval === $status ) {
-				$this->renderApprovalReviewLinks( $state );
-			}
-		}
-
-		// "Refresh" link for the complete-without-JS experience.
-		printf(
-			'<p class="senroflux-refresh"><a href="%s">%s</a></p>',
-			esc_url( admin_url( 'tools.php?page=' . self::SLUG . '&run_id=' . $run_id ) ),
-			esc_html__( 'Refresh', 'senroflux' )
-		);
-
-		// Cancel for anything still in flight.
-		if ( null !== $status && ! $status->isTerminal() ) {
-			$cancel_url = wp_nonce_url(
-				admin_url( 'admin-post.php?action=senroflux_cancel_run&run_id=' . $run_id ),
-				'senroflux_cancel_' . $run_id
-			);
-			// NO inline onclick: `assets/runs.js` already confirms this link
-			// (one prompt, not two), and an inline handler would be broken by
-			// any translation of "Cancel this run?" containing an apostrophe.
-			// Without JS the link is followed directly — `handleCancel()`
-			// verifies the nonce and the capability server-side.
-			printf(
-				'<p><a class="button button-secondary" href="%s">%s</a></p>',
-				esc_url( $cancel_url ),
-				esc_html__( 'Cancel run', 'senroflux' )
-			);
-		}
-
-		// Terminal runs carry the harness-built report (S12) plus the timeline.
-		if ( null !== $status && $status->isTerminal() ) {
-			$this->renderReport( $run );
-		}
-
-		$this->renderStepsTimeline( $state );
-
-		echo '</div>'; // #senroflux-run-detail
-	}
-
-	/** A flash notice for a failed park resolution (redirected back here). */
-	private function renderRunErrorFlash(): void {
-		$code = isset( $_GET['senroflux_run_error'] ) ? sanitize_text_field( wp_unslash( $_GET['senroflux_run_error'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only flash.
-		if ( '' === $code ) {
-			return;
-		}
-
-		$messages = array(
-			'resume_mismatch'      => __( 'That response did not match what the run was waiting for.', 'senroflux' ),
-			'choice_not_offered'   => __( 'That choice was not one of the offered options.', 'senroflux' ),
-			'preapproval_disabled' => __( 'Pre-approval is not available for this run.', 'senroflux' ),
-			'senroflux_conflict'   => __( 'The run advanced since your last action; refresh and try again.', 'senroflux' ),
-		);
-
-		$message = $messages[ $code ] ?? __( 'The run could not be updated.', 'senroflux' );
-
-		printf( '<div class="notice notice-error inline"><p>%s</p></div>', esc_html( $message ) );
-	}
-
-	/**
-	 * The S6 question park card.
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 */
-	private function renderQuestionCard( array $state ): void {
-		$run      = $state['run'];
-		$question = $this->newestStepOfKind( $state, StepKind::Question->value );
-		if ( null === $question || ! is_array( $question['message'] ?? null ) ) {
-			return;
-		}
-
-		$payload   = $question['message'];
-		$text      = (string) ( $payload['text'] ?? '' );
-		$choices   = is_array( $payload['choices'] ?? null ) ? array_values( $payload['choices'] ) : array();
-		$other     = (bool) ( $payload['allow_other'] ?? true );
-		$rationale = (string) ( $payload['rationale'] ?? '' );
-
-		$action = admin_url( 'admin-post.php' );
-		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-question-heading">';
-
-		// CONTENT BOUNDARY — question text is MODEL-AUTHORED (S15): stored and
-		// rendered verbatim, NEVER wrapped in __()/esc_html__(). It is content,
-		// not harness chrome. (esc_html is applied for safety, not i18n.)
-		printf(
-			'<h3 id="senroflux-park-question-heading" class="senroflux-park-card-heading" tabindex="-1">%s</h3>',
-			esc_html( $text )
-		);
-
-		echo '<form method="post" action="' . esc_url( $action ) . '">';
-		echo '<input type="hidden" name="action" value="senroflux_answer">';
-		echo '<input type="hidden" name="run_id" value="' . esc_attr( (string) $run['id'] ) . '">';
-		echo '<input type="hidden" name="step_count" value="' . esc_attr( (string) $run['step_count'] ) . '">';
-		wp_nonce_field( 'senroflux_answer_' . (int) $run['id'] );
-
-		// The rationale describes the question; link it via aria-describedby (S15).
-		// Escape the VALUE, never the whole attribute fragment: escaping the
-		// fragment turns the quotes into entities and the association is lost.
-		if ( '' !== $rationale ) {
-			printf( '<fieldset aria-describedby="%s">', esc_attr( self::RATIONALE_ID ) );
-		} else {
-			echo '<fieldset>';
-		}
-		// CONTENT BOUNDARY — the legend is the question text, verbatim (S15).
-		echo '<legend>' . esc_html( $text ) . '</legend>';
-
-		if ( '' !== $rationale ) {
-			// CONTENT BOUNDARY — rationale is MODEL-AUTHORED prose (S15), verbatim.
-			printf(
-				'<p id="%s" class="senroflux-rationale">%s</p>',
-				esc_attr( self::RATIONALE_ID ),
-				esc_html( $rationale )
-			);
-		}
-
-		if ( array() !== $choices ) {
-			foreach ( $choices as $choice ) {
-				$value = is_scalar( $choice ) ? (string) $choice : '';
-				// CONTENT BOUNDARY — each option label is MODEL-AUTHORED (S15), verbatim.
-				printf(
-					'<label class="senroflux-choice"><input type="radio" name="senroflux_answer_choice" value="%s"> %s</label>',
-					esc_attr( $value ),
-					esc_html( $value )
-				);
-			}
-
-			if ( $other ) {
-				echo '<label class="senroflux-choice"><input type="radio" name="senroflux_answer_choice" value="__other__" aria-controls="senroflux_answer_other">';
-				echo esc_html__( 'Other', 'senroflux' );
-				echo '</label>';
-				// The "Other" textarea is harness chrome; it is required ONLY while
-				// the Other radio is checked (enforced by JS; server re-validates).
-				echo '<label class="senroflux-other-wrap"><span class="screen-reader-text">';
-				echo esc_html__( 'Your answer', 'senroflux' );
-				echo '</span>';
-				echo '<textarea id="senroflux_answer_other" name="senroflux_answer_other" rows="2" placeholder="' . esc_attr__( 'Type your answer…', 'senroflux' ) . '"></textarea></label>';
-			}
-		} else {
-			// No choices: textarea-only (S15).
-			echo '<label for="senroflux_answer_text">' . esc_html__( 'Your answer', 'senroflux' ) . '</label>';
-			echo '<textarea id="senroflux_answer_text" name="senroflux_answer_text" rows="3" required></textarea>';
-		}
-
-		echo '</fieldset>';
-
-		echo '<p class="senroflux-card-actions">';
-		printf(
-			'<button type="submit" name="senroflux_answer_action" value="answer" class="button button-primary">%s</button>',
-			esc_html__( 'Answer', 'senroflux' )
-		);
-		printf(
-			'<button type="submit" name="senroflux_answer_action" value="skip" class="button">%s</button>',
-			esc_html__( 'Skip', 'senroflux' )
-		);
-		echo '</p>';
-
-		echo '</form>';
-		echo '</section>';
-	}
-
-	/**
-	 * The S7 plan park card.
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 */
-	private function renderPlanCard( array $state ): void {
-		$run  = $state['run'];
-		$plan = $this->newestStepOfKind( $state, StepKind::Plan->value );
-		if ( null === $plan || ! is_array( $plan['message'] ?? null ) ) {
-			return;
-		}
-
-		$payload     = $plan['message'];
-		$steps       = is_array( $payload['steps'] ?? null ) ? $payload['steps'] : array();
-		$assumptions = is_array( $payload['assumptions'] ?? null ) ? $payload['assumptions'] : array();
-		// The Runner computes S15 preapprove_availability from the filter + the
-		// Agent Safety grants service; `Plugin::get()` does not carry ui, so the
-		// screen recomputes the SAME condition (S14/S15).
-		$preapprove = $this->preapprovalAvailable();
-
-		$action = admin_url( 'admin-post.php' );
-		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-plan-heading">';
-
-		echo '<h3 id="senroflux-park-plan-heading" class="senroflux-park-card-heading" tabindex="-1">';
-		echo esc_html__( 'Approve plan', 'senroflux' );
-		echo '</h3>';
-
-		echo '<form method="post" action="' . esc_url( $action ) . '">';
-		echo '<input type="hidden" name="action" value="senroflux_plan_decision">';
-		echo '<input type="hidden" name="run_id" value="' . esc_attr( (string) $run['id'] ) . '">';
-		echo '<input type="hidden" name="step_count" value="' . esc_attr( (string) $run['step_count'] ) . '">';
-		wp_nonce_field( 'senroflux_plan_' . (int) $run['id'] );
-
-		echo '<ol class="senroflux-plan-steps">';
-		foreach ( $steps as $step ) {
-			// CONTENT BOUNDARY — step text + verbs are MODEL-AUTHORED (S15),
-			// verbatim. The "needs approval" marker is harness chrome (translated).
-			$text  = (string) ( $step['text'] ?? '' );
-			$verbs = is_array( $step['verbs'] ?? null ) ? $step['verbs'] : array();
-			$needs = $this->stepNeedsApproval( $step );
-
-			echo '<li>';
-			echo '<span class="senroflux-plan-text">' . esc_html( $text ) . '</span>';
-			if ( array() !== $verbs ) {
-				echo '<span class="senroflux-plan-verbs">(' . esc_html( implode( ', ', array_map( 'strval', $verbs ) ) ) . ')</span>';
-			}
-			if ( $needs ) {
-				echo ' <span class="senroflux-plan-approval">' . esc_html__( 'needs approval', 'senroflux' ) . '</span>';
-			}
-			echo '</li>';
-		}
-		echo '</ol>';
-
-		if ( array() !== $assumptions ) {
-			echo '<h4>' . esc_html__( 'Assumptions', 'senroflux' ) . '</h4>';
-			echo '<ul class="senroflux-plan-assumptions">';
-			foreach ( $assumptions as $assumption ) {
-				// CONTENT BOUNDARY — assumption text is MODEL-AUTHORED (S15).
-				echo '<li>' . esc_html( (string) $assumption ) . '</li>';
-			}
-			echo '</ul>';
-		}
-
-		echo '<fieldset class="senroflux-plan-decision">';
-		echo '<legend>' . esc_html__( 'Decision', 'senroflux' ) . '</legend>';
-		echo '<label class="senroflux-choice"><input type="radio" name="senroflux_plan_action" value="accept"> ' . esc_html__( 'Accept', 'senroflux' ) . '</label>';
-
-		if ( $preapprove ) {
-			echo '<label class="senroflux-choice"><input type="radio" name="senroflux_plan_action" value="accept_preapprove"> ' . esc_html__( 'Accept and pre-approve', 'senroflux' ) . '</label>';
-			echo '<p class="description">' . esc_html__( 'Approve this plan and any irreversible steps in it without asking again.', 'senroflux' ) . '</p>';
-		}
-
-		echo '<label class="senroflux-choice"><input type="radio" name="senroflux_plan_action" value="veto"> ' . esc_html__( 'Veto', 'senroflux' ) . '</label>';
-		echo '</fieldset>';
-
-		echo '<label for="senroflux_plan_note">' . esc_html__( 'Note', 'senroflux' ) . '</label>';
-		echo '<textarea id="senroflux_plan_note" name="senroflux_plan_note" rows="2"></textarea>';
-
-		echo '<p class="senroflux-card-actions">';
-		printf(
-			'<button type="submit" class="button button-primary">%s</button>',
-			esc_html__( 'Submit', 'senroflux' )
-		);
-		echo '</p>';
-
-		echo '</form>';
-		echo '</section>';
-	}
-
-	/**
-	 * The S6 approval park card (inline approve/reject through the same tick).
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 */
-	private function renderApprovalCard( array $state ): void {
-		$run      = $state['run'];
-		$approval = $this->newestStepOfKind( $state, StepKind::Approval->value );
-		if ( null === $approval || ! is_array( $approval['message'] ?? null ) ) {
-			return;
-		}
-
-		$payload = $approval['message'];
-		$verb    = (string) ( $payload['verb'] ?? '' );
-		$tier    = (int) ( $payload['tier'] ?? 0 );
-		$args    = is_array( $payload['args'] ?? null ) ? $payload['args'] : array();
-
-		$action = admin_url( 'admin-post.php' );
-		echo '<section class="senroflux-park-card" aria-labelledby="senroflux-park-approval-heading">';
-
-		echo '<h3 id="senroflux-park-approval-heading" class="senroflux-park-card-heading" tabindex="-1">';
-		echo esc_html__( 'Approval needed', 'senroflux' );
-		echo '</h3>';
-
-		echo '<form method="post" action="' . esc_url( $action ) . '">';
-		echo '<input type="hidden" name="action" value="senroflux_approval_decision">';
-		echo '<input type="hidden" name="run_id" value="' . esc_attr( (string) $run['id'] ) . '">';
-		echo '<input type="hidden" name="step_count" value="' . esc_attr( (string) $run['step_count'] ) . '">';
-		wp_nonce_field( 'senroflux_approval_' . (int) $run['id'] );
-
-		echo '<p><strong>' . esc_html__( 'Requested action', 'senroflux' ) . ':</strong> ';
-		// CONTENT BOUNDARY — a verb is a machine-stable code string, NOT prose
-		// and NOT model-authored in the i18n sense: render verbatim, never __().
-		echo '<code>' . esc_html( $verb ) . '</code></p>';
-
-		echo '<p><strong>' . esc_html__( 'Tier', 'senroflux' ) . ':</strong> ';
-		echo esc_html( (string) $tier );
-		echo '</p>';
-
-		if ( array() !== $args ) {
-			// S15 a11y: `.senroflux-args` scrolls once the payload is taller
-			// than its max-height, and a scrollable box that nothing can focus
-			// is unreachable by keyboard (axe SERIOUS
-			// `scrollable-region-focusable`, seen live on a tall publish
-			// payload). `tabindex="0"` makes it reachable; a focusable region
-			// also needs a NAME, so it carries the "Arguments" label it already
-			// renders, through a role that accepts one.
-			$args_label_id = 'senroflux-args-label-' . (int) $run['id'];
-			echo '<p><strong id="' . esc_attr( $args_label_id ) . '">' . esc_html__( 'Arguments', 'senroflux' ) . ':</strong></p>';
-			echo '<pre class="senroflux-args" tabindex="0" role="region" aria-labelledby="' . esc_attr( $args_label_id ) . '">';
-			// CONTENT BOUNDARY — args are tool payload data, rendered verbatim.
-			echo esc_html( (string) wp_json_encode( $args, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
-			echo '</pre>';
-		}
-
-		echo '<p class="senroflux-card-actions">';
-		printf(
-			'<button type="submit" name="senroflux_approval_action" value="approve" class="button button-primary">%s</button>',
-			esc_html__( 'Approve', 'senroflux' )
-		);
-		printf(
-			'<button type="submit" name="senroflux_approval_action" value="reject" class="button">%s</button>',
-			esc_html__( 'Reject', 'senroflux' )
-		);
-		echo '</p>';
-
-		echo '</form>';
-		echo '</section>';
-	}
-
-	/**
-	 * The Agent Safety "Review pending" link for approval parks (S10).
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 */
-	private function renderApprovalReviewLinks( array $state ): void {
-		foreach ( $state['steps'] as $step ) {
-			if ( StepKind::Approval->value === $step['kind'] && ! empty( $step['approval_id'] ) ) {
-				printf(
-					'<p class="senroflux-parked">%s <a href="%s">%s →</a></p>',
-					esc_html__( 'This run awaits human approval.', 'senroflux' ),
-					esc_url( admin_url( 'tools.php?page=agent-safety-pending' ) ),
-					esc_html__( 'Review in Agent Safety', 'senroflux' )
-				);
-
-				return;
-			}
-		}
-	}
-
-	/**
-	 * The harness-built terminal report (S12).
-	 *
-	 * @param array<string,mixed> $run The run state.
-	 */
-	private function renderReport( array $run ): void {
-		$report = $run['report'] ?? null;
-		if ( ! is_array( $report ) ) {
-			return;
-		}
-
-		echo '<h3>' . esc_html__( 'Report', 'senroflux' ) . '</h3>';
-
-		$summary = (string) ( $report['summary'] ?? '' );
-		if ( '' !== $summary ) {
-			// CONTENT BOUNDARY — report summary prose is MODEL-AUTHORED (S12/S15),
-			// rendered verbatim, never __().
-			echo '<div class="senroflux-report-summary"><p>' . esc_html( $summary ) . '</p></div>';
-		}
-
-		$changes = is_array( $report['changes'] ?? null ) ? $report['changes'] : array();
-		if ( array() === $changes ) {
-			echo '<p>' . esc_html__( 'No objects were written.', 'senroflux' ) . '</p>';
-
-			return;
-		}
-
-		// Chrome again (S15): translated headers, not raw English constants.
-		$columns = array(
-			__( 'Type', 'senroflux' ),
-			__( 'Title', 'senroflux' ),
-			__( 'Status', 'senroflux' ),
-			__( 'Verified', 'senroflux' ),
-			__( 'Links', 'senroflux' ),
-		);
-
-		echo '<table class="widefat striped senroflux-report"><thead><tr>';
-		foreach ( $columns as $col ) {
-			echo '<th>' . esc_html( $col ) . '</th>';
-		}
-		echo '</tr></thead><tbody>';
-
-		foreach ( $changes as $change ) {
-			printf(
-				'<tr><td>%1$s</td><td>%2$s</td><td>%3$s</td><td>%4$s</td><td>%5$s %6$s</td></tr>',
-				esc_html( (string) ( $change['object_type'] ?? '' ) ),
-				esc_html( (string) ( $change['title'] ?? '' ) ),
-				esc_html( (string) ( $change['status'] ?? '' ) ),
-				$this->renderVerifiedBadge( (bool) ( $change['verified'] ?? false ) ), // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- the method escapes internally (esc_html__ text, hardcoded class names).
-				( ! empty( $change['edit_url'] ) ) ? sprintf( '<a href="%s">%s</a>', esc_url( (string) $change['edit_url'] ), esc_html__( 'Edit', 'senroflux' ) ) : '',
-				( ! empty( $change['preview_url'] ) ) ? sprintf( '<a href="%s">%s</a>', esc_url( (string) $change['preview_url'] ), esc_html__( 'Preview', 'senroflux' ) ) : ''
-			);
-		}
-
-		echo '</tbody></table>';
-	}
-
-	/** A verified/unverified badge (harness chrome, translated). */
-	private function renderVerifiedBadge( bool $verified ): string {
-		if ( $verified ) {
-			return '<span class="senroflux-badge senroflux-badge-verified">' . esc_html__( 'verified', 'senroflux' ) . '</span>';
-		}
-
-		return '<span class="senroflux-badge senroflux-badge-unverified">' . esc_html__( 'unverified', 'senroflux' ) . '</span>';
-	}
-
-	/**
-	 * The step timeline (existing shape; data-attributes for the poller).
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 */
-	private function renderStepsTimeline( array $state ): void {
-		echo '<h3>' . esc_html__( 'Steps', 'senroflux' ) . '</h3>';
-		echo '<ol class="senroflux-steps">';
-
-		foreach ( $state['steps'] as $step ) {
-			$label = sprintf(
-				'#%d %s%s%s',
-				$step['seq'],
-				(string) $step['kind'],
-				null !== $step['tool_name'] ? ' · ' . (string) $step['tool_name'] : '',
-				'' !== (string) $step['status'] && 'ok' !== $step['status'] ? ' · ' . (string) $step['status'] : ''
-			);
-
-			$attrs = ' data-seq="' . esc_attr( (string) $step['seq'] ) . '"'
-				. ' data-kind="' . esc_attr( (string) $step['kind'] ) . '"'
-				. ' data-tool-name="' . esc_attr( (string) ( $step['tool_name'] ?? '' ) ) . '"'
-				. ' data-status="' . esc_attr( (string) $step['status'] ) . '"';
-
-			echo '<li class="senroflux-step senroflux-step-' . esc_attr( (string) $step['kind'] ) . '"' . $attrs . '>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $attrs is an attribute string whose every value is esc_attr'd at build time.
-			echo '<strong>' . esc_html( $label ) . '</strong>';
-
-			if ( null !== $step['message'] ) {
-				echo '<details class="senroflux-json-toggle"><summary>' . esc_html__( 'JSON', 'senroflux' ) . '</summary><pre>';
-				echo esc_html( (string) wp_json_encode( $step['message'], JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) );
-				echo '</pre></details>';
-			}
-
-			echo '</li>';
-		}
-
-		echo '</ol>';
-	}
-
-	// ------------------------------------------------------------------
-	// Small helpers
-	// ------------------------------------------------------------------
-
-	/**
-	 * The newest step of a given kind (down the stored seq order).
-	 *
-	 * @param array<string,mixed> $state The run state.
-	 * @param string              $kind  The step kind to match.
-	 * @return array<string,mixed>|null The newest matching step, or null.
-	 */
-	private function newestStepOfKind( array $state, string $kind ): ?array {
-		$steps = is_array( $state['steps'] ?? null ) ? $state['steps'] : array();
-		for ( $i = count( $steps ) - 1; $i >= 0; --$i ) {
-			if ( ( $steps[ $i ]['kind'] ?? null ) === $kind ) {
-				return $steps[ $i ];
-			}
-		}
-
-		return null;
-	}
-
-	/**
-	 * Does a plan step need approval (any Tier-2 verb)?
-	 *
-	 * @param array<string,mixed> $step The plan step.
-	 */
-	private function stepNeedsApproval( array $step ): bool {
-		$verbs = $step['verbs'] ?? array();
-		if ( ! is_array( $verbs ) ) {
-			return false;
-		}
-
-		// Fail closed: a verb whose tier is unknown is Tier 2, so a step with a
-		// tiered verb is checked against the annotated tier first, then the map.
-		foreach ( $verbs as $verb ) {
-			if ( ! is_string( $verb ) ) {
-				continue;
-			}
-			// `(int)` cast makes `is_int((int)$step['tier'])` always true, so the
-			// guard is simply whether the tier is present (unchanged behaviour).
-			$tier = isset( $step['tier'] ) ? (int) $step['tier'] : VerbTier::tierFor( $verb );
-			if ( $tier >= VerbTier::TIER_2 ) {
-				return true;
-			}
-		}
-
-		return false;
-	}
-
-	/**
-	 * Is pre-approval offerable on this screen (S13/S15)? The Accept-and-
-	 * pre-approve radio is rendered only when this is true, so the human is
-	 * never offered a decision the Runner would answer with
-	 * `preapproval_disabled`.
-	 *
-	 * Mirrors {@see \Specflux\SenroFlux\Run\Runner::preapprovalEnabled()} —
-	 * both ask the SAME two questions through the same bridge, so the card and
-	 * the resume handler can never disagree.
-	 */
-	private function preapprovalAvailable(): bool {
-		if ( ! (bool) apply_filters( 'senroflux_enable_preapproval', false ) ) {
-			return false;
-		}
-
-		return ( new GrantBridge() )->enabled();
 	}
 
 	/** A POST value, unslashed + trimmed (textarea-safe), or ''. */

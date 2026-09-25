@@ -17,10 +17,12 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Routes under senroflux/v1:
- *   POST /runs                {consumer, goal, budget?}  (allow-list via senroflux_http_consumers)
- *   POST /runs/{id}/tick      {step_count, approval_action?}
+ *   POST /runs                          {consumer, goal, budget?, follow_up_of?}  (allow-list via senroflux_http_consumers)
+ *   POST /runs/{id}/tick                {step_count, approval_action?}
  *   POST /runs/{id}/cancel
+ *   GET  /runs                          {limit?} (0.3 S10; scoped to the runs the viewer may see)
  *   GET  /runs/{id}
+ *   POST /runs/{id}/suggestions/{n}     {action, text?} (0.3 S20; manage_options + a REST nonce)
  */
 final class Rest {
 
@@ -36,16 +38,21 @@ final class Rest {
 				'callback'            => array( $this, 'routeStart' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
 				'args'                => array(
-					'consumer' => array(
+					'consumer'     => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'goal'     => array(
+					'goal'         => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'budget'   => array(
+					'budget'       => array(
 						'type'     => 'object',
+						'required' => false,
+					),
+					// 0.3 S20: follow-up runs.
+					'follow_up_of' => array(
+						'type'     => 'integer',
 						'required' => false,
 					),
 				),
@@ -88,6 +95,28 @@ final class Rest {
 			)
 		);
 
+		// 0.3 S10: the React screen's left-hand list. `read` here matches the
+		// other read routes; the ACTUAL scoping lives in
+		// {@see \Specflux\SenroFlux\Plugin::listRecent()}, which filters to
+		// the runs this viewer may see or drive — a logged-in Subscriber gets
+		// their own runs and nothing else, never an empty-capability leak of
+		// every goal on the site.
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/runs',
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'routeList' ),
+				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
+				'args'                => array(
+					'limit' => array(
+						'type'     => 'integer',
+						'required' => false,
+					),
+				),
+			)
+		);
+
 		register_rest_route(
 			self::NAMESPACE_V1,
 			'/runs/(?P<run_id>\d+)',
@@ -95,6 +124,38 @@ final class Rest {
 				'methods'             => 'GET',
 				'callback'            => array( $this, 'routeGet' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
+			)
+		);
+
+		// 0.3 S20: a human click only — manage_options in the permission
+		// callback, RE-CHECKED in the handler (fail closed, B0 rule 2), and
+		// the REST framework's own cookie-nonce check for a logged-in
+		// browser session (a REST nonce, as S20 asks).
+		register_rest_route(
+			self::NAMESPACE_V1,
+			'/runs/(?P<run_id>\d+)/suggestions/(?P<seq>\d+)',
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'routeSuggestionDecision' ),
+				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'manage_options' ),
+				'args'                => array(
+					'run_id' => array(
+						'type'     => 'integer',
+						'required' => true,
+					),
+					'seq'    => array(
+						'type'     => 'integer',
+						'required' => true,
+					),
+					'action' => array(
+						'type'     => 'string',
+						'required' => true,
+					),
+					'text'   => array(
+						'type'     => 'string',
+						'required' => false,
+					),
+				),
 			)
 		);
 	}
@@ -107,12 +168,17 @@ final class Rest {
 			return $this->respond( $policy );
 		}
 
+		$follow_up_of = $request->get_param( 'follow_up_of' );
+
 		return $this->respond(
 			senroflux()->start(
 				$consumer,
 				(string) $request->get_param( 'goal' ),
 				$policy['allow'],
-				$policy['budget']
+				$policy['budget'],
+				null,
+				null,
+				null !== $follow_up_of ? (int) $follow_up_of : null
 			)
 		);
 	}
@@ -151,6 +217,48 @@ final class Rest {
 	/** GET /runs/{id}. */
 	public function routeGet( \WP_REST_Request $request ): \WP_REST_Response {
 		return $this->respond( senroflux()->get( (int) $request->get_param( 'run_id' ) ) );
+	}
+
+	/**
+	 * GET /runs (0.3 S10).
+	 *
+	 * `limit` is the number of rows CONSIDERED before scoping, so a response
+	 * may be shorter than the limit asked for. It is clamped to 1..100: an
+	 * unbounded limit would let any logged-in user walk the whole table one
+	 * request at a time, even though each row is already scoped.
+	 */
+	public function routeList( \WP_REST_Request $request ): \WP_REST_Response {
+		$limit = $request->get_param( 'limit' );
+		$limit = null === $limit ? 50 : (int) $limit;
+		$limit = max( 1, min( 100, $limit ) );
+
+		return $this->respond( array( 'runs' => senroflux()->listRecent( $limit ) ) );
+	}
+
+	/**
+	 * POST /runs/{id}/suggestions/{n} (0.3 S20).
+	 *
+	 * The permission_callback already required manage_options; RE-CHECKED
+	 * here regardless (fail closed, B0 rule 2) — a route whose permission
+	 * callback is ever bypassed or misconfigured must still refuse.
+	 */
+	public function routeSuggestionDecision( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! is_user_logged_in() || ! current_user_can( 'manage_options' ) ) {
+			return $this->respond(
+				new \WP_Error( 'senroflux_forbidden', __( 'Insufficient permissions.', 'senroflux' ), array( 'status' => 403 ) )
+			);
+		}
+
+		$text = $request->get_param( 'text' );
+
+		return $this->respond(
+			senroflux()->resolveSuggestion(
+				(int) $request->get_param( 'run_id' ),
+				(int) $request->get_param( 'seq' ),
+				(string) $request->get_param( 'action' ),
+				is_string( $text ) ? $text : null
+			)
+		);
 	}
 
 	/**

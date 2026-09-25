@@ -368,6 +368,110 @@ final class GrantsTest extends TestCase {
 	}
 
 	/**
+	 * S19: a pack's ungrantable Tier-2 verb never gets a pre-approval grant,
+	 * however the plan lists it — while an ORDINARY grantable Tier-2 verb in
+	 * the SAME plan step is still granted as before. Modelled on the commerce
+	 * pack's shape (`commerce/order-note-customer`, `commerce/refund`).
+	 */
+	public function test_an_ungrantable_tier_2_verb_gets_no_grant_while_a_grantable_one_in_the_same_plan_does(): void {
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new RecordingBridge(),
+			null,
+			static fn (): array => array(
+				'commerce/order-note-private'  => VerbTier::TIER_1,
+				'commerce/order-note-customer' => VerbTier::TIER_2,
+				'commerce/refund'              => VerbTier::TIER_2,
+			),
+			null,
+			null,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			static fn ( $run, string $pack_verb ): ?string => 'senroflux/' . str_replace( 'commerce/', '', $pack_verb ),
+			null,
+			null,
+			// S19: the ungrantable-verbs resolver — the new, LAST constructor
+			// parameter. Every run gets the same fixed list in this test.
+			static fn ( $run ): array => array( 'commerce/refund' ) // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- the real resolver shape is callable(Run):list<string>; this fixture ignores which run.
+		);
+
+		list( $run_id ) = $this->parkPlan(
+			array(
+				array( 'commerce/order-note-customer', 'commerce/refund' ),
+			),
+			$runner
+		);
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		// Only the grantable verb (order-note-customer) is granted; refund,
+		// though Tier-2 and named in the same step, is skipped entirely.
+		$this->assertCount( 1, $this->grants->issued );
+		$this->assertSame( 'senroflux/order-note-customer', $this->grants->issued[0]['verb'] );
+		$this->assertSame( 1, $this->grants->issued[0]['count'] );
+	}
+
+	/**
+	 * S19 guard (stage 12, item 0): a GRANTABLE Tier-2 verb and an
+	 * UNGRANTABLE Tier-2 verb of the SAME pack that resolve to the SAME gate
+	 * ability (`senroflux/product-update`, modelling a Woo-owned ability an
+	 * argument can raise to Irreversible) must get NO grant for that ability
+	 * at all — unlike {@see test_an_ungrantable_tier_2_verb_gets_no_grant_while_a_grantable_one_in_the_same_plan_does()}'s
+	 * fixture, where the two verbs resolve to DIFFERENT abilities and the
+	 * grantable one is still granted normally. Sharing an ability means Agent
+	 * Safety's grant (keyed on the ability id, never the pack verb) could be
+	 * spent by the ungrantable call — the only safe answer is no grant for
+	 * that ability, so the call still parks every time.
+	 */
+	public function test_a_grant_is_withheld_entirely_when_a_grantable_and_an_ungrantable_verb_share_one_gate_ability(): void {
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new RecordingBridge(),
+			null,
+			static fn (): array => array(
+				'commerce/price-change'    => VerbTier::TIER_2,
+				'commerce/product-publish' => VerbTier::TIER_2,
+			),
+			null,
+			null,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			// Both pack verbs resolve to the SAME ability — the shape a Woo-owned
+			// `product-update` ability has, where either a price field or a
+			// publish/future status can raise the same ability's call to Tier 2.
+			// phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.FoundAfterLastUsed -- fixture: every pack verb resolves to the one shared ability, regardless of run or verb.
+			static fn ( $run, string $pack_verb ): ?string => 'senroflux/product-update',
+			null,
+			null,
+			// `commerce/product-publish` is ungrantable; `commerce/price-change`
+			// is an ordinary grantable Tier-2 verb sharing its ability.
+			static fn ( $run ): array => array( 'commerce/product-publish' ) // phpcs:ignore Generic.CodeAnalysis.UnusedFunctionParameter.Found -- fixed list, ignores which run.
+		);
+
+		list( $run_id ) = $this->parkPlan(
+			array(
+				array( 'commerce/price-change', 'commerce/product-publish' ),
+			),
+			$runner
+		);
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		// Neither verb gets a grant: the shared ability is poisoned by the
+		// ungrantable sibling, so `commerce/price-change` is withheld too even
+		// though it is, on its own, an ordinary grantable Tier-2 verb.
+		$this->assertSame( array(), $this->grants->issued );
+	}
+
+	/**
 	 * A model that re-plans (run 51 did, to add `pages/update-draft`) gets its
 	 * replacement plan accepted — and the FIRST plan's grants must go with the
 	 * plan they were bought for, or two accepts stack two plans' worth of

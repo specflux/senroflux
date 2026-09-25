@@ -10,6 +10,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Tools;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Tools\BuiltinGate;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use WP_Error;
 use wpdb;
@@ -129,5 +130,97 @@ final class ToolExecutorTest extends TestCase {
 		} finally {
 			remove_all_filters( 'senroflux_tool_result_max_bytes' );
 		}
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 S3: the built-in gate parks BEFORE check_permissions
+	// ------------------------------------------------------------------
+
+	public function test_an_active_unapproved_built_in_gate_parks_before_check_permissions(): void {
+		$permission_checked = false;
+		$executed           = false;
+
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/write',
+				permission_result: static function () use ( &$permission_checked ) {
+					$permission_checked = true;
+
+					return true;
+				},
+				execute_result: static function () use ( &$executed ) {
+					$executed = true;
+
+					return array( 'ok' => true );
+				}
+			),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(),
+			new BuiltinGate( active: true, tier: 1, verb: 'agsafe-smoke/write', approvalId: 'builtin:1:call_x', approved: false )
+		);
+
+		$this->assertSame( 'approval_required', $outcome->kind );
+		$this->assertSame( 'builtin:1:call_x', $outcome->approvalId );
+		$this->assertSame( 'agsafe-smoke/write', $outcome->verb );
+		$this->assertSame( '1', $outcome->tier );
+		$this->assertFalse( $permission_checked, 'the built-in gate must park BEFORE check_permissions runs' );
+		$this->assertFalse( $executed );
+	}
+
+	public function test_an_unmapped_verb_gate_is_active_by_the_caller_s_own_fail_closed_tier(): void {
+		// VerbTier::tierFor() already fails an unmapped verb closed to tier 2;
+		// the Runner hands ToolExecutor that resolved tier, so a gate built
+		// from it is active exactly like any other tier-2 call.
+		$gate = new BuiltinGate( active: true, tier: 2, verb: 'agsafe-smoke/unmapped', approvalId: 'builtin:1:call_y', approved: false );
+
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/unmapped' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/unmapped' ),
+		);
+
+		$outcome = $this->executor->call( 'agsafe-smoke/unmapped', array(), $gate );
+
+		$this->assertSame( 'approval_required', $outcome->kind );
+		$this->assertSame( '2', $outcome->tier );
+	}
+
+	public function test_a_tier_zero_gate_is_inert_and_the_call_runs_normally(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/read' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/read', execute_result: array( 'ok' => true ) ),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/read',
+			array(),
+			new BuiltinGate( active: false, tier: 0, verb: 'agsafe-smoke/read', approvalId: '', approved: false )
+		);
+
+		$this->assertSame( 'result', $outcome->kind );
+	}
+
+	public function test_an_approved_gate_skips_the_park_and_runs_the_ability(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write', execute_result: array( 'ok' => true ) ),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(),
+			new BuiltinGate( active: true, tier: 1, verb: 'agsafe-smoke/write', approvalId: 'builtin:1:call_x', approved: true )
+		);
+
+		$this->assertSame( 'result', $outcome->kind, 'the approved re-run must never park itself' );
+	}
+
+	public function test_a_null_gate_never_registers_a_permission_filter_and_behaves_like_as_mode(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write', execute_result: array( 'ok' => true ) ),
+		);
+
+		$outcome = $this->executor->call( 'agsafe-smoke/write', array(), null );
+
+		$this->assertSame( 'result', $outcome->kind );
 	}
 }

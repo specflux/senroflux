@@ -9,7 +9,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      # senroflux lands in a subdirectory, not at $GITHUB_WORKSPACE, so
+      # agent-safety can be checked out as its sibling — the exact layout
+      # tests/Tools/AgentSafetyContractTest.php resolves by relative path.
       - uses: actions/checkout@v4
+        with:
+          path: senroflux
+
+      # main, not a pinned SHA: this contract test exists to catch drift
+      # between the two repos, so it must always compare against agent-safety's
+      # current tip. VerdictErrorFixture.php was confirmed byte-identical to
+      # the local checkout at the time this workflow was written.
+      - uses: actions/checkout@v4
+        with:
+          repository: stephen1204paul/agent-safety
+          ref: main
+          path: agent-safety
 
       - uses: shivammathur/setup-php@v2
         with:
@@ -18,16 +33,174 @@ jobs:
           coverage: none
 
       - name: Install dependencies
+        working-directory: senroflux
         run: composer install --prefer-dist --no-interaction
 
       - name: PHPCS (WordPress-Core + WordPress-Extra)
+        working-directory: senroflux
         run: composer lint
 
       - name: PHPStan level 8
+        working-directory: senroflux
         run: composer phpstan
 
+      # SENROFLUX_REQUIRE_AS_FIXTURE turns AgentSafetyContractTest's missing-
+      # fixture skip into a hard failure: CI must never verify this contract
+      # vacuously the way a plain local checkout is allowed to.
       - name: PHPUnit
+        working-directory: senroflux
         run: composer test
+        env:
+          SENROFLUX_REQUIRE_AS_FIXTURE: '1'
+
+  editor-parity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer, wp-cli
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: |
+          composer install --prefer-dist --no-interaction
+          npm ci --no-audit --no-fund
+
+      # The block editor's own validation over the shipped patterns and a
+      # cleaned page: catches "Block contains unexpected or invalid content"
+      # that the PHP round-trip check cannot see.
+      - name: Editor parity
+        run: npm run test:editor
+
+      # S22 RTL gate: bans physical left/right margin/padding/position
+      # properties in assets/src via Stylelint's built-in
+      # property-disallowed-list, so layout must use logical properties.
+      - name: Stylelint (logical properties only)
+        run: npm run lint:css
+
+      # S22 translation gate (JS half): only the @wordpress/i18n-* rules,
+      # against the plugin's own text domain — deliberately not the full
+      # @wordpress/eslint-plugin style preset (see eslint.config.i18n.cjs).
+      - name: ESLint (i18n rules only)
+        run: npm run lint:js-i18n
+
+      # S22 translation gate (POT half): audit stays ON (no --skip-audit) so
+      # malformed/ambiguous translatable strings fail CI instead of silently
+      # shipping. wp-cli's own exit code does not reflect audit findings, so
+      # the step greps its own output for the audit's "Warning:" lines.
+      - name: wp i18n make-pot (audit on)
+        # Explicit shell: bash (not the step default) is load-bearing here.
+        # GitHub Actions only runs `bash -o pipefail` when the shell is
+        # named explicitly; the unspecified-shell default on Linux is
+        # `bash -e {0}` with no pipefail, so `wp ... | tee ...` would report
+        # tee's exit status (0) even if `wp` itself crashed, letting a crash
+        # silently pass the grep below.
+        shell: bash
+        run: |
+          wp i18n make-pot . /tmp/senroflux.pot --exclude=tests,vendor,node_modules,build,research 2>&1 | tee /tmp/make-pot.log
+          if grep -q '^Warning:' /tmp/make-pot.log; then
+            echo "make-pot audit reported warnings — see above" >&2
+            exit 1
+          fi
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      # Same subdirectory layout as `check`: .wp-env.json's relative sibling
+      # mappings ("../agent-safety/plugin", "../research/abilities-api")
+      # resolve correctly only when senroflux is not at $GITHUB_WORKSPACE
+      # itself.
+      - uses: actions/checkout@v4
+        with:
+          path: senroflux
+
+      - uses: actions/checkout@v4
+        with:
+          repository: stephen1204paul/agent-safety
+          ref: main
+          path: agent-safety
+
+      # Pinned by SHA, unlike agent-safety: this is a WordPress-owned
+      # upstream repo SenroFlux does not control, and it must not go red
+      # because that upstream's trunk moved. Bumping this SHA is a deliberate
+      # decision, not something CI should do to itself.
+      - uses: actions/checkout@v4
+        with:
+          repository: WordPress/abilities-api
+          ref: 5f64910b74bdb8c41a0c444fdd9939523859f325
+          path: research/abilities-api
+
+      # .wp-env.json maps this path too, so without the checkout Docker bind-
+      # mounts an empty directory and `wp plugin activate mcp-adapter` fails
+      # outright. Pinned for the same reason as abilities-api.
+      - uses: actions/checkout@v4
+        with:
+          repository: WordPress/mcp-adapter
+          ref: 07c9912ebe4a6cfed4050d30d9d4c5831f688fd4
+          path: research/mcp-adapter
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          tools: composer
+          coverage: none
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: senroflux/package-lock.json
+
+      - name: Install dependencies
+        working-directory: senroflux
+        run: |
+          composer install --prefer-dist --no-interaction
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      # mcp-adapter.php returns early unless the Jetpack autoloader it requires
+      # is present, so a bare checkout would activate into a plugin that loads
+      # nothing. abilities-api needs no equivalent step — it ships no vendor/.
+      - name: Install mcp-adapter runtime dependencies
+        working-directory: research/mcp-adapter
+        run: composer install --no-dev --prefer-dist --no-interaction
+
+      # Same trap for Agent Safety: without vendor/ its bootstrap bails, the
+      # plugin still lists as active, and SenroFlux quietly falls back to its
+      # built-in gate — so the Agent Safety mode specs would run ungoverned.
+      - name: Install Agent Safety runtime dependencies
+        working-directory: agent-safety/plugin
+        run: composer install --no-dev --prefer-dist --no-interaction
+
+      - name: Start wp-env
+        working-directory: senroflux
+        run: npx @wordpress/env start
+
+      # No manual plugin activation here on purpose (S19a): activation is
+      # the job of tests/e2e/support/global-setup.js, so this step proves
+      # the same cold-boot path a contributor's first run goes through.
+      - name: Playwright e2e suite
+        working-directory: senroflux
+        run: npx playwright test
+
+      # Traces and screenshots, not an HTML report: the reporter is `list`,
+      # and these are what `retain-on-failure` / `only-on-failure` leave behind.
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: |
+            senroflux/test-results
+          retention-days: 7
 
   plugin-check:
     runs-on: ubuntu-latest

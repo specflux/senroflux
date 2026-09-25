@@ -2,6 +2,34 @@
 /**
  * Abstract capability pack: role → ability resolution, verb map, skills, preflight.
  *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs;
+
+use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Run\GateMode;
+use Specflux\SenroFlux\Setup\Checks;
+use Specflux\SenroFlux\Setup\SetupCheck;
+use Specflux\SenroFlux\Skills\Skill;
+use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\VerbTier;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Base class for every capability pack.
+ *
+ * The base ships the S9/S10 shape. Concrete packs (the pages pack, stage 8)
+ * supply the pack `name()`, the role→ability template map (via the
+ * constructor), the input properties their clients actually send (for the
+ * shape-compat check), and override `skills()` / `agentSafetyPack()` /
+ * `verbMap()` / `preflight()` as needed.
+ *
  * S9 (SPEC-SENROFLUX-0.2) — the pack is the ONLY source of a run's ability
  * allow-list when `start()` is given a pack name. It also owns the S10 verb
  * map (what Agent Safety tiers/grants/audits), the pack skills that ride the
@@ -31,30 +59,6 @@
  *     ABILITY IDS, never on `pages/*`.
  * {@see agentSafetyVerbMap()} is the bridge: it collapses the pack verbs a role
  * can produce down to the one tier Agent Safety can carry for that ability.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs;
-
-use Specflux\SenroFlux\Skills\Skill;
-use Specflux\SenroFlux\Skills\SkillSet;
-use Specflux\SenroFlux\Tools\VerbTier;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Base class for every capability pack.
- *
- * The base ships the S9/S10 shape. Concrete packs (the pages pack, stage 8)
- * supply the pack `name()`, the role→ability template map (via the
- * constructor), the input properties their clients actually send (for the
- * shape-compat check), and override `skills()` / `agentSafetyPack()` /
- * `verbMap()` / `preflight()` as needed.
  */
 abstract class Pack {
 
@@ -99,11 +103,16 @@ abstract class Pack {
 	/**
 	 * role => concrete ability id.
 	 *
-	 * Resolution: 'core/<template>' when `wp_get_ability('core/<template>')`
-	 * exists AND every input property the pack sends for that role exists in
-	 * the core ability's `get_input_schema()` (shape-compat — a core ability
-	 * the pack's calls would not satisfy is NOT adopted); otherwise
-	 * 'senroflux/<template>'. Cached per request.
+	 * Resolution (generalised, S19): {@see abilityNamespaces()} lists the
+	 * candidate namespaces in preference order (default `['core/',
+	 * 'senroflux/']`). Each is tried in turn — the first whose
+	 * `<namespace><template>` ability is REGISTERED and shape-compatible
+	 * (every input property the pack sends for that role exists in the
+	 * ability's `get_input_schema()`) is adopted. The LAST namespace in the
+	 * list is the pack's own polyfill and is always accepted without a
+	 * compat check (it is authored to match the pack's own calls) — this is
+	 * the pre-S19 "otherwise senroflux/<template>" fallback, generalised.
+	 * Cached per request.
 	 *
 	 * @return array<string,string>
 	 */
@@ -124,24 +133,55 @@ abstract class Pack {
 	}
 
 	/**
-	 * The resolved ability id for one template.
+	 * The ability namespaces this pack's roles resolve through, in
+	 * preference order (S19, `@api`). The default is the pre-S19 behaviour
+	 * unchanged: try `core/`, otherwise `senroflux/`. A pack that prefers a
+	 * third-party namespace (e.g. `woocommerce/`) lists it first; the LAST
+	 * entry MUST be `self::POLYFILL_NAMESPACE` — {@see PackRegistry::register()}
+	 * refuses a pack whose list doesn't end with it, because a pack with no
+	 * guaranteed final fallback could resolve a role to nothing.
+	 *
+	 * @return list<string>
+	 */
+	public function abilityNamespaces(): array {
+		return array( 'core/', self::POLYFILL_NAMESPACE );
+	}
+
+	/**
+	 * The resolved ability id for one template: the first namespace in
+	 * {@see abilityNamespaces()} that is registered and shape-compatible, or
+	 * the last (polyfill) namespace when none of the earlier ones qualify.
 	 */
 	private function resolveAbility( string $template ): string {
-		$core = 'core/' . $template;
-		if ( $this->coreCompatible( $core, $template ) ) {
-			return $core;
+		$namespaces = $this->abilityNamespaces();
+		$last_index = count( $namespaces ) - 1;
+
+		foreach ( $namespaces as $index => $namespace ) {
+			$candidate = $namespace . $template;
+			if ( $index === $last_index ) {
+				// The final namespace is the pack's own polyfill: always the
+				// fallback, never gated on a compat check against itself.
+				return $candidate;
+			}
+			if ( $this->namespaceCompatible( $candidate, $template ) ) {
+				return $candidate;
+			}
 		}
 
+		// Defensive only: abilityNamespaces() always ends with the polyfill
+		// namespace (enforced at registration), so an empty list never
+		// reaches here in practice.
 		return self::POLYFILL_NAMESPACE . $template;
 	}
 
 	/**
-	 * Shape-compat check against the Abilities API (S9): the core ability must
-	 * exist, be an object with `get_input_schema()`, and its schema must accept
-	 * every input property this pack's client sends for the role.
+	 * Shape-compat check against the Abilities API (S9, generalised S19): the
+	 * candidate ability must exist, be an object with `get_input_schema()`,
+	 * and its schema must accept every input property this pack's client
+	 * sends for the role.
 	 */
-	private function coreCompatible( string $core_id, string $template ): bool {
-		$schema = $this->coreSchema( $core_id );
+	private function namespaceCompatible( string $candidate_id, string $template ): bool {
+		$schema = $this->abilitySchema( $candidate_id );
 		if ( null === $schema ) {
 			return false;
 		}
@@ -157,7 +197,8 @@ abstract class Pack {
 	}
 
 	/**
-	 * The raw input schema from the core ability, or null when it is absent.
+	 * The raw input schema from a candidate ability, or null when it is
+	 * absent.
 	 *
 	 * Defensive guards: `wp_get_ability()` may return null or a duck-typed
 	 * object across real WordPress versions (the wordpress-stubs type it as a
@@ -167,11 +208,11 @@ abstract class Pack {
 	 *
 	 * @return array<string,mixed>|null
 	 */
-	private function coreSchema( string $core_id ): ?array {
+	private function abilitySchema( string $candidate_id ): ?array {
 		// Probe with wp_has_ability() (a silent registry read): probing with
-		// wp_get_ability() on an unregistered core ability raises a
+		// wp_get_ability() on an unregistered ability raises a
 		// _doing_it_wrong notice on every check — noisy for a step-aside probe.
-		if ( ! function_exists( 'wp_has_ability' ) || ! wp_has_ability( $core_id ) ) {
+		if ( ! function_exists( 'wp_has_ability' ) || ! wp_has_ability( $candidate_id ) ) {
 			return null;
 		}
 
@@ -179,7 +220,7 @@ abstract class Pack {
 			return null;
 		}
 
-		$ability = wp_get_ability( $core_id );
+		$ability = wp_get_ability( $candidate_id );
 		if ( ! is_object( $ability ) ) {
 			return null;
 		}
@@ -312,6 +353,75 @@ abstract class Pack {
 	}
 
 	/**
+	 * S12 (defect fix): a STRING prepended to the id {@see objectIdKey()}
+	 * extracts for one pack verb, before the harness tracks/looks it up in
+	 * `objects_json`. A pack whose ability space has more than one object
+	 * kind sharing one id space (e.g. a post and an attachment can both be
+	 * `63`) uses this to keep them from colliding in the same run's written-
+	 * object set. The harness treats the qualified id as an OPAQUE string —
+	 * it never parses the prefix back out; only the pack's own report lookup
+	 * (wired at the composition root) needs to recognise it. The base
+	 * declares none (backward compatible: every pre-existing pack keeps its
+	 * bare ids).
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		unset( $verb );
+
+		return '';
+	}
+
+	/**
+	 * S12 (defect fix): the id a Tier >= 1 write just wrote, for a pack verb
+	 * whose ability output carries no natural id of its own (a singleton
+	 * object such as a site's navigation or front-page setting — see
+	 * `Specflux\SenroFlux\Packs\Site\SitePack::objectIdForWrite()`). Null
+	 * (the base) means "no opinion": the harness falls back to
+	 * {@see objectIdKey()}'s output[key] extraction, S12's pre-existing
+	 * behaviour, for every pre-existing pack.
+	 *
+	 * @param string               $verb   The pack verb.
+	 * @param array<string,mixed>  $args   The call's args.
+	 * @param array<string,mixed>  $output The call's output.
+	 */
+	public function objectIdForWrite( string $verb, array $args, array $output ): ?string {
+		unset( $verb, $args, $output );
+
+		return null;
+	}
+
+	/**
+	 * role => required WordPress capability (0.3 S6). A role absent from this
+	 * map, or mapped to `''`, needs no capability of its own beyond whatever
+	 * `runCapability()`/the ability's own permission callback already checks
+	 * — the base declares none, so a pack that never calls this out withholds
+	 * nothing (backward compatible with every pre-0.3 pack). No 0.3 pack
+	 * declares one yet; the posts pack (stage 5) is the first real caller,
+	 * naming `upload_files` for `media-upload`/`generate-image`.
+	 *
+	 * @return array<string,string>
+	 */
+	public function roleCapabilities(): array {
+		return array();
+	}
+
+	/**
+	 * The system-instruction line for a run that starts with roles withheld
+	 * (0.3 S6) — one line per withheld GROUP, in the pack's own words, so the
+	 * harness (which never learns what a role's ability actually does) stays
+	 * domain-agnostic. Null when the pack has nothing to say (the base
+	 * default, and a pack given an empty `$withheld`).
+	 *
+	 * @param list<string> $withheld The role names withheld from this run's start().
+	 */
+	public function withheldRoleNotice( array $withheld ): ?string {
+		unset( $withheld );
+
+		return null;
+	}
+
+	/**
 	 * PACK verb => tier (S10). Abstract on purpose: an empty default would let a
 	 * pack ship with no map at all and rely on VerbTier's fail-closed tier 2 for
 	 * every call, which reads as governance but is really an unfenced accident.
@@ -343,7 +453,7 @@ abstract class Pack {
 	 * parks for a human).
 	 *
 	 * The inverse of {@see roleVerbs()}, and the only place that knows a grant
-	 * on `pages/publish` has to be issued against `senroflux/update-post`.
+	 * on `pages/publish` has to be issued against `senroflux/publish-post`.
 	 * Several pack verbs legitimately collapse onto one ability — the caller
 	 * aggregates their counts.
 	 *
@@ -359,6 +469,22 @@ abstract class Pack {
 		}
 
 		return null;
+	}
+
+	/**
+	 * PACK verbs (S19, `@api`) that {@see \Specflux\SenroFlux\Run\Runner::grantCounts()}
+	 * must NEVER issue a pre-approval grant for, however many times the
+	 * accepted plan lists them. Default empty (every 0.2/0.3-era verb stays
+	 * grantable). A verb here still gates and audits normally — it just asks
+	 * a human every single time (the plan card marks it "asks every time")
+	 * rather than being spendable ahead of the calls, which is the right
+	 * shape for an operation like a customer-facing refund or note where
+	 * pre-approving N of them is not the same promise as approving each one.
+	 *
+	 * @return list<string>
+	 */
+	public function ungrantableVerbs(): array {
+		return array();
 	}
 
 	/**
@@ -388,10 +514,13 @@ abstract class Pack {
 	 * tier per verb, and its only argument-aware seam (`ElevationRule`) is
 	 * constructor-injected by integration modules with no filter a third-party
 	 * host can reach (verified against agent-safety 0.3: no `apply_filters` on
-	 * the elevation-rule list). Rounding UP is the §0 fail-closed reading: the
-	 * pages pack's `update-post` therefore parks for approval on a draft edit
-	 * too, rather than letting a publish through unparked. Rounding down would
-	 * be the only unsafe choice.
+	 * the elevation-rule list). Rounding UP is the §0 fail-closed reading. 0.3
+	 * S4 splits `update-post` (draft-state edits, Tier 1) from `publish-post`
+	 * (Tier 2) into two abilities precisely so this collapse can no longer drag
+	 * a draft edit up to Tier 2 the way 0.2's combined ability did — each
+	 * ability's own role now spans only the verbs it can actually produce.
+	 * Rounding down would still be the only unsafe choice for an ability that
+	 * genuinely spans tiers.
 	 *
 	 * Keyed on the polyfill id, never on the resolved one, so this stays a pure
 	 * function of pack data: Agent Safety reads both filters on
@@ -423,6 +552,20 @@ abstract class Pack {
 	}
 
 	/**
+	 * S7: key => value overrides applied over the SHIPPED budget table for
+	 * this pack's runs, BEFORE the `senroflux_default_budget` filter runs
+	 * (see {@see \Specflux\SenroFlux\Run\Budget::defaults()}). The base
+	 * returns an empty table — no override — which is what keeps every
+	 * pre-0.3 pack's budget byte-for-byte unchanged; the site pack (stage 7)
+	 * is the first to override this with its own flat-and-high table.
+	 *
+	 * @return array<string,int>
+	 */
+	public function defaultBudget(): array {
+		return array();
+	}
+
+	/**
 	 * The pack's guidance skills, source Pack, in render order. Base ships none;
 	 * the pages pack contributes `pages/copy-rules` (rendered), `pages/layout-rules`
 	 * and `pages/content-language` (S11/S15, stage 8).
@@ -439,6 +582,32 @@ abstract class Pack {
 	 * fills the pages pack's; the base contributes nothing.
 	 */
 	public function agentSafetyPack(): ?object {
+		return null;
+	}
+
+	/**
+	 * S19 (`@api`, stage 12): refuse (a WP_Error) or allow (null) one call
+	 * BEFORE its ability's own `check_permissions()`/`execute()` run — the
+	 * seam for a pack rule that must bind to an ability ANOTHER plugin
+	 * registers, which this pack has no other hook into. A pack's OWN
+	 * polyfill abilities validate their own input directly inside their
+	 * `execute_callback` and never need this; it exists for the case a
+	 * polyfill cannot cover — the commerce pack's description-tag rule over
+	 * WooCommerce's own `product-create`/`product-update` abilities.
+	 *
+	 * Called by {@see \Specflux\SenroFlux\Run\Runner::executeCall()} for
+	 * every admitted call, in AS and built-in gate modes alike, after the S7
+	 * plan fence and the gate's own approval decision but before the
+	 * ability's own permission/execute pair — so a refusal here can never be
+	 * bypassed by anything downstream. The base returns null (no opinion)
+	 * for every call, which is every pre-S19 pack's unchanged behaviour.
+	 *
+	 * @param string               $ability The concrete ability id the model called.
+	 * @param array<string,mixed>  $input   The call input.
+	 */
+	public function validateCall( string $ability, array $input ): ?WP_Error {
+		unset( $ability, $input );
+
 		return null;
 	}
 
@@ -478,12 +647,119 @@ abstract class Pack {
 			return $ceiling;
 		}
 
-		$unbound = $this->agentSafetyBindingError( $user_id );
-		if ( null !== $unbound ) {
-			return $unbound;
+		// 0.3 S11: preflight is now a THIN caller over {@see setupChecks()} —
+		// the same governance questions the setup panel renders, asked the
+		// same way, so the two can never disagree (never two rule sets).
+		$failure = Checks::firstBlockingFailure( $this->setupChecks( $user_id ) );
+		if ( null !== $failure ) {
+			return new WP_Error(
+				$failure->errorCode(),
+				$failure->messageFor( $user_id ),
+				array( 'status' => 400 )
+			);
 		}
 
 		return true;
+	}
+
+	/**
+	 * S11: this pack's own contributed setup checks — the SAME questions
+	 * {@see preflight()} asks, in the SAME order, so the setup panel and the
+	 * preflight refusal can never disagree.
+	 *
+	 * In built-in mode the run capability (or, when the pack refuses to run
+	 * ungoverned, {@see requiresAgentSafety()}) is the whole test. In Agent
+	 * Safety mode BOTH the run capability AND {@see agentSafetyBindingError()}
+	 * must hold (S11: "the viewer holds the pack's run capability and, in AS
+	 * mode only, has a valid pack binding") — a Capability Pack binding is the
+	 * governance seam there, but it never substitutes for the WP capability
+	 * question; a user with neither, or with only one of the two, is refused.
+	 * `firstBlockingFailure()` returns whichever of the two checks fails
+	 * first, in the order below.
+	 *
+	 * @param int $user_id The user the run would be started for.
+	 * @return list<SetupCheck>
+	 */
+	public function setupChecks( int $user_id ): array {
+		if ( GateMode::BuiltIn === Plugin::currentGateMode() ) {
+			if ( $this->requiresAgentSafety() ) {
+				return array( $this->agentSafetyRequiredCheck() );
+			}
+
+			return array( $this->capabilityCheck( $user_id ) );
+		}
+
+		return array( $this->capabilityCheck( $user_id ), $this->bindingCheck( $user_id ) );
+	}
+
+	/** The `<pack>/capability` setup check (built-in mode's whole test). */
+	private function capabilityCheck( int $user_id ): SetupCheck {
+		$capability = $this->runCapability();
+		$passed     = '' === $capability || ( function_exists( 'user_can' ) && user_can( $user_id, $capability ) );
+		$message    = __( 'You do not have the capability this pack needs to start a run.', 'senroflux' );
+
+		return new SetupCheck(
+			$this->name() . '/capability',
+			SetupCheck::BLOCKING,
+			$passed,
+			$message,
+			null,
+			null,
+			$message,
+			'pack_unbound'
+		);
+	}
+
+	/** The `<pack>/binding` setup check (Agent Safety mode's whole test). */
+	private function bindingCheck( int $user_id ): SetupCheck {
+		$error   = $this->agentSafetyBindingError( $user_id );
+		$message = null !== $error ? (string) $error->get_error_message() : '';
+
+		return new SetupCheck(
+			$this->name() . '/binding',
+			SetupCheck::BLOCKING,
+			null === $error,
+			$message,
+			null,
+			null,
+			$message,
+			null !== $error ? (string) $error->get_error_code() : ''
+		);
+	}
+
+	/** The `<pack>/agent-safety-required` setup check (built-in mode, {@see requiresAgentSafety()}). */
+	private function agentSafetyRequiredCheck(): SetupCheck {
+		$message = __( 'This pack requires the Agent Safety plugin to be active.', 'senroflux' );
+
+		return new SetupCheck(
+			$this->name() . '/agent-safety-required',
+			SetupCheck::BLOCKING,
+			false,
+			$message,
+			null,
+			null,
+			$message,
+			'pack_requires_agent_safety'
+		);
+	}
+
+	/**
+	 * The WordPress capability that gates STARTING a run with this pack. Tested
+	 * only in built-in mode (S3) — in AS mode {@see agentSafetyBindingError()}
+	 * is the whole test. Empty string means "nothing to check", which exists
+	 * only so pre-0.3 pack test fixtures keep compiling; every shipped pack
+	 * overrides this with its real run capability (e.g. `edit_pages`).
+	 */
+	public function runCapability(): string {
+		return '';
+	}
+
+	/**
+	 * Whether this pack refuses to start at all without Agent Safety (S3). No
+	 * 0.3 pack returns true; the hook exists for commerce at 0.5.
+	 */
+	public function requiresAgentSafety(): bool {
+		return false;
 	}
 
 	/**

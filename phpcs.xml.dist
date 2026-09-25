@@ -8,12 +8,44 @@
 
     <exclude-pattern>vendor/*</exclude-pattern>
 
+    <!--
+        0.3 S22/17e: the e2e fake-provider mu-plugin is a LOCAL DEV/CI-ONLY
+        fixture (excluded from the shipped zip by .distignore), modelled on
+        dev/smoke/*-fixture.php which is likewise unlinted. It intentionally
+        uses global classes/functions (mirroring dev/smoke's WordPress AI
+        Client provider shape) rather than the plugin's own PSR-4 namespace,
+        so holding it to the shipped-code WPCS ruleset would fight the
+        pattern rather than catch a real defect.
+    -->
+    <exclude-pattern>tests/e2e/fake-provider/*</exclude-pattern>
+
     <arg name="colors"/>
     <arg name="extensions" value="php"/>
     <arg value="ps"/>
 
     <rule ref="WordPress-Core"/>
     <rule ref="WordPress-Extra"/>
+
+    <!--
+        Every gettext call must use the plugin's own text domain — a missing
+        or wrong domain silently breaks translation loading in production.
+    -->
+    <rule ref="WordPress.WP.I18n">
+        <properties>
+            <property name="text_domain" type="array">
+                <element value="senroflux"/>
+            </property>
+        </properties>
+        <!--
+            tests/ThemePatterns/* are verbatim copies of Twenty Twenty-Five's
+            own block-pattern PHP files (see their own file headers), kept as
+            fixtures for testing against real theme pattern markup. They
+            correctly use the theme's OWN 'twentytwentyfive' text domain,
+            same as upstream — rewriting it to 'senroflux' would make them
+            stop matching the theme files they mirror.
+        -->
+        <exclude-pattern>tests/ThemePatterns/*</exclude-pattern>
+    </rule>
 
     <!--
         Prefix every global the plugin introduces (hooks, options, tables,

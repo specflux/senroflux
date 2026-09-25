@@ -18,6 +18,7 @@ namespace Specflux\SenroFlux\Tests\Admin;
 
 use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Admin\ScreenCapability;
+use Specflux\SenroFlux\Packs\Pack;
 use WP_Error;
 
 final class ScreenCapabilityTest extends TestCase {
@@ -25,11 +26,54 @@ final class ScreenCapabilityTest extends TestCase {
 	protected function setUp(): void {
 		$GLOBALS['senroflux_test_user_caps'] = array( 'manage_options' => true );
 		$GLOBALS['senroflux_test_filters']   = array();
+		remove_all_filters( 'senroflux_packs' );
+		// S10: the computed default walks the registered packs in order —
+		// pin the same shape production boots (pages 'edit_pages', posts
+		// 'edit_posts', site 'manage_options') so a manage_options-only
+		// viewer (every pre-existing test in this file) still resolves to
+		// 'manage_options', exactly as the static pre-0.3 default did.
+		$this->registerFixturePack( 'pages', 'edit_pages' );
+		$this->registerFixturePack( 'posts', 'edit_posts' );
+		$this->registerFixturePack( 'site', 'manage_options' );
 	}
 
 	protected function tearDown(): void {
 		remove_all_filters( ScreenCapability::FILTER );
 		remove_all_filters( 'senroflux_can_tick' );
+		remove_all_filters( 'senroflux_packs' );
+	}
+
+	private function registerFixturePack( string $name, string $capability ): void {
+		$pack = new class( $name, $capability ) extends Pack {
+			public function __construct( private readonly string $packName, private readonly string $capability ) {
+				parent::__construct( array() );
+			}
+
+			public function name(): string {
+				return $this->packName;
+			}
+
+			public function verbMap(): array {
+				return array();
+			}
+
+			public function runCapability(): string {
+				return $this->capability;
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+		};
+
+		add_filter(
+			'senroflux_packs',
+			static fn ( array $packs ): array => $packs + array( $name => $pack ),
+			10,
+			1
+		);
 	}
 
 	public function test_capability_defaults_to_manage_options(): void {
@@ -42,12 +86,44 @@ final class ScreenCapabilityTest extends TestCase {
 		$this->assertSame( 'edit_pages', ScreenCapability::current() );
 	}
 
-	public function test_a_filter_returning_nonsense_falls_back_to_the_default(): void {
+	public function test_a_filter_returning_nonsense_falls_back_to_the_computed_default(): void {
 		// Fail closed: an empty string would be a capability nobody has, but
 		// relying on that is luck, not a rule.
 		add_filter( ScreenCapability::FILTER, static fn (): string => '' );
 
 		$this->assertSame( 'manage_options', ScreenCapability::current() );
+	}
+
+	public function test_an_editor_gets_the_first_pack_capability_they_hold(): void {
+		$GLOBALS['senroflux_test_user_caps'] = array( 'edit_pages' => true );
+
+		$this->assertSame( 'edit_pages', ScreenCapability::current() );
+	}
+
+	public function test_a_subscriber_holding_no_pack_capability_gets_do_not_allow(): void {
+		$GLOBALS['senroflux_test_user_caps'] = array( 'read' => true );
+
+		$this->assertSame( ScreenCapability::NOBODY, ScreenCapability::current() );
+	}
+
+	public function test_the_filter_is_applied_after_the_computation_not_instead_of_it(): void {
+		// The filter receives the COMPUTED value, so a filter that inspects it
+		// (rather than replacing it outright) sees the per-viewer result.
+		$GLOBALS['senroflux_test_user_caps'] = array( 'edit_pages' => true );
+		$seen                                = null;
+
+		add_filter(
+			ScreenCapability::FILTER,
+			static function ( $computed ) use ( &$seen ) {
+				$seen = $computed;
+
+				return $computed;
+			}
+		);
+
+		ScreenCapability::current();
+
+		$this->assertSame( 'edit_pages', $seen );
 	}
 
 	public function test_without_the_capability_the_tick_is_never_called(): void {

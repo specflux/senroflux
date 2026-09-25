@@ -30,9 +30,16 @@ final class Schema {
 	 * additive run columns (pack, skills_json, result_json, objects_json,
 	 * accepted_plan_step_id, conversation_locale, content_locale); 3 adds
 	 * skills_disable_json, so every TICK can collect the run's skills exactly
-	 * as start() did (S8) instead of honouring the disable list only once.
+	 * as start() did (S8) instead of honouring the disable list only once; 4
+	 * adds `gate_mode` (0.3 S3) — existing rows default to `agent_safety`,
+	 * because 0.2 could only ever run under it; 5 adds `withheld_roles_json`
+	 * (0.3 S6) — computed once at start() and, like `gate_mode`, never
+	 * updated afterwards; a NULL/missing value reads back as the empty list;
+	 * 6 adds `follow_up_of` (0.3 S20) — the source run's id when this run was
+	 * started as a follow-up, pinned at start() and never updated afterwards;
+	 * NULL means an ordinary (non-follow-up) run.
 	 */
-	public const DB_VERSION = 3;
+	public const DB_VERSION = 6;
 
 	/**
 	 * Runs table name for this site.
@@ -86,11 +93,78 @@ final class Schema {
 			return;
 		}
 
+		// S14: record the legacy-run watermark BEFORE install() stamps the
+		// version option, so a crash mid-upgrade leaves the option low and
+		// the next boot retries this too (same fail-toward-re-running
+		// posture as the version stamp itself).
+		self::maybe_record_legacy_watermark( $db, $installed );
+
 		self::install( $db );
 
 		if ( function_exists( 'update_option' ) ) {
 			update_option( 'senroflux_db_version', self::DB_VERSION, false );
 		}
+	}
+
+	/**
+	 * S14 ("Upgrade from 0.2"): on a genuine pre-0.3 install — $installed > 0
+	 * (a fresh install, 0, has no rows to protect) and < 4 (0.3 S3's
+	 * `gate_mode` column, the first 0.3-era addition) — record the highest
+	 * run id that existed at upgrade time into the (non-autoloaded) option
+	 * `senroflux_legacy_run_watermark`, but ONLY when a live (non-terminal)
+	 * run actually exists, and only once: an existing watermark is never
+	 * overwritten, even with a now-higher MAX(id), so a repeated upgrade
+	 * attempt can never creep the boundary later runs get judged against.
+	 * {@see \Specflux\SenroFlux\Run\Runner::legacyRunRefusal()} reads it
+	 * back: any run at or below the mark that is still non-terminal started
+	 * under 0.2 (ids are AUTO_INCREMENT, so every 0.3 run's id is strictly
+	 * greater) and cannot continue.
+	 *
+	 * Terminal statuses are hard-coded here as the three literal values from
+	 * {@see \Specflux\SenroFlux\Run\RunStatus::isTerminal()} — that enum
+	 * lives in a namespace this framework-agnostic-adjacent class does not
+	 * otherwise depend on, so the literals are duplicated rather than
+	 * introducing a new coupling; RunStatus::isTerminal() remains the
+	 * source of truth if the set of terminal statuses ever changes.
+	 *
+	 * KNOWN LIMITATION: if a site TRUNCATEd its runs table and reset
+	 * AUTO_INCREMENT while somehow keeping the upgrade option below 4 (or
+	 * cleared it) so this ran again, new low-id runs could be misread as
+	 * legacy. Writing the watermark only when a live 0.2 run is actually
+	 * found keeps that window closed on nearly every real site.
+	 *
+	 * @return void
+	 */
+	private static function maybe_record_legacy_watermark( wpdb $db, int $installed ): void {
+		if ( $installed <= 0 || $installed >= 4 ) {
+			return;
+		}
+
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
+			return;
+		}
+
+		if ( false !== get_option( 'senroflux_legacy_run_watermark', false ) ) {
+			return; // Never overwrite an existing watermark.
+		}
+
+		$runs = self::runsTable( $db );
+
+		$live = (int) $db->get_var(
+			// phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table/column names, no user input.
+			"SELECT COUNT(*) FROM {$runs} WHERE status NOT IN ('completed', 'failed', 'cancelled')"
+		);
+
+		if ( $live <= 0 ) {
+			return;
+		}
+
+		$max_id = (int) $db->get_var(
+			// phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table name.
+			"SELECT MAX(id) FROM {$runs}"
+		);
+
+		update_option( 'senroflux_legacy_run_watermark', $max_id, false );
 	}
 
 	/**
@@ -136,6 +210,12 @@ final class Schema {
 				'accepted_plan_step_id BIGINT(20) UNSIGNED NULL',
 				'conversation_locale VARCHAR(20) NULL',
 				'content_locale VARCHAR(20) NULL',
+				// 0.3 S3: pinned at start, never updated afterwards.
+				'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
+				// 0.3 S6: also pinned at start, never updated afterwards.
+				'withheld_roles_json TEXT NULL',
+				// 0.3 S20: also pinned at start, never updated afterwards.
+				'follow_up_of BIGINT(20) UNSIGNED NULL',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',
