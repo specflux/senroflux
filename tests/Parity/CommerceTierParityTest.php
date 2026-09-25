@@ -129,26 +129,18 @@ final class CommerceTierParityTest extends TestCase {
 	 * — the shared-file mechanism S19 documents in place of a composer
 	 * package. Skips with a clear message when the sibling repo is not
 	 * checked out next to this one (a normal, non-failing state for a
-	 * SenroFlux-only checkout).
+	 * SenroFlux-only checkout), but fails under CI=true, where the sibling
+	 * checkout is part of the job and its absence means the check ran on
+	 * nothing.
 	 */
 	public function test_byte_identical_to_agent_safetys_copy_when_the_sibling_repo_is_present(): void {
-		$candidates = array(
-			dirname( __DIR__, 3 ) . '/agent-safety/plugin/tests/Fixtures/commerce-tier-parity.json',
-			dirname( __DIR__, 3 ) . '/agent-safety-wt-0.3/plugin/tests/Fixtures/commerce-tier-parity.json',
-		);
+		$sibling = dirname( __DIR__, 3 ) . '/agent-safety/plugin/tests/Fixtures/commerce-tier-parity.json';
 
-		$sibling = null;
-		foreach ( $candidates as $candidate ) {
-			if ( is_readable( $candidate ) ) {
-				$sibling = $candidate;
-				break;
+		if ( ! is_readable( $sibling ) ) {
+			if ( 'true' === getenv( 'CI' ) ) {
+				$this->fail( 'CI=true but Agent Safety\'s parity fixture is unavailable at ' . $sibling );
 			}
-		}
-
-		if ( null === $sibling ) {
-			$this->markTestSkipped(
-				'Agent Safety is not checked out alongside SenroFlux (checked: ' . implode( ', ', $candidates ) . ') — nothing to diff against.'
-			);
+			$this->markTestSkipped( 'Agent Safety is not checked out alongside SenroFlux (checked: ' . $sibling . ') — nothing to diff against.' );
 		}
 
 		$this->assertSame(
