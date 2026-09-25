@@ -2,6 +2,21 @@
 /**
  * Theme block patterns as feature patterns for the pages/site packs (0.3 S21).
  *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Pages;
+
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Reads, filters and fills the active theme's own block patterns.
+ *
  * TARGET REPO PATH: src/Packs/Pages/ThemePatterns.php
  *
  * `WP_Theme::get_block_patterns()` (`wp-includes/class-wp-theme.php:1856`)
@@ -46,21 +61,6 @@
  * CACHING (S21): a static per-request memo, keyed on nothing (the registry
  * does not change mid-request) and cleared by {@see resetCache()} so PHPUnit
  * runs stay independent.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Pages;
-
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Reads, filters and fills the active theme's own block patterns.
  */
 final class ThemePatterns {
 

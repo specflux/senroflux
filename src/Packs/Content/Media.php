@@ -1,6 +1,26 @@
 <?php
 /**
  * The media/attachment/term registrar shared by every content pack (0.3 S5,
+ *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Content;
+
+use Specflux\SenroFlux\Model\AiClientMediaGateway;
+use Specflux\SenroFlux\Model\MediaGatewayInterface;
+use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\RunStore;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Registers the shared media/attachment/term abilities.
+ *
  * stage 6; `read-media` added by the report defect fix): `media-search`,
  * `media-upload`, `generate-image`, `generate-alt-text`,
  * `set-featured-image`, `list-missing-alt`, `update-alt`, `read-media`,
@@ -44,25 +64,6 @@
  * actually touches (`edit_post` for a target post/attachment,
  * `manage_terms`/`assign_terms` for a taxonomy) — never on `upload_files`,
  * which is not what those calls do.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Content;
-
-use Specflux\SenroFlux\Model\AiClientMediaGateway;
-use Specflux\SenroFlux\Model\MediaGatewayInterface;
-use Specflux\SenroFlux\Run\Budget;
-use Specflux\SenroFlux\Run\RunStore;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Registers the shared media/attachment/term abilities.
  */
 final class Media {
 
@@ -964,8 +965,8 @@ final class Media {
 			array(
 				'post_type'      => 'any',
 				'posts_per_page' => -1,
-				'meta_key'       => '_thumbnail_id',
-				'meta_value'     => (string) $attachment_id,
+				'meta_key'       => '_thumbnail_id', // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- the only way to find posts featuring this attachment.
+				'meta_value'     => (string) $attachment_id, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- as above.
 			)
 		);
 

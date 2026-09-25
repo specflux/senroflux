@@ -2,6 +2,33 @@
 /**
  * Pack-owned write validation for the pages pack (S10).
  *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Pages;
+
+use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Validates and cleans pages-pack block markup. Implements the S4
+ * {@see ContentValidator} seam so `Packs\Content\Abilities` can validate a
+ * write without knowing any pack's concrete vocabulary.
+ *
+ * NOT final (0.3 S7): {@see \Specflux\SenroFlux\Packs\Site\Validator} extends
+ * this to validate the two extra homepage-only patterns on top of the same
+ * seven-pattern shape rules, rather than re-authoring ~1000 lines of generic
+ * block-shape/markup-safety checking. `countSlots()`, `columns()` and
+ * `checkPageShape()` are `protected` for exactly that seam; every other
+ * method stays `private` because the site pack's two new patterns need
+ * nothing else overridden (`matchPatternSchema()`/`BlockShells` already
+ * dispatch through `$this->vocabulary->all()`, generically).
+ *
  * TARGET REPO PATH: src/Packs/Pages/Validator.php
  *
  * Whole-write refusal — validation failure returns a WP_Error and NOTHING is
@@ -46,33 +73,6 @@
  * The block parser / serializer are the WordPress core functions
  * (`parse_blocks` / `serialize_blocks`), guarded with `function_exists` so a
  * bare run fails closed rather than calling a missing function.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Pages;
-
-use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Validates and cleans pages-pack block markup. Implements the S4
- * {@see ContentValidator} seam so `Packs\Content\Abilities` can validate a
- * write without knowing any pack's concrete vocabulary.
- *
- * NOT final (0.3 S7): {@see \Specflux\SenroFlux\Packs\Site\Validator} extends
- * this to validate the two extra homepage-only patterns on top of the same
- * seven-pattern shape rules, rather than re-authoring ~1000 lines of generic
- * block-shape/markup-safety checking. `countSlots()`, `columns()` and
- * `checkPageShape()` are `protected` for exactly that seam; every other
- * method stays `private` because the site pack's two new patterns need
- * nothing else overridden (`matchPatternSchema()`/`BlockShells` already
- * dispatch through `$this->vocabulary->all()`, generically).
  */
 class Validator implements ContentValidator {
 

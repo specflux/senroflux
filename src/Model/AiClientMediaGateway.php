@@ -261,7 +261,7 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 	 */
 	private function raiseExecutionTimeLimit(): void {
 		if ( function_exists( 'set_time_limit' ) ) {
-			set_time_limit( self::TIME_LIMIT_SECONDS );
+			set_time_limit( self::TIME_LIMIT_SECONDS ); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- see the docblock: image generation outlasts the default limit.
 		}
 	}
 }

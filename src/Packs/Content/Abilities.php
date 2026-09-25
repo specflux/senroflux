@@ -1,6 +1,26 @@
 <?php
 /**
  * The shared content registrar (0.3 S4): registers the six content-pack
+ *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Content;
+
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
+use Specflux\SenroFlux\Run\RunStore;
+use Specflux\SenroFlux\Run\Tracker;
+use WP_Error;
+use WP_Post;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Registers the shared content abilities and their permission predicates.
+ *
  * abilities on the Abilities API, and owns the permission predicates + post
  * shaping every content pack shares.
  *
@@ -60,25 +80,6 @@
  *
  * Every ability that returns an id follows the S12 contract (the run tracker
  * keys its verify-nudge on `id`).
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Content;
-
-use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
-use Specflux\SenroFlux\Run\RunStore;
-use Specflux\SenroFlux\Run\Tracker;
-use WP_Error;
-use WP_Post;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Registers the shared content abilities and their permission predicates.
  */
 final class Abilities {
 

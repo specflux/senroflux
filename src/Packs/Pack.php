@@ -2,6 +2,34 @@
 /**
  * Abstract capability pack: role → ability resolution, verb map, skills, preflight.
  *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs;
+
+use Specflux\SenroFlux\Plugin;
+use Specflux\SenroFlux\Run\GateMode;
+use Specflux\SenroFlux\Setup\Checks;
+use Specflux\SenroFlux\Setup\SetupCheck;
+use Specflux\SenroFlux\Skills\Skill;
+use Specflux\SenroFlux\Skills\SkillSet;
+use Specflux\SenroFlux\Tools\VerbTier;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Base class for every capability pack.
+ *
+ * The base ships the S9/S10 shape. Concrete packs (the pages pack, stage 8)
+ * supply the pack `name()`, the role→ability template map (via the
+ * constructor), the input properties their clients actually send (for the
+ * shape-compat check), and override `skills()` / `agentSafetyPack()` /
+ * `verbMap()` / `preflight()` as needed.
+ *
  * S9 (SPEC-SENROFLUX-0.2) — the pack is the ONLY source of a run's ability
  * allow-list when `start()` is given a pack name. It also owns the S10 verb
  * map (what Agent Safety tiers/grants/audits), the pack skills that ride the
@@ -31,34 +59,6 @@
  *     ABILITY IDS, never on `pages/*`.
  * {@see agentSafetyVerbMap()} is the bridge: it collapses the pack verbs a role
  * can produce down to the one tier Agent Safety can carry for that ability.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs;
-
-use Specflux\SenroFlux\Plugin;
-use Specflux\SenroFlux\Run\GateMode;
-use Specflux\SenroFlux\Setup\Checks;
-use Specflux\SenroFlux\Setup\SetupCheck;
-use Specflux\SenroFlux\Skills\Skill;
-use Specflux\SenroFlux\Skills\SkillSet;
-use Specflux\SenroFlux\Tools\VerbTier;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Base class for every capability pack.
- *
- * The base ships the S9/S10 shape. Concrete packs (the pages pack, stage 8)
- * supply the pack `name()`, the role→ability template map (via the
- * constructor), the input properties their clients actually send (for the
- * shape-compat check), and override `skills()` / `agentSafetyPack()` /
- * `verbMap()` / `preflight()` as needed.
  */
 abstract class Pack {
 

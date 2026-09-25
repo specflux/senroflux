@@ -1,6 +1,25 @@
 <?php
 /**
  * The commerce pack's own polyfill abilities: catalogue (S19 stage 12 —
+ *
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Commerce;
+
+use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\RunStore;
+use Specflux\SenroFlux\Run\Tracker;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Registers the three commerce polyfill abilities.
+ *
  * `set-product-image`, `coupon-create`, `coupon-enable`) and operations (S19
  * stage 13 — `orders-refund`, `shipping-zone-save`, `tax-rate-save`,
  * `store-report`, `save-store-report`).
@@ -58,24 +77,6 @@
  *   - `store-report` performs no write at all (read-only, S19), and
  *     `save-store-report` only ever creates a NEW page — neither has an
  *     existing object a stale write could clobber.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Commerce;
-
-use Specflux\SenroFlux\Run\Budget;
-use Specflux\SenroFlux\Run\RunStore;
-use Specflux\SenroFlux\Run\Tracker;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Registers the three commerce polyfill abilities.
  */
 final class Abilities {
 

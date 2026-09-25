@@ -49,7 +49,7 @@ final class Ajax {
 
 		// The budget arrives as a JSON body; a malformed payload degrades to
 		// the consumer's ceiling. `allow` is never read from the request.
-		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}';
+		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; ConsumerPolicy::resolve() validates each decoded field.
 		$policy     = ConsumerPolicy::resolve(
 			$consumer,
 			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true )
@@ -109,7 +109,7 @@ final class Ajax {
 
 		$resume = null;
 		if ( isset( $_POST['resume'] ) ) {
-			$raw    = wp_unslash( $_POST['resume'] );
+			$raw    = wp_unslash( $_POST['resume'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body, decoded and shape-checked below.
 			$resume = is_string( $raw ) ? json_decode( $raw, true ) : $raw;
 			if ( ! is_array( $resume ) ) {
 				wp_send_json_error(
