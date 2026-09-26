@@ -7,7 +7,7 @@ that gates, approves, and audits every step.
 
 First consumer: [Specflux Marketing Analytics Chat](https://wordpress.org/plugins/specflux-marketing-analytics-chat/).
 
-Current version: `0.2.0-dev` (see `Version:` in `senroflux.php`).
+Current version: `0.3.0` (see `Version:` in `senroflux.php`).
 
 ## Requirements
 

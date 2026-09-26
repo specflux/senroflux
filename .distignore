@@ -22,3 +22,11 @@ assets/src
 playwright.config.js
 playwright-report
 test-results
+README.md
+.stylelintrc.json
+eslint.config.i18n.cjs
+jest.config.js
+# 0.2's server-rendered screen, no longer enqueued (tests still drive runs.js).
+assets
+dist
+vendor

@@ -17,20 +17,18 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) || empty( $GLOBALS['wpdb'] ) ) {
 	exit;
 }
 
-/** @var wpdb $wpdb */
-$wpdb = $GLOBALS['wpdb'];
+global $wpdb;
 
-$delete_data = get_option( 'senroflux_uninstall_delete_data' );
+$senroflux_delete_data = get_option( 'senroflux_uninstall_delete_data' );
 
-if ( true !== $delete_data && '1' !== $delete_data ) {
+if ( true !== $senroflux_delete_data && '1' !== $senroflux_delete_data ) {
 	// Keep tables + options; the site did not opt into deletion.
 	return;
 }
 
-$table_steps = $wpdb->prefix . 'senroflux_steps';
-$table_runs  = $wpdb->prefix . 'senroflux_runs';
-
-$wpdb->query( "DROP TABLE IF EXISTS {$table_steps}" ); // phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table name.
-$wpdb->query( "DROP TABLE IF EXISTS {$table_runs}" ); // phpcs:ignore WordPress.DB.PreparedSQL -- trusted internal table name.
+foreach ( array( 'senroflux_steps', 'senroflux_runs' ) as $senroflux_table ) {
+	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.DirectDatabaseQuery.SchemaChange -- opt-in uninstall dropping a table this plugin owns; nothing to cache.
+	$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $wpdb->prefix . $senroflux_table ) );
+}
 
 delete_option( 'senroflux_uninstall_delete_data' );
