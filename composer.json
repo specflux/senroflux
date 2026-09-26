@@ -3,7 +3,7 @@
     "description": "Resumable multi-step agent runs inside the logged-in WordPress session, governed by Agent Safety.",
     "type": "wordpress-plugin",
     "license": "GPL-2.0-or-later",
-    "version": "0.2.0-dev",
+    "version": "0.3.0",
     "require": {
         "php": ">=8.1"
     },
