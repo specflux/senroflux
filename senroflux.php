@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       SenroFlux
- * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, Agent Safety as a hard-required checkpoint.
+ * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, governed by Agent Safety when active or a built-in approval gate otherwise.
  * Version:           0.3.0
  * Requires at least: 7.0
  * Requires PHP:      8.1
@@ -9,14 +9,18 @@
  * Text Domain:       senroflux
  *
  * Harness for agent RUNS: one goal pursued by one user through many model
- * turns and tool calls, pausing for human approval when Agent Safety demands
- * it. SenroFlux owns runs/steps state and nothing else — the chat UI belongs
- * to consumers (first consumer: marketing-analytics-chat), enforcement belongs
- * to Agent Safety.
+ * turns and tool calls, pausing for human approval whenever a write needs
+ * one. SenroFlux owns runs/steps state and nothing else — the chat UI
+ * belongs to consumers (first consumer: marketing-analytics-chat).
  *
- * HARD DEPENDENCY: Agent Safety must be active. Without its gate every run
- * would execute irreversible tools ungoverned, so the plugin refuses to start
- * runs (senroflux_ungoverned) and shows an admin notice instead. Fail closed.
+ * GATE MODES (0.3 S3): if Agent Safety is active, every governed call goes
+ * through its gate (packs, tiers, approvals) and audit trail. Without it,
+ * SenroFlux falls back to a built-in minimal gate: every call that changes
+ * the site still stops for a person to approve it on SenroFlux's own Runs
+ * screen before it runs. A run's mode is pinned at start and never changes
+ * underneath it. Multisite is refused outright (senroflux_ungoverned is
+ * reserved for "no WordPress session" and third-party HTTP consumers
+ * starting/ticking a built-in-mode run).
  *
  * @package SenroFlux
  */
