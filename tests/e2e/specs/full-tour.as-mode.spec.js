@@ -36,8 +36,16 @@ test.describe( 'S10/S12 full run tour (Agent Safety mode)', () => {
 		await waitForPark( page, 'approval', 'Approve this change?' );
 		// The single most important assertion of this stage: the tier badge
 		// APPEARS in Agent Safety mode, on the very run that started in it.
-		await expect( page.locator( '[data-testid="tier-badge"]' ).first() ).toBeVisible();
-		await expect( page.locator( '[data-testid="tier-badge"]' ).first() ).toContainText( 'Tier 1' );
+		//
+		// 0.3 S23: scoped to the approval park card itself. Since S23 added a
+		// `tier` to tool_result steps, the Tier-0 ledger rows collapsed above
+		// this park ALSO carry a (collapsed, hence hidden) tier badge, and an
+		// unscoped `[data-testid="tier-badge"]` matches one of those first —
+		// this assertion means the approval card's own badge, not whichever
+		// badge happens to be first in DOM order.
+		const approvalTierBadge = page.locator( '.senroflux-park-card [data-testid="tier-badge"]' ).first();
+		await expect( approvalTierBadge ).toBeVisible();
+		await expect( approvalTierBadge ).toContainText( 'Tier 1' );
 		await assertNoSeriousA11y( page, 'approval park' );
 		await approveCall( page );
 

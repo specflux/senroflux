@@ -49,9 +49,13 @@ test.describe( 'S23: ledger rows carry a tier badge in Agent Safety mode', () =>
 			await waitSettled( page );
 			await assertNoSeriousA11y( page, 'terminal report view' );
 
-			await expect(
-				page.locator( '.senroflux-ledger-group [data-testid="tier-badge"]' ).first()
-			).toBeVisible( { timeout: 5000 } );
+			// Ledger groups render as closed <details>, so their rows' badges
+			// are in the DOM but hidden until the group is opened.
+			const ledgerGroup = page.locator( '.senroflux-ledger-group', { hasText: '4 actions' } );
+			await ledgerGroup.locator( 'summary' ).click();
+			const badge = ledgerGroup.locator( '[data-testid="tier-badge"]' ).first();
+			await expect( badge ).toBeVisible( { timeout: 5000 } );
+			await expect( badge ).toContainText( 'Tier 0' );
 		}
 	);
 } );
