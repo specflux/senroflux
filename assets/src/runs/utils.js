@@ -203,6 +203,14 @@ export function stepVerb( step ) {
  * un-parked tool_result, so this returns `null` rather than guessing).
  */
 export function stepTier( step ) {
+	// 0.3 S23: `Plugin::get()` now lifts the tier onto the step itself
+	// (`step.tier`) for every kind, including a plain `tool_result` that ran
+	// without parking — the pre-S23 payload only had it nested inside an
+	// `approval` step's own message. Prefer the top-level field; fall back to
+	// `message.tier` for any payload shape that still only carries it there.
+	if ( Number.isInteger( step.tier ) ) {
+		return step.tier;
+	}
 	if ( step.message && 'object' === typeof step.message && Number.isInteger( step.message.tier ) ) {
 		return step.message.tier;
 	}

@@ -153,6 +153,16 @@ final class Runner {
 		 * Tests inject a no-op that records the seconds instead of blocking.
 		 */
 		private readonly mixed $transient_backoff_sleeper = null,
+		/**
+		 * @var callable(Run):(string|null)|null S23 (SPEC-SENROFLUX-PRO.md
+		 * §5 F4): the run's pack's `guidesHash()`, or null for a
+		 * direct-allow run / a pack that reports no separately-hashed
+		 * guidance. Recorded next to the skills fingerprints on the seq-0
+		 * `system_instruction` record ({@see auditInstruction()}), never
+		 * re-checked for drift the way skill bodies are — F4 only asks that
+		 * it ride the report, not that a change re-open the run.
+		 */
+		private readonly mixed $guides_hash_resolver = null,
 	) {
 	}
 
@@ -855,6 +865,15 @@ final class Runner {
 		// steps on it. Message::fromArray() ignores the extra key.
 		$message_array['plan_verb'] = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
 
+		// 0.3 S23 (F-tier): the tier the gate classified this call at, so a
+		// tool_result step carries the same tier badge an approval step
+		// already does (`appendApprovalStep()`). Null when the verb has no
+		// mapped tier for this run (VerbTier::tierFor() never returns null,
+		// so this only ever differs by the run having no verb map at all).
+		$message_array['tier'] = null !== $this->packVerbMap( $run )
+			? VerbTier::tierFor( $message_array['plan_verb'], $this->packVerbMap( $run ), $run->id )
+			: null;
+
 		$seq = $this->store->appendStep(
 			$run_id,
 			StepKind::ToolResult,
@@ -1408,7 +1427,11 @@ final class Runner {
 		$user_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
 
 		/**
-		 * Filters who may advance a run (delegation seam for later).
+		 * Filters who may advance a run (delegation seam for later). Not
+		 * `@api` — this stays under the existing Consumer rules (S23), same
+		 * as `senroflux_http_consumers`: a registered HTTP consumer's own
+		 * code may use it, but it is not part of the declared pack-extension
+		 * surface a third-party PACK is written against.
 		 *
 		 * @param bool $allowed Default: owner-only.
 		 * @param Run  $run     The run.
@@ -1734,7 +1757,10 @@ final class Runner {
 
 		$text = InstructionRenderer::render( $skills, $this->tailFor( $run ), $run->gateMode, $withheld_notice, $brief );
 
-		/** This filter is documented in SPEC-SENROFLUX.md S8; post-render only. */
+		/**
+		 * This filter is documented in SPEC-SENROFLUX.md S8; post-render only.
+		 * `@internal` (S23).
+		 */
 		$text = (string) apply_filters( 'senroflux_system_instruction', $text );
 
 		$this->auditInstruction( $run, $skills, $text, $new_steps, $brief );
@@ -1895,15 +1921,22 @@ final class Runner {
 			// S20: the brief's hash rides next to the skills hashes, ONLY on
 			// the seq-0 record — a report can show which brief a run saw,
 			// without re-recording it on every drift note.
-			$this->store->prependSystemStep(
-				$run->id,
-				array(
-					'note'       => 'system_instruction',
-					'text'       => $text,
-					'skills'     => $fingerprints,
-					'brief_hash' => SiteBrief::hash( $brief ),
-				)
+			$record = array(
+				'note'       => 'system_instruction',
+				'text'       => $text,
+				'skills'     => $fingerprints,
+				'brief_hash' => SiteBrief::hash( $brief ),
 			);
+
+			// S23 (F4): the pack's guidesHash(), when it has one, rides next
+			// to the skills fingerprints. Additive — omitted entirely for a
+			// direct-allow run or a pack that returns null.
+			$guides_hash = null !== $this->guides_hash_resolver ? ( $this->guides_hash_resolver )( $run ) : null;
+			if ( null !== $guides_hash ) {
+				$record['guides_hash'] = $guides_hash;
+			}
+
+			$this->store->prependSystemStep( $run->id, $record );
 			return;
 		}
 
@@ -3719,7 +3752,7 @@ final class Runner {
 	 * it whether `agent_safety_enable_grants` is on as well is the stricter
 	 * reading (§0.2) and the honest one — with the feature off every issue()
 	 * is a silent no-op, so offering the choice would tell a human they
-	 * pre-approved something when nothing was recorded.
+	 * pre-approved something when nothing was recorded. `@internal` (S23).
 	 */
 	private function preapprovalEnabled(): bool {
 		if ( ! (bool) apply_filters( 'senroflux_enable_preapproval', false ) ) {

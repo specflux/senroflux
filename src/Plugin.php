@@ -824,6 +824,16 @@ final class Plugin {
 				'tokens_in'   => $step->tokensIn,
 				'tokens_out'  => $step->tokensOut,
 				'duration_ms' => $step->durationMs,
+				// 0.3 S23: additive. The tier the gate classified for a
+				// tool_result or approval step (0/1/2), lifted out of the
+				// step's own message_json ({@see Runner::appendToolResult()},
+				// {@see Runner::appendApprovalStep()}) so the Runs screen can
+				// show a tier badge on any ledger row without knowing the
+				// per-kind message shape. Null when the step has no mapped
+				// tier (harness-internal tool results, questions, plans).
+				'tier'        => is_array( $step->messageArray ) && array_key_exists( 'tier', $step->messageArray )
+					? $step->messageArray['tier']
+					: null,
 			);
 
 			// 0.3 S20: brief suggestions, listed with their resolution (a
@@ -986,6 +996,7 @@ final class Plugin {
 			return true;
 		}
 
+		/** Filters the capability required to see a run. `@internal`. */
 		$capability = apply_filters( 'senroflux_runs_capability', 'manage_options' );
 
 		return function_exists( 'current_user_can' ) && current_user_can( (string) $capability );
@@ -1018,6 +1029,7 @@ final class Plugin {
 
 		global $wpdb;
 
+		/** Filters the model gateway class. `@internal`. */
 		$gateway_class = apply_filters( 'senroflux_model_gateway', AiClientGateway::class );
 		if ( ! is_string( $gateway_class ) || ! class_exists( $gateway_class ) ) {
 			$gateway_class = AiClientGateway::class;
@@ -1167,6 +1179,14 @@ final class Plugin {
 				$pack = self::pack_for_run( $run );
 
 				return null !== $pack ? $pack->objectIdForRead( $verb, $args ) : null;
+			},
+			null,
+			// S23 (SPEC-SENROFLUX-PRO.md §5 F4): only the pack knows its own
+			// guidance-hash, if any; a direct-allow run has no pack.
+			static function ( \Specflux\SenroFlux\Run\Run $run ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->guidesHash() : null;
 			}
 		);
 
