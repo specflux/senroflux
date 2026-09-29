@@ -43,6 +43,22 @@ function deleteOption( name ) {
 	}
 }
 
+/**
+ * Generic `wp db query <sql> --skip-column-names`, trimmed raw stdout
+ * (tab-separated columns, newline-separated rows) — used by the S22
+ * adversarial-nonce spec to read run/step state directly rather than
+ * through the screen, since it must assert what did NOT happen (no state
+ * change) after a forged/replayed decision.
+ */
+function dbQuery( sql ) {
+	return wpCli( [ 'db', 'query', sql, '--skip-column-names' ] ).trim();
+}
+
+/** Generic `wp eval <php>`, trimmed stdout — used to mint a real nonce server-side. */
+function evalPhp( php ) {
+	return wpCli( [ 'eval', php ] ).trim();
+}
+
 /** Wipe every run/step row and the e2e-only options so each spec starts clean. */
 function resetRuns() {
 	wpCli( [ 'db', 'query', 'TRUNCATE TABLE wp_senroflux_runs' ] );
@@ -88,6 +104,8 @@ module.exports = {
 	resetRuns,
 	setOption,
 	deleteOption,
+	dbQuery,
+	evalPhp,
 	activateAgentSafety,
 	deactivateAgentSafety,
 	activatePlugin,
