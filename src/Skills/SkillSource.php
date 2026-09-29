@@ -15,6 +15,9 @@ defined( 'ABSPATH' ) || exit;
 /**
  * The origin of a skill, which drives both grouping (harness, then pack, then
  * consumer) and the harness's authority over pack guidance.
+ *
+ * `@api` (S23): a third-party pack constructs its own skills with
+ * `SkillSource::Pack`.
  */
 enum SkillSource: string {
 

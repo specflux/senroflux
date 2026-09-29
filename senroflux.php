@@ -43,6 +43,18 @@ if ( ! defined( 'SENROFLUX_PATH' ) ) {
 	define( 'SENROFLUX_PATH', plugin_dir_path( __FILE__ ) );
 }
 
+if ( ! defined( 'SENROFLUX_API_VERSION' ) ) {
+	// S23: the semver of the DECLARED @api surface (Pack, LayoutVocabulary,
+	// the senroflux_packs/senroflux_run_skills/senroflux_default_budget
+	// filters) — independent of the plugin Version header above. A break
+	// (removal or signature change) needs a major bump; an addition needs a
+	// minor bump. tests/Api/PublicSurfaceTest.php enforces this against
+	// tests/Api/public-surface.json. Owner decision 2026-09-19: "everything
+	// in senroflux uses 0.3" — this starts at 0.3.0, not 0.1.0, even though
+	// no @api surface existed before this stage.
+	define( 'SENROFLUX_API_VERSION', '0.3.0' );
+}
+
 
 // Registered UNCONDITIONALLY (not inside any class guard): WordPress calls
 // activation hooks by re-including this file and checking what got registered

@@ -20,6 +20,9 @@ defined( 'ABSPATH' ) || exit;
  * viewer — S11) and the harness's own preflight refusal (which needs an error
  * code + a WP_Error-shaped message — S3). Immutable value object: a contributor
  * builds one per check per evaluation, never mutates one afterwards.
+ *
+ * `@api` (S23): the value type a third-party pack's `Pack::setupChecks()`
+ * constructs and returns.
  */
 final class SetupCheck {
 
