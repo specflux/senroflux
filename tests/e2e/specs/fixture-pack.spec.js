@@ -43,6 +43,9 @@ test.describe( 'S23: a third-party pack (senroflux-e2e) drives a run end to end'
 			} ),
 			call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-1' } ),
 			call( 'wpab__senroflux-e2e__create-thing', { title: 'S23 Fixture' } ),
+			// S12's verify nudge asks the model to re-read what it wrote;
+			// resetRuns() zeroes the fixture counter, so the write is thing-3.
+			call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-3' } ),
 			text( 'Done.' ),
 		] );
 	} );
