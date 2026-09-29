@@ -74,6 +74,34 @@ https://openai.com/policies/row-terms-of-use/ and
 https://openai.com/policies/row-privacy-policy/ — consult your specific
 provider's terms if you have connected a different one.
 
+= Extension API (developers) =
+
+`SENROFLUX_API_VERSION` (currently 0.3.0, defined in senroflux.php) versions the declared
+extension surface, independently of this plugin's own Stable tag. Semver promise: a removal
+or signature change needs a major bump; an addition needs a minor bump — this applies starting
+at 0.3.0, even below 1.0.
+
+The `@api` list: the `Pack` abstract class's `@api`-tagged methods (name, roles,
+abilityNamespaces, inputProperties, verbFor, objectIdKey/Prefix/ForWrite/ForRead,
+roleCapabilities, withheldRoleNotice, verbMap, roleVerbs, ungrantableVerbs, governedNamespaces,
+agentSafetyVerbMap, defaultBudget, skills, agentSafetyPack, validateCall, setupChecks,
+runCapability, requiresAgentSafety, agentSafetyBindingError, guidesHash); the
+`Api\LayoutVocabulary` facade (names, sectionSchema, validate, imageUrls, rulesLines); the
+Skill/SkillSource/SetupCheck value types a pack constructs; and the `senroflux_packs`,
+`senroflux_run_skills` and `senroflux_default_budget` filters. Every other filter, including
+`senroflux_can_tick` and `senroflux_http_consumers`, is not part of this surface and may change
+without a version bump.
+
+REST (`senroflux/v1`, routes listed above under "External Services"/PHP integration) is the
+public `@api` consumer surface; admin-ajax is this plugin's own private transport for its
+bundled Runs screen and is not guaranteed to match REST's shape.
+
+Deprecation: a break goes through `_deprecated_hook()`/`_deprecated_function()` for at least
+one minor release before removal at the next major. None exist yet.
+
+See README.md's "Extension API" section for the full reference, including how to regenerate
+the reflection snapshot tests/Api/public-surface.json that enforces this.
+
 == Installation ==
 
 1. Install and activate **Agent Safety** first (required).
