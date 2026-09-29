@@ -17,9 +17,6 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Tests\Api\Fixtures;
 
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
 final class FixtureAbility {
 
 	public function __construct( private readonly string $name ) {

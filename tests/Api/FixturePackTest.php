@@ -15,10 +15,14 @@ use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Tests\Api\Fixtures\FixturePack;
 
-require_once __DIR__ . '/Fixtures/FixturePack.php';
-require_once __DIR__ . '/Fixtures/FixtureAbility.php';
-
 final class FixturePackTest extends TestCase {
+
+	// Not PSR-4 autoloaded (tests/ has no autoload-dev mapping); loaded here,
+	// inside a method, rather than as a file-level side effect (PSR1.Files.SideEffects).
+	public static function setUpBeforeClass(): void {
+		require_once __DIR__ . '/Fixtures/FixturePack.php';
+		require_once __DIR__ . '/Fixtures/FixtureAbility.php';
+	}
 
 	protected function setUp(): void {
 		remove_all_filters( 'senroflux_packs' );
@@ -116,7 +120,7 @@ final class FixturePackTest extends TestCase {
 			'Specflux\\SenroFlux\\Setup\\SetupCheck',
 		);
 
-		$source = (string) file_get_contents( __DIR__ . '/Fixtures/FixturePack.php' );
+		$source = (string) file_get_contents( __DIR__ . '/Fixtures/FixturePack.php' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local test fixture, not a remote URL.
 
 		preg_match_all( '/use\s+(Specflux\\\\SenroFlux\\\\[A-Za-z0-9_\\\\]+);/', $source, $use_matches );
 		foreach ( $use_matches[1] as $imported ) {

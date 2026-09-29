@@ -68,7 +68,7 @@ final class PublicSurfaceTest extends TestCase {
 	 */
 	private static function apiClasses(): array {
 		return array(
-			Pack::class            => 'api_doc',
+			Pack::class             => 'api_doc',
 			LayoutVocabulary::class => 'all_public',
 			Skill::class            => 'constructor_only',
 			SetupCheck::class       => 'constructor_only',
@@ -87,11 +87,11 @@ final class PublicSurfaceTest extends TestCase {
 		}
 
 		// SkillSource is an enum: its cases are the surface, not methods.
-		$enum_reflection             = new ReflectionEnum( SkillSource::class );
+		$enum_reflection               = new ReflectionEnum( SkillSource::class );
 		$classes[ SkillSource::class ] = array(
 			'kind'  => 'enum',
 			'cases' => array_map(
-				static fn ( $case ) => $case->getName(),
+				static fn ( $enum_case ) => $enum_case->getName(),
 				$enum_reflection->getCases()
 			),
 		);
@@ -103,12 +103,12 @@ final class PublicSurfaceTest extends TestCase {
 	}
 
 	/**
-	 * @param class-string $class
+	 * @param class-string $class_name
 	 * @param string       $mode 'api_doc'|'all_public'|'constructor_only'
 	 * @return array<string,mixed>
 	 */
-	private static function classSurface( string $class, string $mode ): array {
-		$reflection = new ReflectionClass( $class );
+	private static function classSurface( string $class_name, string $mode ): array {
+		$reflection = new ReflectionClass( $class_name );
 		$methods    = array();
 
 		if ( 'constructor_only' === $mode ) {
@@ -117,7 +117,7 @@ final class PublicSurfaceTest extends TestCase {
 			}
 		} else {
 			foreach ( $reflection->getMethods() as $method ) {
-				if ( $method->getDeclaringClass()->getName() !== $class ) {
+				if ( $method->getDeclaringClass()->getName() !== $class_name ) {
 					continue; // Only members THIS class declares.
 				}
 				if ( 'all_public' === $mode && ! $method->isPublic() ) {
@@ -140,9 +140,9 @@ final class PublicSurfaceTest extends TestCase {
 		}
 
 		return array(
-			'kind'      => $reflection->isAbstract() ? 'abstract_class' : 'class',
-			'is_final'  => $reflection->isFinal(),
-			'methods'   => $methods,
+			'kind'     => $reflection->isAbstract() ? 'abstract_class' : 'class',
+			'is_final' => $reflection->isFinal(),
+			'methods'  => $methods,
 		);
 	}
 
@@ -193,7 +193,7 @@ final class PublicSurfaceTest extends TestCase {
 			return get_class( $value ) . '::' . $value->name;
 		}
 
-		return var_export( $value, true );
+		return var_export( $value, true ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- serialising a default value into the reflection snapshot, not debug code.
 	}
 
 	/**
@@ -203,7 +203,7 @@ final class PublicSurfaceTest extends TestCase {
 		$current = self::buildSurface();
 
 		if ( '1' === (string) getenv( 'SENROFLUX_UPDATE_SURFACE' ) ) {
-			file_put_contents(
+			file_put_contents( // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- regenerating a committed test fixture on disk, not a runtime WP operation.
 				self::SNAPSHOT_PATH,
 				(string) wp_json_encode(
 					array(
@@ -219,7 +219,7 @@ final class PublicSurfaceTest extends TestCase {
 		$this->assertFileExists( self::SNAPSHOT_PATH, 'Run SENROFLUX_UPDATE_SURFACE=1 vendor/bin/phpunit --filter PublicSurfaceTest to create it.' );
 
 		/** @var array{api_version:string,surface:array<string,mixed>} $stored */
-		$stored = json_decode( (string) file_get_contents( self::SNAPSHOT_PATH ), true );
+		$stored = json_decode( (string) file_get_contents( self::SNAPSHOT_PATH ), true ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local test fixture, not a remote URL.
 
 		$violations = self::gateViolations( $stored['surface'], $current, $stored['api_version'], SENROFLUX_API_VERSION );
 
@@ -270,7 +270,7 @@ final class PublicSurfaceTest extends TestCase {
 		// The break: doStuff()'s parameter type widened from string to
 		// mixed, and the return type changed — a real, breaking signature
 		// change, not just a docblock edit.
-		$new                                                           = $old;
+		$new = $old;
 		$new['classes']['Fixture\\Thing']['methods']['doStuff']['params'][0]['type'] = 'mixed';
 		$new['classes']['Fixture\\Thing']['methods']['doStuff']['return']            = 'bool';
 
@@ -300,7 +300,7 @@ final class PublicSurfaceTest extends TestCase {
 			),
 			'hooks'   => array(),
 		);
-		$new                                                       = $old;
+		$new = $old;
 		$new['classes']['Fixture\\Thing']['methods']['newMethod'] = array(
 			'static'     => false,
 			'abstract'   => false,
@@ -343,15 +343,15 @@ final class PublicSurfaceTest extends TestCase {
 	 * else 'addition' if $new has anything $old didn't; else 'none'.
 	 *
 	 * @param array<string,mixed> $old
-	 * @param array<string,mixed> $new
+	 * @param array<string,mixed> $new_surface
 	 */
-	private static function classifySurfaceChange( array $old, array $new ): string {
+	private static function classifySurfaceChange( array $old, array $new_surface ): string {
 		$has_break    = false;
 		$has_addition = false;
 
 		foreach ( array( 'classes', 'hooks' ) as $section ) {
 			$old_entries = $old[ $section ] ?? array();
-			$new_entries = $new[ $section ] ?? array();
+			$new_entries = $new_surface[ $section ] ?? array();
 
 			foreach ( $old_entries as $name => $old_entry ) {
 				if ( ! array_key_exists( $name, $new_entries ) ) {
@@ -360,8 +360,8 @@ final class PublicSurfaceTest extends TestCase {
 				}
 				if ( 'classes' === $section ) {
 					[ $class_break, $class_addition ] = self::classifyClassChange( $old_entry, $new_entries[ $name ] );
-					$has_break    = $has_break || $class_break;
-					$has_addition = $has_addition || $class_addition;
+					$has_break                        = $has_break || $class_break;
+					$has_addition                     = $has_addition || $class_addition;
 				} elseif ( $old_entry !== $new_entries[ $name ] ) {
 					$has_break = true;
 				}

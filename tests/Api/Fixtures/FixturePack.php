@@ -24,9 +24,6 @@ use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
 
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
 /**
  * A trivial two-role, two-tier pack: a Tier-0 read and a Tier-1 write, both
  * resolved to the `senroflux/` polyfill namespace (the default

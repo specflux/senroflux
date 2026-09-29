@@ -149,7 +149,7 @@ final class ToolExecutor {
 
 		$encoded = (string) wp_json_encode( $output );
 		/** Filters the max byte size of an encoded tool result. `@internal`. */
-		$max     = (int) apply_filters( 'senroflux_tool_result_max_bytes', self::DEFAULT_MAX_BYTES );
+		$max = (int) apply_filters( 'senroflux_tool_result_max_bytes', self::DEFAULT_MAX_BYTES );
 		if ( $max > 0 && strlen( $encoded ) > $max ) {
 			return array(
 				'truncated' => true,
