@@ -407,6 +407,79 @@ final class PackRegistryTest extends TestCase {
 	}
 
 	// ------------------------------------------------------------------
+	// S19: every earlier namespace must be AS-governed.
+	// ------------------------------------------------------------------
+
+	public function test_registry_refuses_a_pack_with_an_ungoverned_earlier_namespace(): void {
+		$GLOBALS['senroflux_test_doing_it_wrong'] = array();
+
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'novamira/', 'senroflux/' ) ) );
+
+		$this->assertNull( $registry->get( 'commerce-fixture' ), 'a pack with an ungoverned earlier namespace is never stored' );
+		$this->assertSame( array(), $registry->all() );
+		$this->assertNotEmpty( $GLOBALS['senroflux_test_doing_it_wrong'] ?? array(), 'the refusal is reported' );
+
+		$reported = implode( ' ', array_column( $GLOBALS['senroflux_test_doing_it_wrong'], 'message' ) );
+		$this->assertStringContainsString( 'novamira/', $reported, 'the offending namespace is named' );
+	}
+
+	public function test_registry_accepts_woocommerce_as_an_earlier_namespace(): void {
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'woocommerce/', 'senroflux/' ) ) );
+
+		$this->assertNotNull( $registry->get( 'commerce-fixture' ) );
+	}
+
+	public function test_registry_accepts_core_as_an_earlier_namespace(): void {
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'core/', 'senroflux/' ) ) );
+
+		$this->assertNotNull( $registry->get( 'commerce-fixture' ) );
+	}
+
+	public function test_registry_accepts_an_earlier_namespace_the_pack_governs_itself(): void {
+		$pack = new class() extends Pack {
+			public function name(): string {
+				return 'acme-fixture';
+			}
+
+			/** @return list<string> */
+			public function abilityNamespaces(): array {
+				return array( 'acme/', 'senroflux/' );
+			}
+
+			/** @return list<string> */
+			public function governedNamespaces(): array {
+				return array( 'senroflux/', 'acme/' );
+			}
+
+			/** @return array<string,int> */
+			public function verbMap(): array {
+				return array();
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+		};
+
+		$registry = new PackRegistry();
+		$registry->register( $pack );
+
+		$this->assertNotNull( $registry->get( 'acme-fixture' ) );
+	}
+
+	public function test_registry_accepts_a_default_only_namespace_list(): void {
+		$registry = new PackRegistry();
+		$registry->register( $this->namespacedPack( array( 'senroflux/' ) ) );
+
+		$this->assertNotNull( $registry->get( 'commerce-fixture' ) );
+	}
+
+	// ------------------------------------------------------------------
 	// S19: Pack::ungrantableVerbs()
 	// ------------------------------------------------------------------
 

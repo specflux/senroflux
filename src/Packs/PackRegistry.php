@@ -35,6 +35,20 @@ final class PackRegistry {
 	private array $packs = array();
 
 	/**
+	 * Namespaces AS governs unconditionally, by its own bundled modules — a
+	 * pack never needs to (and cannot) add these to its own
+	 * {@see Pack::governedNamespaces()}. `core/` is governed by AS's
+	 * `CoreIntegration`; `woocommerce/` by its `WooIntegration`. Any OTHER
+	 * namespace in {@see Pack::abilityNamespaces()} before the last entry is
+	 * only safe if the pack itself governs it (declares it in its own
+	 * `governedNamespaces()`) — and a pack that does so must also map every
+	 * verb it can resolve there in `agentSafetyVerbMap()`, or AS's gate fails
+	 * closed on it as `unknown_verb`. That verb-map obligation is NOT
+	 * enforced here; only the namespace-governance half is (S19).
+	 */
+	private const AS_GOVERNED_NAMESPACES = array( 'core/', 'woocommerce/' );
+
+	/**
 	 * Build the registry from the `senroflux_packs` filter: name => Pack. Every
 	 * registered entry must satisfy the Pack contract; anything not a Pack is
 	 * dropped (fail-closed, never a half-registered pack). SenroFlux's own pages
@@ -68,6 +82,15 @@ final class PackRegistry {
 	 * {@see fromFilters()}'s "not a Pack" case; a `_doing_it_wrong` notice
 	 * names the culprit for whoever wired the misconfigured pack.
 	 *
+	 * S19 (0.3): also refuses a pack if any entry BEFORE the last isn't AS-governed.
+	 * In Agent Safety mode the executor has no gate of its own — the only
+	 * governance is AS's permission wrap over `self::AS_GOVERNED_NAMESPACES`
+	 * plus whatever a pack declares in its own {@see Pack::governedNamespaces()}.
+	 * `namespaceCompatible()` checks input property names only, so a pack
+	 * declaring an earlier namespace neither AS nor the pack itself governs
+	 * could resolve a role to an ability that runs with no tier, approval, or
+	 * audit at all. Refused the same way, with the same notice pattern.
+	 *
 	 * @param Pack $pack The pack to register.
 	 * @return self For chaining.
 	 */
@@ -85,6 +108,36 @@ final class PackRegistry {
 							__( 'The pack "%1$s" was refused: abilityNamespaces() must end with "%2$s".', 'senroflux' ),
 							$pack->name(),
 							Pack::POLYFILL_NAMESPACE
+						)
+					),
+					'0.3.0'
+				);
+			}
+
+			return $this;
+		}
+
+		$governed_by_pack = $pack->governedNamespaces();
+		$earlier          = array_slice( $namespaces, 0, -1 );
+
+		foreach ( $earlier as $namespace ) {
+			if ( in_array( $namespace, self::AS_GOVERNED_NAMESPACES, true ) ) {
+				continue;
+			}
+
+			if ( in_array( $namespace, $governed_by_pack, true ) ) {
+				continue;
+			}
+
+			if ( function_exists( '_doing_it_wrong' ) ) {
+				_doing_it_wrong(
+					__METHOD__,
+					esc_html(
+						sprintf(
+							/* translators: 1: pack name, 2: ungoverned namespace */
+							__( 'The pack "%1$s" was refused: abilityNamespaces() lists "%2$s" before its last entry, but Agent Safety does not govern it and the pack does not declare it in governedNamespaces().', 'senroflux' ),
+							$pack->name(),
+							$namespace
 						)
 					),
 					'0.3.0'
