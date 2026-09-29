@@ -145,6 +145,7 @@ final class Tail {
 
 		/**
 		 * Filters the locale => language-name map for the tail line.
+		 * `@internal`.
 		 *
 		 * @param array<string,string> $names Known locale names.
 		 */

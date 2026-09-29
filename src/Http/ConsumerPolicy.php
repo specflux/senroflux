@@ -39,7 +39,9 @@ final class ConsumerPolicy {
 	 */
 	public static function resolve( string $consumer, mixed $requested_budget, array $pack_budget_overrides = array() ): array|WP_Error {
 		/**
-		 * Filters the consumers allowed to start runs over HTTP.
+		 * Filters the consumers allowed to start runs over HTTP. Not `@api` —
+		 * stays under the existing Consumer rules (S23), same as
+		 * `senroflux_can_tick`.
 		 *
 		 * @param array<string,array{allow?:list<string>,budget?:array<string,int>}> $consumers Keyed by consumer id.
 		 */

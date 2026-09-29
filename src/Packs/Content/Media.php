@@ -1963,7 +1963,7 @@ final class Media {
 
 	/**
 	 * `senroflux_stock_images_enabled` (build plan): a site that forbids
-	 * outbound requests turns the whole stock-photo feature off.
+	 * outbound requests turns the whole stock-photo feature off. `@internal`.
 	 */
 	private static function stockImagesEnabled(): bool {
 		return function_exists( 'apply_filters' ) ? (bool) apply_filters( 'senroflux_stock_images_enabled', true ) : true;

@@ -56,6 +56,16 @@ final class PackRegistry {
 	 */
 	public static function fromFilters(): self {
 		$registry = new self();
+
+		/**
+		 * Filters the registered capability packs. `@api` (S23) — the extension
+		 * point a third-party pack registers through, e.g.
+		 * `add_filter( 'senroflux_packs', fn( $packs ) => $packs + [ 'my-pack' => new MyPack() ] )`.
+		 * Any value keyed by a string with a {@see Pack} instance is registered;
+		 * anything else is silently dropped.
+		 *
+		 * @param array<string,Pack> $packs Name => Pack instance. Starts empty.
+		 */
 		$filtered = apply_filters( 'senroflux_packs', array() );
 
 		if ( is_array( $filtered ) ) {

@@ -62,7 +62,7 @@ final class Budget {
 		$base = self::mergeOver( self::shipped(), $pack_overrides );
 
 		/**
-		 * Filters the default budget for new runs.
+		 * Filters the default budget for new runs. `@api` (S23).
 		 *
 		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int,refunds:int} $defaults
 		 */

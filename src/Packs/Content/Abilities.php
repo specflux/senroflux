@@ -1994,6 +1994,7 @@ final class Abilities {
 	 * @param array<string,mixed>  $input     Call input (for `no_image_reason`).
 	 */
 	private static function pageImageCheck( string $post_type, string $content, array $input ): WP_Error|string|null {
+		/** Filters whether a page write must include an image step. `@internal`. */
 		if ( 'page' !== $post_type || ! apply_filters( 'senroflux_require_page_image', true ) ) {
 			return null;
 		}
@@ -2065,7 +2066,11 @@ final class Abilities {
 			return null;
 		}
 
-		/** @var array<string, array{0:int, 1:bool}> $minimums */
+		/**
+		 * Filters the per-section minimum word counts. `@internal`.
+		 *
+		 * @var array<string, array{0:int, 1:bool}> $minimums
+		 */
 		$minimums = (array) apply_filters( 'senroflux_min_section_words', ThinCopy::MINIMUMS );
 		$thin     = ThinCopy::first( array_values( parse_blocks( $content ) ), $minimums );
 		if ( null === $thin ) {

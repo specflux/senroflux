@@ -482,6 +482,7 @@ final class PlanTools {
 		// through unmodified; {@see \Specflux\SenroFlux\Packs\Site\Navigation::filterPlanError()}
 		// is the site pack's own contribution (the stock-Sample-Page-left-in-nav
 		// check), a no-op for every other pack's plan.
+		/** Filters an accepted plan for a pack-specific extra refusal. `@internal`. */
 		$pack_error = apply_filters( 'senroflux_plan_error', null, $normalized_steps, $known_verbs, $run_id );
 		if ( $pack_error instanceof WP_Error ) {
 			return $pack_error;
@@ -514,6 +515,7 @@ final class PlanTools {
 	 *                                                                          every candidate verb.
 	 */
 	private static function missingImageStepError( array $steps, ?array $known_verbs ): ?WP_Error {
+		/** Filters whether a page write must include an image step. `@internal`. */
 		if ( ! apply_filters( 'senroflux_require_page_image', true ) ) {
 			return null;
 		}
