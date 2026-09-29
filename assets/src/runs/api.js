@@ -69,9 +69,24 @@ function postAjax( action, fields, config ) {
 		} );
 }
 
-/** admin-ajax `senroflux_start`: {consumer, goal} -> RunState. */
-export function startRun( goal, config ) {
-	return postAjax( 'senroflux_start', { consumer: config.consumer, goal }, config );
+/**
+ * admin-ajax `senroflux_start`: {consumer, goal, pack?, model_provider?, model_id?}
+ * -> RunState. `model` is `{ provider, id } | null` — null (the "Automatic"
+ * choice) sends neither field, so the request is byte-identical to the
+ * pre-model-picker shape and the server falls back to its own default.
+ *
+ * @param {string}      goal
+ * @param {Object}      config
+ * @param {string}      [pack]
+ * @param {?{provider: string, id: string}} [model] Chosen (provider, model) pair, or null/omitted for automatic.
+ */
+export function startRun( goal, config, pack, model ) {
+	const fields = { consumer: config.consumer, goal, pack };
+	if ( model ) {
+		fields.model_provider = model.provider;
+		fields.model_id = model.id;
+	}
+	return postAjax( 'senroflux_start', fields, config );
 }
 
 /** admin-ajax `senroflux_tick`: {run_id, step_count, resume?} -> RunState. */

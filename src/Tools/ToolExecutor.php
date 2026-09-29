@@ -33,6 +33,18 @@ final class ToolExecutor {
 	public const DEFAULT_MAX_BYTES = 32768;
 
 	/**
+	 * The note {@see \Specflux\SenroFlux\Run\Runner} leaves in a resent call's
+	 * history in place of a bulky old argument (`sprintf()`'d with the left-out
+	 * length) — shared here, not duplicated, so the note text and the refusal
+	 * that recognises it ({@see refuseHistoryPlaceholder()}) can never drift
+	 * apart. Live evidence 2026-09-29-cards1/scenario-1-1 step 115: the model
+	 * resent this exact placeholder as its `sections` value on a `create-post`
+	 * call, after two unrelated tool calls pushed its previous attempt out of
+	 * the full-args window — it read as a value, not as a note ABOUT history.
+	 */
+	public const HISTORY_PLACEHOLDER_FORMAT = '[%d characters left out of the history; read the saved object if you need them]';
+
+	/**
 	 * Run one tool call to its terminal outcome.
 	 *
 	 * 0.3 S3: in {@see \Specflux\SenroFlux\Run\GateMode::BuiltIn}, `$gate`
@@ -75,6 +87,13 @@ final class ToolExecutor {
 			return ToolOutcome::unknownTool( $ability_name );
 		}
 
+		$args = self::decodeStringifiedJson( $args, (array) $ability->get_input_schema() );
+
+		$placeholder_refusal = self::refuseHistoryPlaceholder( $args );
+		if ( null !== $placeholder_refusal ) {
+			return ToolOutcome::denied( 'history_placeholder', $placeholder_refusal );
+		}
+
 		if ( is_callable( $validate ) ) {
 			$violation = $validate( $ability_name, is_array( $args ) ? $args : array() );
 			if ( $violation instanceof WP_Error ) {
@@ -103,7 +122,7 @@ final class ToolExecutor {
 				);
 			}
 
-			return ToolOutcome::denied( 'not_allowed', (string) $permission );
+			return ToolOutcome::denied( 'not_allowed', __( 'Refused: this account may not make this call on this item.', 'senroflux' ) );
 		}
 
 		$result = $ability->execute( $args );
@@ -138,5 +157,76 @@ final class ToolExecutor {
 		}
 
 		return $output;
+	}
+
+	/**
+	 * Recognise {@see HISTORY_PLACEHOLDER_FORMAT} resent as a real argument
+	 * value (live evidence 2026-09-29-cards1/scenario-1-1 step 115) and refuse
+	 * BEFORE the ability ever sees it — that string is a note the history
+	 * compaction left behind, not content the model actually meant to send.
+	 *
+	 * @param mixed $args Decoded call arguments (or a nested part of them).
+	 * @return string|null A refusal message naming the offending key, or null
+	 *                      when nothing in `$args` matches the placeholder.
+	 */
+	private static function refuseHistoryPlaceholder( mixed $args ): ?string {
+		if ( is_string( $args ) && 1 === preg_match( '/^\[\d+ characters left out of the history; read the saved object if you need them\]$/', $args ) ) {
+			return __( 'That value is a note left behind by history compaction, not content — it was never something you wrote. Resend the full value for this argument.', 'senroflux' );
+		}
+
+		if ( is_array( $args ) ) {
+			foreach ( $args as $item ) {
+				$refusal = self::refuseHistoryPlaceholder( $item );
+				if ( null !== $refusal ) {
+					return $refusal;
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Where the input schema expects an object or array and the model sent a
+	 * JSON string of one, use the decoded value. Models double-encode nested
+	 * arguments (live batches 2026-09-29-final/final3: "input[sections][0] is
+	 * not of type object"), and every schema refusal costs a full turn.
+	 *
+	 * @param mixed               $value  An argument value.
+	 * @param array<string,mixed> $schema Its JSON schema.
+	 */
+	private static function decodeStringifiedJson( mixed $value, array $schema ): mixed {
+		$types = (array) ( $schema['type'] ?? array() );
+
+		if ( is_string( $value )
+			&& ! in_array( 'string', $types, true )
+			&& ( in_array( 'object', $types, true ) || in_array( 'array', $types, true ) )
+			&& in_array( substr( ltrim( $value ), 0, 1 ), array( '{', '[' ), true )
+		) {
+			$decoded = json_decode( $value, true );
+			if ( is_array( $decoded ) ) {
+				$value = $decoded;
+			}
+		}
+
+		if ( ! is_array( $value ) ) {
+			return $value;
+		}
+
+		if ( is_array( $schema['properties'] ?? null ) ) {
+			foreach ( $schema['properties'] as $key => $property ) {
+				if ( array_key_exists( $key, $value ) && is_array( $property ) ) {
+					$value[ $key ] = self::decodeStringifiedJson( $value[ $key ], $property );
+				}
+			}
+		}
+
+		if ( is_array( $schema['items'] ?? null ) && array_is_list( $value ) ) {
+			foreach ( $value as $index => $item ) {
+				$value[ $index ] = self::decodeStringifiedJson( $item, $schema['items'] );
+			}
+		}
+
+		return $value;
 	}
 }

@@ -441,7 +441,7 @@ final class AskUserParkTest extends TestCase {
 		$this->gateway->script[] = self::askTurn(
 			'call_q',
 			array(
-				'text'      => str_repeat( 'x', 301 ),
+				'text'      => str_repeat( 'x', 376 ),
 				'rationale' => 'Too long.',
 			)
 		);
@@ -461,7 +461,22 @@ final class AskUserParkTest extends TestCase {
 		$responded = $error_step['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_q', $responded['id'] ?? null );
 		$this->assertSame( HarnessTools::FUNCTION_NAME, $responded['name'] ?? null );
-		$this->assertSame( array( 'error' => HarnessTools::ERROR_INVALID_QUESTION ), $responded['response'] ?? null );
+		$this->assertSame( HarnessTools::ERROR_INVALID_QUESTION, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid ask-user call: ', $responded['response']['message'] ?? '' );
+		// 0.3 quality fix: the refusal must state the actual length AND the
+		// limit so the model can tell how far over it is (live runs looped
+		// retrying "Still too long..." without this).
+		$this->assertStringContainsString( '"text" is 376 characters; the limit is 300.', $responded['response']['message'] ?? '' );
+	}
+
+	public function test_ask_user_declaration_schema_caps_text_length(): void {
+		$declaration = HarnessTools::askUserDeclaration();
+		$schema      = $declaration instanceof FunctionDeclaration
+			? $declaration->getParameters()
+			: $declaration['inputSchema'];
+		$schema      = (array) $schema;
+
+		$this->assertSame( HarnessTools::MAX_TEXT_CHARS, $schema['properties']['text']['maxLength'] ?? null );
 	}
 
 	public function test_invalid_payload_counts_as_a_tool_call_for_the_budget(): void {
@@ -476,7 +491,7 @@ final class AskUserParkTest extends TestCase {
 					'call_q',
 					HarnessTools::FUNCTION_NAME,
 					array(
-						'text'      => str_repeat( 'x', 301 ),
+						'text'      => str_repeat( 'x', 376 ),
 						'rationale' => 'Too long.',
 					)
 				)
@@ -501,7 +516,9 @@ final class AskUserParkTest extends TestCase {
 
 		$this->assertIsArray( $result );
 		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
-		$this->assertSame( array( 'error' => HarnessTools::ERROR_INVALID_QUESTION ), $responded['response'] ?? null );
+		$this->assertSame( HarnessTools::ERROR_INVALID_QUESTION, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid ask-user call: ', $responded['response']['message'] ?? '' );
+		$this->assertStringContainsString( 'rationale', $responded['response']['message'] ?? '' );
 	}
 
 	// ------------------------------------------------------------------

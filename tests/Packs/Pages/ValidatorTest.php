@@ -11,7 +11,7 @@
  *
  * Covers EVERY S10 refusal code — invalid_markup | unknown_block |
  * disallowed_markup | decorative_color | unresolved_placeholder |
- * unknown_pattern | slot_count | block_mismatch |
+ * missing_alt (0.3 quality feature 4) | unknown_pattern | slot_count | block_mismatch |
  * page_shape (pattern_count, hero_first, max_cta, max_repeat) — plus the step-5
  * mutations and the stored-XSS payloads the pack must refuse.
  *
@@ -69,7 +69,7 @@ final class ValidatorTest extends TestCase {
 		return implode( "\n\n", $parts );
 	}
 
-	private function errorCode( true|WP_Error $result ): ?string {
+	private function errorCode( bool|WP_Error $result ): ?string {
 		return is_wp_error( $result ) ? $result->get_error_code() : null;
 	}
 
@@ -78,7 +78,7 @@ final class ValidatorTest extends TestCase {
 	 */
 	private function pageWithPayload( string $payload ): string {
 		$section = str_replace(
-			'<p>One short paragraph that makes a single concrete point.</p>',
+			'<p>Open with the point a visitor came for: what this is, who it suits and what they get from it. Use the business\'s own facts, such as its services, place, hours and people, and name them exactly.</p>',
 			'<p>' . $payload . '</p>',
 			$this->markup( 'text-section' )
 		);
@@ -120,12 +120,6 @@ final class ValidatorTest extends TestCase {
 	}
 
 	// --- Step 2: unknown_block --------------------------------------------
-
-	public function test_unknown_block_refused_for_core_image(): void {
-		$content = '<!-- wp:image --><figure class="wp-block-image"><img src="x" alt=""/></figure><!-- /wp:image -->';
-
-		$this->assertSame( 'unknown_block', $this->errorCode( $this->validator->validate( $content ) ) );
-	}
 
 	public function test_unknown_block_refused_for_non_core_block(): void {
 		$content = '<!-- wp:foo/bar --><div></div><!-- /wp:foo/bar -->';
@@ -237,6 +231,179 @@ final class ValidatorTest extends TestCase {
 			'spaced'      => array( '{{ cta label }}' ),
 			'digits'      => array( '{{123}}' ),
 		);
+	}
+
+	// --- Step 3b (0.3 quality feature 4): missing_alt ----------------------
+
+	public function test_missing_alt_refused_for_image_with_no_alt(): void {
+		// 0.3 quality feature 4: `core/image` is no longer a bare
+		// `unknown_block` — it is admitted, but only with alt text. This
+		// content never matches a pattern shape either, but the alt check
+		// (step 3b) runs BEFORE pattern identity (step 4), so an image with
+		// no alt is refused as `missing_alt`, not `unknown_pattern`.
+		$content = '<!-- wp:image --><figure class="wp-block-image"><img src="https://example.test/x.jpg" alt=""/></figure><!-- /wp:image -->';
+
+		$this->assertSame( 'missing_alt', $this->errorCode( $this->validator->validate( $content ) ) );
+	}
+
+	// --- 0.3 quality fix: cover-hero / media-text ---------------------------
+
+	public function test_cover_hero_and_media_text_validate_as_a_page(): void {
+		$content = $this->page( 'cover-hero', 'media-text' );
+
+		$this->assertTrue( $this->validator->validate( $content ) );
+	}
+
+	public function test_media_text_without_a_size_slug_is_accepted(): void {
+		// A live run omitted `mediaSizeSlug` (and so the `size-full` class);
+		// both only name which image size was picked, not the pattern.
+		$content = str_replace(
+			array( ',"mediaSizeSlug":"full"', ' size-full' ),
+			'',
+			$this->page( 'cover-hero', 'media-text' )
+		);
+		$this->assertStringNotContainsString( 'mediaSizeSlug', $content );
+
+		$this->assertTrue( $this->validator->clean( $content )['ok'] );
+	}
+
+	public function test_a_preset_css_variable_written_with_a_pipe_is_rewritten_not_refused(): void {
+		$content = str_replace( 'var(--wp--preset--spacing--60)', 'var(--wp--preset--spacing|60)', $this->page( 'hero', 'text-section' ) );
+		$this->assertStringContainsString( 'spacing|60)', $content );
+
+		$clean = $this->validator->clean( $content );
+
+		$this->assertTrue( $clean['ok'] );
+		$this->assertStringNotContainsString( 'spacing|60)', $clean['content'] );
+		$this->assertStringContainsString( 'var(--wp--preset--spacing--60)', $clean['content'] );
+	}
+
+	public function test_a_cover_hero_with_a_focal_point_is_accepted(): void {
+		// core/cover's own save() output for a chosen focal point.
+		$content = str_replace(
+			array( '"url":"https://example.test/photo.jpg",', 'data-object-fit="cover"' ),
+			array( '"focalPoint":{"x":0.5,"y":0.3},"url":"https://example.test/photo.jpg",', 'style="object-position:50% 30%" data-object-fit="cover" data-object-position="50% 30%"' ),
+			$this->page( 'cover-hero', 'text-section' )
+		);
+		$this->assertStringContainsString( 'data-object-position', $content );
+		$this->assertStringContainsString( '"focalPoint"', $content );
+
+		$this->assertTrue( $this->validator->validate( $content ) );
+	}
+
+	public function test_a_data_attribute_other_than_the_focal_point_is_still_refused_on_a_cover_image(): void {
+		$content = str_replace( 'data-object-fit="cover"', 'data-object-fit="cover" data-track="1"', $this->page( 'cover-hero', 'text-section' ) );
+
+		$this->assertSame( 'disallowed_markup', $this->errorCode( $this->validator->validate( $content ) ) );
+	}
+
+	/**
+	 * Sets a cover-hero's `dimRatio` (and the derived `has-background-dim[-N]`
+	 * classes) to an arbitrary value, mirroring `@wordpress/block-library`'s
+	 * own `dimRatioToClass()`: no numbered class at 50, a numbered class
+	 * (rounded to the nearest 10) alongside the bare class otherwise.
+	 */
+	private function withCoverDimRatio( string $content, int $ratio ): string {
+		$content = (string) preg_replace( '/"dimRatio":\d+/', '"dimRatio":' . $ratio, $content, 1 );
+		$content = (string) preg_replace( '/has-background-dim-\d+\s*/', '', $content, 1 );
+		if ( 50 !== $ratio ) {
+			$rounded = 10 * (int) round( $ratio / 10 );
+			$content = (string) preg_replace( '/has-background-dim"/', 'has-background-dim-' . $rounded . ' has-background-dim"', $content, 1 );
+		}
+
+		return $content;
+	}
+
+	// --- 0.3 quality fix (hero readability): dimRatio enforcement -----------
+
+	public function test_a_cover_with_a_low_dim_ratio_is_raised_to_the_minimum_not_refused(): void {
+		$content = $this->withCoverDimRatio( $this->page( 'cover-hero', 'text-section' ), 20 );
+		$this->assertStringContainsString( '"dimRatio":20', $content );
+
+		$clean = $this->validator->clean( $content );
+
+		$this->assertTrue( $clean['ok'], is_wp_error( $clean['wp_error'] ) ? $clean['wp_error']->get_error_message() : '' );
+		$this->assertStringContainsString( '"dimRatio":50', $clean['content'] );
+		$this->assertStringNotContainsString( 'dimRatio":20', $clean['content'] );
+		$this->assertStringNotContainsString( 'has-background-dim-20', $clean['content'] );
+		$this->assertStringContainsString( 'has-background-dim"', $clean['content'] );
+	}
+
+	public function test_the_shipped_cover_hero_uses_a_stronger_default_dim_ratio(): void {
+		$markup = $this->markup( 'cover-hero' );
+
+		$this->assertSame( 1, preg_match( '/"dimRatio":(\d+)/', $markup, $matches ) );
+		$this->assertGreaterThanOrEqual( 60, (int) $matches[1], 'the shipped hero shell should default to a stronger overlay than the bare minimum' );
+	}
+
+	public function test_a_cover_with_explicit_dark_text_keeps_its_low_dim_ratio(): void {
+		// A theme pattern may hand-author a dark preset-colour class directly
+		// in its markup without a matching `textColor` comment attribute —
+		// {@see Validator::checkDecorativeColor()} only refuses a colour
+		// ATTRIBUTE, never a literal class already baked into the HTML — so
+		// this content still validates, and the dark text needs no darker
+		// overlay to stay readable.
+		$content = $this->withCoverDimRatio( $this->page( 'cover-hero', 'text-section' ), 20 );
+		$content = str_replace(
+			'<h1 class="wp-block-heading has-text-align-center">',
+			'<h1 class="wp-block-heading has-text-align-center has-black-color has-text-color">',
+			$content
+		);
+
+		$clean = $this->validator->clean( $content );
+
+		$this->assertTrue( $clean['ok'], is_wp_error( $clean['wp_error'] ) ? $clean['wp_error']->get_error_message() : '' );
+		$this->assertStringContainsString( '"dimRatio":20', $clean['content'] );
+		$this->assertStringContainsString( 'has-background-dim-20', $clean['content'] );
+	}
+
+	public function test_missing_alt_refused_for_cover_hero_with_no_alt(): void {
+		// `core/cover` stores alt TWICE — the block's own `alt` comment
+		// attribute and the rendered `<img alt="...">` — both must be blanked
+		// or the JSON copy alone satisfies {@see ImageAlt::missing()}.
+		$blanked = str_replace(
+			array( '"alt":"A descriptive alt"', 'alt="A descriptive alt"' ),
+			array( '"alt":""', 'alt=""' ),
+			$this->markup( 'cover-hero' )
+		);
+		$content = $blanked . "\n\n" . $this->markup( 'text-section' );
+
+		$this->assertSame( 'missing_alt', $this->errorCode( $this->validator->validate( $content ) ) );
+	}
+
+	public function test_missing_alt_refused_for_media_text_with_no_alt(): void {
+		$content = $this->markup( 'hero' ) . "\n\n"
+			. str_replace( 'alt="A descriptive alt"', 'alt=""', $this->markup( 'media-text' ) );
+
+		$this->assertSame( 'missing_alt', $this->errorCode( $this->validator->validate( $content ) ) );
+	}
+
+	/** `cover-hero` is an alternative hero: it satisfies "hero first" on its own. */
+	public function test_cover_hero_alone_satisfies_hero_first(): void {
+		$content = $this->page( 'cover-hero', 'text-section' );
+
+		$this->assertTrue( $this->validator->validate( $content ) );
+	}
+
+	/** A page that leads with `text-section` before any hero is still refused. */
+	public function test_cover_hero_not_first_still_refuses_hero_first(): void {
+		$content = $this->page( 'text-section', 'cover-hero' );
+		$result  = $this->validator->validate( $content );
+
+		$this->assertSame( 'page_shape', $this->errorCode( $result ) );
+		$this->assertSame( 'hero_first', is_wp_error( $result ) ? $result->get_error_data()['rule'] : null );
+	}
+
+	public function test_missing_alt_refused_for_image_nested_inside_a_pattern(): void {
+		// An image slipped inside an otherwise-valid pattern (e.g. a group) is
+		// still caught — the check walks the WHOLE tree, not just top-level
+		// blocks.
+		$content = '<!-- wp:group {"metadata":{"name":"senroflux/text-section"}} --><div class="wp-block-group">'
+			. '<!-- wp:heading --><h2>Title</h2><!-- /wp:heading -->'
+			. '<!-- wp:image --><figure class="wp-block-image"><img src="https://example.test/x.jpg" alt=""/></figure><!-- /wp:image -->'
+			. '</div><!-- /wp:group -->';
+
+		$this->assertSame( 'missing_alt', $this->errorCode( $this->validator->validate( $content ) ) );
 	}
 
 	// --- Step 4: unknown_pattern, slot_count, page_shape ------------------
@@ -360,10 +527,23 @@ final class ValidatorTest extends TestCase {
 		$this->assertSame( 3, $result->get_error_data()['seen'] );
 	}
 
-	public function test_text_section_may_repeat_beyond_twice(): void {
+	public function test_text_section_may_repeat_beyond_twice_when_not_back_to_back(): void {
 		$this->assertTrue(
-			$this->validator->validate( $this->page( 'hero', 'text-section', 'text-section', 'text-section' ) )
+			$this->validator->validate( $this->page( 'hero', 'text-section', 'text-section', 'feature-grid', 'text-section' ) )
 		);
+	}
+
+	/**
+	 * Live batch 2026-09-29-final4 scenario 1-1: a Services page written as
+	 * raw markup was a hero and five text-sections in a row (Visual 2); the
+	 * layouts-path check never saw it.
+	 */
+	public function test_page_shape_refused_for_three_text_sections_in_a_row(): void {
+		$result = $this->validator->validate( $this->page( 'hero', 'text-section', 'text-section', 'text-section', 'cta' ) );
+
+		$this->assertSame( 'page_shape', $this->errorCode( $result ) );
+		$this->assertSame( 'text_run', $result->get_error_data()['rule'] );
+		$this->assertStringContainsString( 'patterns 2 to 4', $result->get_error_message() );
 	}
 
 	// --- A valid page ------------------------------------------------------
@@ -618,5 +798,331 @@ final class ValidatorTest extends TestCase {
 
 		ThemePatterns::resetCache();
 		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'] );
+	}
+
+	/**
+	 * @return array<string,mixed>
+	 */
+	private function loadThemeFixture( string $slug ): array {
+		$path = dirname( __DIR__, 2 ) . '/ThemePatterns/' . $slug . '.php';
+		$raw  = (string) file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local test fixture, not a remote URL.
+
+		$header = array();
+		foreach ( array( 'Title', 'Slug', 'Description', 'Categories' ) as $key ) {
+			if ( preg_match( '/^\s*\*\s*' . preg_quote( $key, '/' ) . ':\s*(.+)$/mi', $raw, $m ) ) {
+				$header[ $key ] = trim( $m[1] );
+			}
+		}
+
+		ob_start();
+		include $path;
+		$content = trim( (string) ob_get_clean() );
+
+		$entry = array(
+			'name'        => $header['Slug'] ?? $slug,
+			'title'       => $header['Title'] ?? $slug,
+			'description' => $header['Description'] ?? '',
+			'content'     => $content,
+			'filePath'    => $path,
+		);
+
+		if ( isset( $header['Categories'] ) ) {
+			$entry['categories'] = array_map( 'trim', explode( ',', $header['Categories'] ) );
+		}
+
+		return $entry;
+	}
+
+	/**
+	 * 0.3 quality fix 1 (theme patterns first): a page built almost entirely
+	 * from the active theme's OWN patterns — a real banner as the hero, two
+	 * unrelated real content patterns, and one real dedicated CTA pattern —
+	 * still passes the S11 page-shape rules (hero first, at most one cta, 2–8
+	 * patterns, no repeats). Uses the same real Twenty Twenty-Five fixtures
+	 * as {@see \Specflux\SenroFlux\Tests\Packs\Pages\CopyRulesCeilingTest}.
+	 * `pricing-3-col` is included deliberately: it carries `banner,
+	 * call-to-action, services` all at once, so it exercises the same
+	 * multi-category fix as
+	 * {@see \Specflux\SenroFlux\Tests\Packs\Pages\ThemePatternsTest::test_a_pattern_with_multiple_categories_is_neither_hero_nor_cta()}
+	 * inside a real page (it must NOT count as a second hero or a second
+	 * cta alongside `banner-intro`/`cta-centered-heading`).
+	 * `testimonials-6-col` is left out: its shipped CSS `var(--...)` value
+	 * round-trips differently through this suite's `serialize_blocks()`
+	 * stub (a test-double limitation, not a Validator bug — see
+	 * `tests/stubs/blocks.php`), which is orthogonal to this test's purpose.
+	 */
+	public function test_a_page_built_mostly_from_theme_patterns_passes_page_shape(): void {
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
+
+		$slugs = array( 'banner-intro', 'text-faqs', 'pricing-3-col', 'cta-centered-heading' );
+
+		$GLOBALS['senroflux_test_theme_patterns'] = array_map(
+			fn ( string $slug ) => $this->loadThemeFixture( $slug ),
+			$slugs
+		);
+		ThemePatterns::resetCache();
+		$GLOBALS['senroflux_test_stylesheet_dir'] = dirname( __DIR__, 2 ) . '/ThemePatterns';
+		$GLOBALS['senroflux_test_template_dir']   = dirname( __DIR__, 2 ) . '/ThemePatterns';
+
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$this->assertCount( 4, $vocabulary->themeDerived(), 'all four fixtures must be eligible' );
+
+		$page = implode(
+			"\n\n",
+			array_map(
+				static fn ( array $fixture ): string => $fixture['content'],
+				$GLOBALS['senroflux_test_theme_patterns']
+			)
+		);
+
+		$result = $validator->clean( $page );
+
+		$this->assertTrue( $result['ok'], $result['wp_error']?->get_error_message() ?? '' );
+
+		ThemePatterns::resetCache();
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'], $GLOBALS['senroflux_test_template_dir'] );
+	}
+
+	/**
+	 * 0.3 quality feature 4, end to end: a theme pattern's own image slot,
+	 * filled with a NEW attachment (never the shipped sample's), passes the
+	 * pack's real Validator — the same block-shape match ({@see BlockShells}'s
+	 * `core/image` `id`-attribute exception) and the same alt-text gate
+	 * ({@see \Specflux\SenroFlux\Packs\Content\ImageAlt}) a live run's write
+	 * goes through.
+	 */
+	public function test_a_theme_patterns_image_slot_filled_with_a_new_attachment_passes_validation(): void {
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
+
+		$path = dirname( __DIR__, 2 ) . '/ThemePatterns/banner-about-book.php';
+		ob_start();
+		include $path; // Same technique CopyRulesCeilingTest/ThemePatternsTest use to render a fixture exactly as WP_Theme::get_block_patterns() would.
+		$content = trim( (string) ob_get_clean() );
+
+		$GLOBALS['senroflux_test_theme_patterns'] = array(
+			array(
+				'name'        => 'twentytwentyfive/banner-about-book',
+				'title'       => 'Banner with book description',
+				'description' => 'Banner with book description and accompanying image for promotion.',
+				'content'     => $content,
+				'filePath'    => dirname( __DIR__, 2 ) . '/ThemePatterns/banner-about-book.php',
+				'categories'  => array( 'banner' ),
+			),
+		);
+		ThemePatterns::resetCache();
+		$GLOBALS['senroflux_test_stylesheet_dir'] = dirname( __DIR__, 2 ) . '/ThemePatterns';
+
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$slots  = ThemePatterns::textSlots( $content );
+		$values = array();
+		foreach ( $slots as $slot ) {
+			$values[ $slot['index'] ] = 'image' === $slot['kind']
+				? 'https://example.test/wp-content/uploads/new-cover.jpg||A new book cover'
+				: 'A new short heading';
+		}
+
+		$filled = ThemePatterns::fill( $content, $values );
+		$this->assertTrue( $filled['ok'] );
+
+		// A page needs 2–8 patterns (page_shape); the image pattern alone
+		// (hero-like: `is_hero` true, per its `banner` category) is joined by
+		// a second, unrelated curated pattern.
+		$page   = $filled['content'] . "\n\n" . $this->markup( 'text-section' );
+		$result = $validator->clean( $page );
+
+		$this->assertTrue( $result['ok'], $result['wp_error']?->get_error_message() ?? '' );
+		$this->assertStringContainsString( 'new-cover.jpg', $result['content'] );
+		$this->assertStringContainsString( 'A new book cover', $result['content'] );
+
+		ThemePatterns::resetCache();
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'] );
+	}
+
+	// --- D3a (S4): theme-shipped colour ----------------------------------
+
+	/**
+	 * Registers the REAL Ollie fixture `tests/ThemePatterns/ollie/numbers-stacked.php`
+	 * (GPL, same licence as this plugin; original header kept for
+	 * provenance — `.scratch/senroflux-design/themes/ollie/patterns/numbers-stacked.php`
+	 * from the S3 scan) as the active theme's own pattern, under Ollie's
+	 * real palette (`.scratch/senroflux-design/theme-scan.md`'s ollie
+	 * section) rather than the stub's Twenty Twenty-Five default — this
+	 * pattern's shipped `backgroundColor`/`textColor` (`primary`/`base`/
+	 * `primary-accent`) are Ollie slugs, not Twenty Twenty-Five ones.
+	 *
+	 * @return array<string,mixed> The registered pattern's own fixture entry (`content` included).
+	 */
+	private function registerOllieNumbersStacked(): array {
+		require_once dirname( __DIR__, 2 ) . '/stubs/theme-patterns.php';
+
+		$path = dirname( __DIR__, 2 ) . '/ThemePatterns/ollie/numbers-stacked.php';
+		ob_start();
+		include $path;
+		$content = trim( (string) ob_get_clean() );
+
+		$fixture = array(
+			'name'        => 'ollie/numbers-stacked',
+			'title'       => 'Numbers Stacked',
+			'description' => 'Display impressive numbers with a short description',
+			'content'     => $content,
+			'filePath'    => $path,
+			'categories'  => array( 'ollie/features' ),
+		);
+
+		$GLOBALS['senroflux_test_theme_patterns']  = array( $fixture );
+		$GLOBALS['senroflux_test_stylesheet_dir']  = dirname( __DIR__, 2 ) . '/ThemePatterns/ollie';
+		$GLOBALS['senroflux_test_template_dir']    = dirname( __DIR__, 2 ) . '/ThemePatterns/ollie';
+		$GLOBALS['senroflux_test_global_settings'] = array(
+			'color' => array(
+				'palette'   => array(
+					array( 'slug' => 'primary' ),
+					array( 'slug' => 'primary-accent' ),
+					array( 'slug' => 'primary-alt' ),
+					array( 'slug' => 'primary-alt-accent' ),
+					array( 'slug' => 'main' ),
+					array( 'slug' => 'main-accent' ),
+					array( 'slug' => 'base' ),
+					array( 'slug' => 'secondary' ),
+					array( 'slug' => 'tertiary' ),
+					array( 'slug' => 'border-light' ),
+					array( 'slug' => 'border-dark' ),
+				),
+				'gradients' => array(),
+			),
+		);
+		ThemePatterns::resetCache();
+
+		return $fixture;
+	}
+
+	private function teardownOllieFixture(): void {
+		ThemePatterns::resetCache();
+		unset(
+			$GLOBALS['senroflux_test_theme_patterns'],
+			$GLOBALS['senroflux_test_stylesheet_dir'],
+			$GLOBALS['senroflux_test_template_dir'],
+			$GLOBALS['senroflux_test_global_settings']
+		);
+	}
+
+	/**
+	 * @return array<int,string>
+	 */
+	private function ollieNumbersStackedValues( array $slots ): array {
+		$values = array();
+		foreach ( $slots as $slot ) {
+			$values[ $slot['index'] ] = 'New short copy';
+		}
+
+		return $values;
+	}
+
+	/**
+	 * D3a (S4): the pattern's own shipped `backgroundColor`/`textColor`
+	 * (`primary`/`base` on the outer group) survive a slot fill —
+	 * {@see ThemePatterns::fill()} never touches a block's comment
+	 * attributes, only rich-text/url/image slots — and the cleaned page
+	 * still carries them afterwards; `Validator::clean()` does not refuse
+	 * them as `decorative_color` even though the block was never part of
+	 * the curated vocabulary to begin with.
+	 */
+	public function test_theme_pattern_shipped_colour_survives_a_slot_fill_and_clean(): void {
+		$fixture = $this->registerOllieNumbersStacked();
+
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+		$this->assertNotEmpty( $vocabulary->themeDerived(), 'the Ollie fixture must be eligible under its own palette' );
+
+		$slots  = ThemePatterns::textSlots( $fixture['content'] );
+		$values = $this->ollieNumbersStackedValues( $slots );
+
+		$filled = ThemePatterns::fill( $fixture['content'], $values );
+		$this->assertTrue( $filled['ok'], $filled['wp_error']?->get_error_message() ?? '' );
+		$this->assertStringContainsString( '"backgroundColor":"primary","textColor":"base"', $filled['content'], 'fill() must never touch a comment colour attribute' );
+
+		$page   = $this->markup( 'hero' ) . "\n\n" . $filled['content'];
+		$result = $validator->clean( $page );
+
+		$this->assertTrue( $result['ok'], $result['wp_error']?->get_error_message() ?? '' );
+		$this->assertStringContainsString( '"backgroundColor":"primary","textColor":"base"', $result['content'] );
+		$this->assertStringContainsString( 'has-primary-background-color', $result['content'] );
+		$this->assertStringContainsString( '"textColor":"primary-accent"', $result['content'] );
+
+		$this->teardownOllieFixture();
+	}
+
+	/**
+	 * D3a (S4): `decorative_color` still refuses a colour the model writes
+	 * itself, even on a block inside a pattern the write was otherwise
+	 * recognised as — here the shipped outer `backgroundColor` (`primary`)
+	 * is changed to another value that IS a valid Ollie preset
+	 * (`primary-accent`), so this pins that admission is scoped to the
+	 * EXACT shipped value at that position, not "any preset slug is fine
+	 * because it's a theme pattern".
+	 */
+	public function test_theme_pattern_colour_changed_by_the_model_is_still_refused(): void {
+		$fixture = $this->registerOllieNumbersStacked();
+
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$slots  = ThemePatterns::textSlots( $fixture['content'] );
+		$values = $this->ollieNumbersStackedValues( $slots );
+
+		$filled = ThemePatterns::fill( $fixture['content'], $values );
+		$this->assertTrue( $filled['ok'] );
+
+		$changed = str_replace( '"backgroundColor":"primary","textColor":"base"', '"backgroundColor":"primary-accent","textColor":"base"', $filled['content'] );
+		$this->assertNotSame( $filled['content'], $changed, 'the replacement must actually apply' );
+
+		$page   = $this->markup( 'hero' ) . "\n\n" . $changed;
+		$result = $validator->clean( $page );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'decorative_color', $result['wp_error']->get_error_code() );
+		$this->assertSame( 'backgroundColor', $result['wp_error']->get_error_data()['attr'] );
+
+		$this->teardownOllieFixture();
+	}
+
+	/**
+	 * D3a (S4): a colour the model adds on a block the theme pattern shipped
+	 * with NO colour attribute at all is refused the same way — each
+	 * "Feature" group ships plain, so giving the first one a `backgroundColor`
+	 * (even a real Ollie preset) is still a model-written colour, not a
+	 * theme-shipped one.
+	 */
+	public function test_theme_pattern_colour_added_where_none_was_shipped_is_still_refused(): void {
+		$fixture = $this->registerOllieNumbersStacked();
+
+		$vocabulary = new Vocabulary();
+		$validator  = new Validator( $vocabulary );
+
+		$slots  = ThemePatterns::textSlots( $fixture['content'] );
+		$values = $this->ollieNumbersStackedValues( $slots );
+
+		$filled = ThemePatterns::fill( $fixture['content'], $values );
+		$this->assertTrue( $filled['ok'] );
+
+		$changed = str_replace(
+			'{"metadata":{"name":"Feature"},"style":{"spacing":{"blockGap":"var:preset|spacing|small"}},"layout":{"type":"constrained"}}',
+			'{"metadata":{"name":"Feature"},"style":{"spacing":{"blockGap":"var:preset|spacing|small"}},"backgroundColor":"main","layout":{"type":"constrained"}}',
+			$filled['content'],
+			$count
+		);
+		$this->assertGreaterThan( 0, $count, 'the replacement must actually apply' );
+
+		$page   = $this->markup( 'hero' ) . "\n\n" . $changed;
+		$result = $validator->clean( $page );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'decorative_color', $result['wp_error']->get_error_code() );
+		$this->assertSame( 'backgroundColor', $result['wp_error']->get_error_data()['attr'] );
+
+		$this->teardownOllieFixture();
 	}
 }

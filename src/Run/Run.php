@@ -72,6 +72,13 @@ final class Run {
 		 * afterwards. Null for an ordinary run.
 		 */
 		public readonly ?int $followUpOf = null,
+		/**
+		 * The per-run model pin, resolved once at start() and never
+		 * changed afterwards — like {@see $gateMode}. Both null means
+		 * automatic selection (the AI Client chooses).
+		 */
+		public readonly ?string $modelProvider = null,
+		public readonly ?string $modelId = null,
 	) {
 	}
 
@@ -117,6 +124,8 @@ final class Run {
 			gateMode: GateMode::tryFrom( (string) ( $row['gate_mode'] ?? 'agent_safety' ) ) ?? GateMode::AgentSafety,
 			withheldRoles: is_array( $withheld ) ? array_values( array_filter( $withheld, 'is_string' ) ) : array(),
 			followUpOf: isset( $row['follow_up_of'] ) && '' !== (string) $row['follow_up_of'] ? (int) $row['follow_up_of'] : null,
+			modelProvider: isset( $row['model_provider'] ) && is_string( $row['model_provider'] ) && '' !== $row['model_provider'] ? $row['model_provider'] : null,
+			modelId: isset( $row['model_id'] ) && is_string( $row['model_id'] ) && '' !== $row['model_id'] ? $row['model_id'] : null,
 		);
 	}
 
@@ -152,6 +161,8 @@ final class Run {
 			'gate_mode'             => $this->gateMode->value,
 			'withheld_roles_json'   => (string) wp_json_encode( $this->withheldRoles ),
 			'follow_up_of'          => $this->followUpOf,
+			'model_provider'        => $this->modelProvider,
+			'model_id'              => $this->modelId,
 		);
 	}
 }

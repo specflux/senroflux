@@ -160,15 +160,24 @@ final class SuggestBriefRunnerTest extends TestCase {
 		);
 		$this->assertNotEmpty( $error_results, 'the 4th call gets a tool_result error' );
 
-		$found_limit = false;
+		$found_limit   = false;
+		$limit_message = null;
 		foreach ( $error_results as $step ) {
 			foreach ( (array) ( $step->messageArray['parts'] ?? array() ) as $part ) {
-				if ( ( $part['functionResponse']['response']['error'] ?? null ) === SuggestBriefTool::ERROR_SUGGESTION_LIMIT ) {
-					$found_limit = true;
+				$response = $part['functionResponse']['response'] ?? array();
+				if ( ( $response['error'] ?? null ) === SuggestBriefTool::ERROR_SUGGESTION_LIMIT ) {
+					$found_limit   = true;
+					$limit_message = $response['message'] ?? null;
 				}
 			}
 		}
 		$this->assertTrue( $found_limit, 'the 4th suggestion is refused with suggestion_limit' );
+
+		// 0.3 quality fix 4 (live run: 13 calls in a row against this same
+		// refusal) — the bare code alone told the model nothing to act on;
+		// the message must plainly say to stop calling it.
+		$this->assertSame( SuggestBriefTool::LIMIT_MESSAGE, $limit_message );
+		$this->assertStringContainsString( 'not call suggest-brief-addition again', $limit_message );
 	}
 
 	public function test_a_suggestion_matching_a_dismissed_one_is_refused_with_suggestion_dismissed(): void {
@@ -231,5 +240,34 @@ final class SuggestBriefRunnerTest extends TestCase {
 			}
 		}
 		$this->assertTrue( $found_dismissed, 'a normalised repeat of a dismissed suggestion is refused' );
+	}
+
+	/**
+	 * Live run 2026-09-28-fix3 scenario 3-1: three refusals answered only
+	 * `invalid_suggestion`, and the model resubmitted the same 300-character
+	 * text each time.
+	 */
+	public function test_an_over_length_suggestion_is_refused_with_its_length_and_the_limit(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::suggestTurn( 'call_1', str_repeat( 's', 305 ) );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$this->runner->tick( $run_id, 0, null );
+
+		$responses = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			$response = $step->messageArray['parts'][0]['functionResponse']['response'] ?? null;
+			if ( StepKind::ToolResult === $step->kind && is_array( $response ) ) {
+				$responses[] = $response;
+			}
+		}
+
+		$this->assertCount( 1, $responses );
+		$this->assertSame( SuggestBriefTool::ERROR_INVALID, $responses[0]['error'] ?? null );
+		$this->assertStringContainsString( '"text" is 305 characters; the limit is 200.', $responses[0]['message'] ?? '' );
+	}
+
+	public function test_a_suggestion_slightly_over_the_advertised_limit_is_accepted(): void {
+		$this->assertIsArray( SuggestBriefTool::validate( array( 'text' => str_repeat( 's', 230 ) ) ) );
 	}
 }

@@ -9,7 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Http;
 
+use Specflux\SenroFlux\Admin\RunsScreen;
 use Specflux\SenroFlux\Admin\ScreenCapability;
+use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Plugin;
 use WP_Error;
 
@@ -34,7 +36,18 @@ final class Ajax {
 		add_action( 'wp_ajax_senroflux_get', array( $this, 'handleGet' ) );
 	}
 
-	/** POST consumer, goal, budget?. Allow-list comes from ConsumerPolicy. */
+	/**
+	 * POST consumer, goal, pack?, budget?. Allow-list comes from ConsumerPolicy.
+	 *
+	 * Runs-pack fix: the Runs screen's own consumer ({@see RunsScreen::CONSUMER})
+	 * has NO allow-list of its own without a pack — {@see RunsScreen::registerAdminConsumer()}
+	 * unions the registered packs' allow-lists, but `start()` only narrows to
+	 * ONE pack's verb map when a pack is actually given. A pack-less start
+	 * from that consumer would carry an empty verb map, so every read/plan
+	 * call is refused fail-closed and the run can never progress — refused
+	 * outright (400) rather than started to deadlock. Other consumers may
+	 * still start pack-less (a direct-allow run), unchanged.
+	 */
 	public function handleStart(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -46,13 +59,34 @@ final class Ajax {
 		}
 
 		$consumer = sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) );
+		$pack     = sanitize_text_field( wp_unslash( $_POST['pack'] ?? '' ) );
+
+		if ( RunsScreen::CONSUMER === $consumer && '' === $pack ) {
+			wp_send_json_error(
+				array(
+					'code'    => 'senroflux_bad_request',
+					'message' => __( 'Choose what to work on before starting a run.', 'senroflux' ),
+				),
+				400
+			);
+		}
+
+		// S7: the chosen pack's own default-budget overrides become the
+		// ceiling ConsumerPolicy clamps against, same as `RunsScreen::handleNewRun()`
+		// — otherwise a pack asking for a flat, high budget (the site pack)
+		// would be clamped straight back down to the generic consumer ceiling.
+		// An unknown pack name overrides nothing here; `start()` still refuses
+		// it with its own `pack_unknown` below.
+		$pack_obj              = '' !== $pack ? PackRegistry::fromFilters()->get( $pack ) : null;
+		$pack_budget_overrides = null !== $pack_obj ? $pack_obj->defaultBudget() : array();
 
 		// The budget arrives as a JSON body; a malformed payload degrades to
 		// the consumer's ceiling. `allow` is never read from the request.
 		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; ConsumerPolicy::resolve() validates each decoded field.
 		$policy     = ConsumerPolicy::resolve(
 			$consumer,
-			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true )
+			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ),
+			$pack_budget_overrides
 		);
 		if ( is_wp_error( $policy ) ) {
 			$this->respond( $policy );
@@ -60,11 +94,22 @@ final class Ajax {
 			return;
 		}
 
+		// Optional per-run model pin. An absent/blank field reads as
+		// null; start() itself refuses a half-specified pair or an
+		// unavailable one.
+		$model_provider = sanitize_text_field( wp_unslash( $_POST['model_provider'] ?? '' ) );
+		$model_id       = sanitize_text_field( wp_unslash( $_POST['model_id'] ?? '' ) );
+
 		$result = senroflux()->start(
 			$consumer,
 			sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) ),
 			$policy['allow'],
-			$policy['budget']
+			$policy['budget'],
+			'' !== $pack ? $pack : null,
+			null,
+			null,
+			'' !== $model_provider ? $model_provider : null,
+			'' !== $model_id ? $model_id : null
 		);
 
 		$this->respond( $result );

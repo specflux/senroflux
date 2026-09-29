@@ -259,4 +259,66 @@ final class FrontPageTest extends TestCase {
 		$this->assertIsArray( $second );
 		$this->assertSame( $home_b, $second['page_on_front']['id'] );
 	}
+
+	public function test_set_front_page_refuses_an_unknown_posts_page_without_writing_anything(): void {
+		update_option( 'show_on_front', 'posts' );
+		$new_home = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home',
+			)
+		);
+
+		$this->readAbility()->execute();
+
+		$result = $this->setAbility()->execute(
+			array(
+				'show_on_front'     => 'page',
+				'page_id'           => $new_home,
+				'page_for_posts_id' => 999999,
+			)
+		);
+
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertSame( 'not_found', $result->get_error_code() );
+		$this->assertSame( 'posts', get_option( 'show_on_front' ) );
+		$this->assertNotSame( $new_home, (int) get_option( 'page_on_front', 0 ) );
+
+		// Nothing landed, so a corrected retry is not refused as stale.
+		$retry = $this->setAbility()->execute(
+			array(
+				'show_on_front' => 'page',
+				'page_id'       => $new_home,
+			)
+		);
+		$this->assertIsArray( $retry );
+		$this->assertSame( $new_home, $retry['page_on_front']['id'] );
+	}
+
+	public function test_set_front_page_treats_a_zero_posts_page_as_none(): void {
+		update_option( 'show_on_front', 'posts' );
+		$new_home = wp_insert_post(
+			array(
+				'post_type'   => 'page',
+				'post_status' => 'publish',
+				'post_title'  => 'Home',
+			)
+		);
+
+		$this->readAbility()->execute();
+
+		$result = $this->setAbility()->execute(
+			array(
+				'show_on_front'     => 'page',
+				'page_id'           => $new_home,
+				'page_for_posts_id' => 0,
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'page', $result['show_on_front'] );
+		$this->assertSame( $new_home, $result['page_on_front']['id'] );
+		$this->assertNull( $result['page_for_posts'] );
+	}
 }

@@ -73,9 +73,58 @@ if ( ! function_exists( 'esc_attr_e' ) ) {
 	}
 }
 
+if ( ! function_exists( 'esc_attr_x' ) ) {
+	function esc_attr_x( string $text, string $context, string $domain = 'default' ): string {
+		unset( $context, $domain );
+
+		return htmlspecialchars( $text, ENT_QUOTES );
+	}
+}
+
 if ( ! function_exists( 'get_template_directory_uri' ) ) {
 	function get_template_directory_uri(): string {
 		return 'https://example.test/wp-content/themes/twentytwentyfive';
+	}
+}
+
+if ( ! function_exists( 'wp_get_global_settings' ) ) {
+	/**
+	 * Test-only stand-in for the global-settings palette/gradients lookup
+	 * (D3a, S4). `$GLOBALS['senroflux_test_global_settings']` holds the same
+	 * shape the real function returns for `array( 'color', 'palette' )` /
+	 * `array( 'color', 'gradients' )`: `array( 'color' => array( 'palette'
+	 * => list<array{slug:string,...}>, 'gradients' => list<array{slug:
+	 * string,...}> ) )`. Defaults to Twenty Twenty-Five's real merged
+	 * palette (`base`, `contrast`, `accent-1`..`accent-6`) and no gradients,
+	 * so a fixture that never opts in stays exactly as eligible as before
+	 * D3a.
+	 *
+	 * @param list<string> $path Setting path, e.g. `array( 'color', 'palette' )`.
+	 * @return array<string,mixed>
+	 */
+	function wp_get_global_settings( array $path = array() ): array {
+		$settings = $GLOBALS['senroflux_test_global_settings'] ?? array(
+			'color' => array(
+				'palette'   => array(
+					array( 'slug' => 'base' ),
+					array( 'slug' => 'contrast' ),
+					array( 'slug' => 'accent-1' ),
+					array( 'slug' => 'accent-2' ),
+					array( 'slug' => 'accent-3' ),
+					array( 'slug' => 'accent-4' ),
+					array( 'slug' => 'accent-5' ),
+					array( 'slug' => 'accent-6' ),
+				),
+				'gradients' => array(),
+			),
+		);
+
+		$value = $settings;
+		foreach ( $path as $segment ) {
+			$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : array();
+		}
+
+		return is_array( $value ) ? $value : array();
 	}
 }
 

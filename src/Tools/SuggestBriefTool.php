@@ -44,6 +44,17 @@ final class SuggestBriefTool {
 	public const ERROR_SUGGESTION_LIMIT     = 'suggestion_limit';
 	public const ERROR_SUGGESTION_DISMISSED = 'suggestion_dismissed';
 
+	/**
+	 * 0.3 quality fix (live run: 13 calls in a row, each refused
+	 * `suggestion_limit`): the tool stays DECLARED at the limit on purpose —
+	 * see {@see declarations()}'s own doc — so a further call is refused,
+	 * never hidden. What was missing is a message that tells the model
+	 * plainly what to do about it: the bare `suggestion_limit` code alone
+	 * gave it nothing to act on, so it just tried again. This rides along in
+	 * the tool_result's `message` field (see {@see \Specflux\SenroFlux\Run\Runner::appendSuggestBriefError()}).
+	 */
+	public const LIMIT_MESSAGE = 'This run has already reached its limit of accepted brief suggestions. Do not call suggest-brief-addition again this run — continue the goal with what you have, or finish.';
+
 	/** The function name exposed to the model (no `wpab__` prefix). */
 	public static function functionName(): string {
 		return self::FUNCTION_NAME;
@@ -120,11 +131,12 @@ final class SuggestBriefTool {
 		if ( ! is_string( $text ) || '' === trim( $text ) ) {
 			return $invalid( __( 'a non-empty "text" is required.', 'senroflux' ) );
 		}
-		if ( mb_strlen( $text ) > self::MAX_TEXT_CHARS ) {
+		if ( PlanTools::overCap( $text, self::MAX_TEXT_CHARS ) ) {
 			return $invalid(
 				sprintf(
-					/* translators: %d is the character cap. */
-					__( '"text" may be at most %d characters.', 'senroflux' ),
+					/* translators: %1$d is the actual character count, %2$d is the character cap. */
+					__( '"text" is %1$d characters; the limit is %2$d. Shorten it and suggest again.', 'senroflux' ),
+					mb_strlen( $text ),
 					self::MAX_TEXT_CHARS
 				)
 			);

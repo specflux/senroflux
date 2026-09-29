@@ -114,6 +114,18 @@ final class ValidatorTest extends TestCase {
 		$this->assertStringContainsString( '"name":"senroflux/closing-cta"', $result['content'] );
 	}
 
+	/**
+	 * Live run 2026-09-28-fix5 scenario 3-1: the model sent the closing CTA
+	 * as `align:full` with no layout, and TT25 rendered its heading, text and
+	 * button flush against the viewport edge.
+	 */
+	public function test_a_closing_cta_without_a_layout_is_given_the_constrained_layout(): void {
+		$result = $this->validator->clean( $this->ctaMarkup() );
+
+		$this->assertTrue( $result['ok'], $result['wp_error'] ? $result['wp_error']->get_error_code() : '' );
+		$this->assertStringContainsString( '"layout":{"type":"constrained"}', $result['content'] );
+	}
+
 	public function test_a_second_closing_cta_is_refused(): void {
 		$content = $this->ctaMarkup() . $this->ctaMarkup();
 		$result  = $this->validator->clean( $content );

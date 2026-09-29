@@ -207,11 +207,19 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 	}
 
 	/** {@inheritDoc} */
-	public function generateAltText( string $image_url ): string|WP_Error {
+	public function generateAltText( string $image_path ): string|WP_Error {
 		if ( ! function_exists( 'wp_ai_client_prompt' ) ) {
 			return new WP_Error(
 				'gateway_unavailable',
 				__( 'The WordPress AI Client is not available. WordPress 7.0+ is required.', 'senroflux' )
+			);
+		}
+
+		if ( ! is_file( $image_path ) ) {
+			return new WP_Error(
+				'attachment_file_missing',
+				__( 'The attachment file could not be found on disk.', 'senroflux' ),
+				array( 'status' => 404 )
 			);
 		}
 
@@ -221,12 +229,21 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 		try {
 			// Defect A (alt-text half): the prompt used to embed the image
 			// URL as TEXT, so the model never actually saw the image — it
-			// was asked to describe a URL string. `with_file()` is the real
-			// attachment call (PromptBuilder::withFile(), proxied via the
-			// WP wrapper's snake_case __call); it accepts a URL string
-			// directly and turns it into a remote {@see File} part.
+			// was asked to describe a URL string.
+			//
+			// 0.3 quality fix 3 (live run): fixing THAT surfaced a second bug
+			// — `with_file( $image_url )` attached the image as a REMOTE
+			// File (a URL the provider must itself download), which fails
+			// outright from localhost/staging/password-protected/intranet
+			// sites: "Bad Request (400) - Error while downloading file.
+			// Upstream status code: 407." `File`'s own constructor (see
+			// vendor/wordpress/php-ai-client/src/Files/DTO/File.php)
+			// detects a LOCAL file path and inlines it as base64 instead of
+			// treating it as a URL — passing the on-disk path here, never
+			// the public URL, is what actually attaches image DATA rather
+			// than a link the provider must fetch.
 			$prompt = __( 'Write concise, descriptive alt text (under 125 characters) for this image. Return only the alt text.', 'senroflux' );
-			$result = wp_ai_client_prompt( $prompt )->with_file( $image_url )->using_request_options( $request_options )->generate_text_result();
+			$result = wp_ai_client_prompt( $prompt )->with_file( $image_path )->using_request_options( $request_options )->generate_text_result();
 		} catch ( \Throwable $e ) {
 			return new WP_Error( 'gateway_failed', $e->getMessage() );
 		}

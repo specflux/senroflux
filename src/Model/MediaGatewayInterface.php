@@ -35,8 +35,13 @@ interface MediaGatewayInterface {
 	/**
 	 * Draft alt text for an already-uploaded attachment.
 	 *
-	 * @param string $image_url The attachment's public URL.
+	 * 0.3 quality fix 3: `$image_path` is a LOCAL, on-disk file path, never a
+	 * public URL — the caller sends it as inline (base64) data, which is the
+	 * only form that works from a site the model's provider cannot reach
+	 * itself (localhost, staging, password-protected, intranet).
+	 *
+	 * @param string $image_path Absolute path to the image file on disk.
 	 * @return string|WP_Error The drafted alt text, or a refusal.
 	 */
-	public function generateAltText( string $image_url ): string|WP_Error;
+	public function generateAltText( string $image_path ): string|WP_Error;
 }

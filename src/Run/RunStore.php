@@ -30,6 +30,8 @@ interface RunStore {
 	 * @param GateMode           $gate_mode Resolved at start (0.3 S3); never changes afterwards.
 	 * @param list<string>       $withheld_roles Role names withheld at start (0.3 S6); never changes afterwards.
 	 * @param int|null           $follow_up_of Source run id (0.3 S20); never changes afterwards.
+	 * @param string|null        $model_provider Pinned model provider id; null with $model_id null means automatic.
+	 * @param string|null        $model_id Pinned model id; never changes afterwards.
 	 */
 	public function createRun(
 		int $user_id,
@@ -42,7 +44,9 @@ interface RunStore {
 		?string $content_locale = null,
 		GateMode $gate_mode = GateMode::AgentSafety,
 		array $withheld_roles = array(),
-		?int $follow_up_of = null
+		?int $follow_up_of = null,
+		?string $model_provider = null,
+		?string $model_id = null
 	): int;
 
 	/**

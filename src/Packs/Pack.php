@@ -392,6 +392,20 @@ abstract class Pack {
 	}
 
 	/**
+	 * The read counterpart of {@see objectIdForWrite()}: the id a Tier-0 read
+	 * just read, for a read that takes no id argument (a singleton). Null
+	 * (the base) = the harness reads the id from the call's args.
+	 *
+	 * @param string              $verb The pack verb.
+	 * @param array<string,mixed> $args The call's args.
+	 */
+	public function objectIdForRead( string $verb, array $args ): ?string {
+		unset( $verb, $args );
+
+		return null;
+	}
+
+	/**
 	 * role => required WordPress capability (0.3 S6). A role absent from this
 	 * map, or mapped to `''`, needs no capability of its own beyond whatever
 	 * `runCapability()`/the ability's own permission callback already checks
@@ -557,7 +571,9 @@ abstract class Pack {
 	 * (see {@see \Specflux\SenroFlux\Run\Budget::defaults()}). The base
 	 * returns an empty table — no override — which is what keeps every
 	 * pre-0.3 pack's budget byte-for-byte unchanged; the site pack (stage 7)
-	 * is the first to override this with its own flat-and-high table.
+	 * was the first to override this with its own flat-and-high table, and
+	 * the pages pack (0.3 quality fix) now overrides it too, once its own
+	 * runs started doing image work the shipped table wasn't sized for.
 	 *
 	 * @return array<string,int>
 	 */
@@ -570,10 +586,63 @@ abstract class Pack {
 	 * the pages pack contributes `pages/copy-rules` (rendered), `pages/layout-rules`
 	 * and `pages/content-language` (S11/S15, stage 8).
 	 *
+	 * @param bool $images_available 0.3 quality fix (images budget 0): false
+	 *                                when the run's `images` budget is 0 — a
+	 *                                pack whose skill bodies mention
+	 *                                media-generate/generate-image must omit
+	 *                                that mention entirely rather than
+	 *                                pointing the model at a tool the run's
+	 *                                surface has already withheld (see
+	 *                                {@see \Specflux\SenroFlux\Tools\ToolRegistry::forRun()}).
 	 * @return list<Skill>
 	 */
-	public function skills(): array {
+	public function skills( bool $images_available = true ): array {
+		unset( $images_available );
+
 		return array();
+	}
+
+	/**
+	 * The pages/site `copy-rules` skill body, shared. It points the model at
+	 * `list-patterns` for each pattern's copy limits instead of restating them:
+	 * {@see \Specflux\SenroFlux\Packs\Pages\Vocabulary::listPayload()} already
+	 * ships every pattern's `constraints.stated` lines, and restating them here
+	 * grows with the pattern count — on Twenty Twenty-Five (9 eligible theme
+	 * patterns) it pushed pages to ~4227 and site to ~4571 tokens, over the
+	 * 2000-token ceiling ({@see \Specflux\SenroFlux\Skills\SkillSet::ceilingError()}).
+	 * Theme-derived patterns are counted, not named, so the model knows they
+	 * exist without the skill growing with the theme. Skill bodies stay English (S15), so nothing here is translated.
+	 *
+	 * @param list<array<string,mixed>> $vocabulary {@see \Specflux\SenroFlux\Packs\Pages\Vocabulary::all()}.
+	 * @param string                    $list_verb  This pack's list-patterns verb (e.g. `pages/list-patterns`).
+	 * @return list<string>
+	 */
+	protected static function copyRulesLines( array $vocabulary, string $list_verb ): array {
+		$lines = array(
+			sprintf(
+				'Every pattern has its own copy limits: what each heading, paragraph and button says and how many words it may use. Call %1$s once for the index, then again with names set to the patterns you\'ll use, and follow each one\'s constraints.stated lines exactly.',
+				$list_verb
+			),
+		);
+
+		$theme_count = 0;
+		foreach ( $vocabulary as $pattern ) {
+			if ( ! empty( $pattern['theme_derived'] ) ) {
+				++$theme_count;
+			}
+		}
+
+		// A count, not the titles: a theme's pattern list has no upper bound and
+		// the skills share a fixed token ceiling. The index lists them by name.
+		if ( $theme_count > 0 ) {
+			$lines[] = sprintf(
+				'This theme also offers %1$d patterns of its own, listed in the %2$s index. Fill one by sending {pattern, slots} with the numbered slots %2$s returns for it.',
+				$theme_count,
+				$list_verb
+			);
+		}
+
+		return $lines;
 	}
 
 	/**
@@ -637,7 +706,7 @@ abstract class Pack {
 	 * @param list<string>|null $skills_disable Non-required skill ids the start would drop.
 	 * @return true|WP_Error
 	 */
-	public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): true|WP_Error {
+	public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): bool|WP_Error {
 		// S8/S13: the ceiling is checked over the COMBINED harness + pack skill
 		// set (the same set `start()` will collect), so a pack that pushes the
 		// instruction over the ceiling is refused here, never truncated.
@@ -714,16 +783,29 @@ abstract class Pack {
 	private function bindingCheck( int $user_id ): SetupCheck {
 		$error   = $this->agentSafetyBindingError( $user_id );
 		$message = null !== $error ? (string) $error->get_error_message() : '';
+		$code    = null !== $error ? (string) $error->get_error_code() : '';
+
+		if ( 'pack_unbound' !== $code ) {
+			return new SetupCheck( $this->name() . '/binding', SetupCheck::BLOCKING, null === $error, $message, null, null, $message, $code );
+		}
 
 		return new SetupCheck(
 			$this->name() . '/binding',
 			SetupCheck::BLOCKING,
-			null === $error,
-			$message,
-			null,
-			null,
-			$message,
-			null !== $error ? (string) $error->get_error_code() : ''
+			false,
+			sprintf(
+				/* translators: %s: capability pack name, e.g. "posts". */
+				__( 'The %s pack is not turned on for your account. Turn it on for your role in Tools > Agent Capability Packs.', 'senroflux' ),
+				$this->name()
+			),
+			admin_url( 'tools.php?page=agent-safety-packs' ),
+			'manage_options',
+			sprintf(
+				/* translators: %s: capability pack name, e.g. "posts". */
+				__( 'The %s pack is not turned on for your account. Ask a site administrator to turn it on.', 'senroflux' ),
+				$this->name()
+			),
+			$code
 		);
 	}
 

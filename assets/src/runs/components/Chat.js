@@ -75,6 +75,24 @@ function usageAgainstCeilings( run, steps ) {
 }
 
 /**
+ * The pinned model's display name: `run.model` is `{ provider, id } |
+ * null` — `null` means the run started (or, for a resumed/follow-up run,
+ * inherited) Automatic. A non-null pair whose id no longer appears in
+ * `modelChoices` (the provider was since deconfigured, or the model retired
+ * from that provider's list) falls back to the raw id rather than hiding the
+ * pin, since the run still ran on SOME model and that is worth showing even
+ * unresolved.
+ */
+function modelLabel( run, modelChoices ) {
+	if ( ! run.model || ! run.model.id ) {
+		return __( 'Automatic', 'senroflux' );
+	}
+	const provider = ( modelChoices || {} )[ run.model.provider ];
+	const match = provider && ( provider.models || [] ).find( ( m ) => m.id === run.model.id );
+	return match ? match.name : run.model.id;
+}
+
+/**
  * The messenger chat pane (S10): goal + model bubbles, ledger groups for
  * consecutive tool calls, an inline park card, and the pinned plan. The
  * message box lives one level up, in `App` — it is a SINGLE persistent
@@ -91,6 +109,7 @@ function usageAgainstCeilings( run, steps ) {
  * @param {Function} [props.onCancel]            `() => Promise` for the Cancel button.
  * @param {boolean}  [props.busy]                True while a tick/cancel is in flight.
  * @param {number}   [props.tickCount]           How many tick round-trips this run has sent this page-load (the "Tick N" bubble).
+ * @param {Object}   [props.modelChoices]        `senrofluxRunsConfig.modelChoices`, used only to resolve `run.model`'s display name.
  */
 export default function Chat( {
 	run,
@@ -102,6 +121,7 @@ export default function Chat( {
 	onCancel,
 	busy,
 	tickCount,
+	modelChoices,
 } ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
@@ -114,6 +134,19 @@ export default function Chat( {
 		<div className="senroflux-chat">
 			<div className="senroflux-chat-header">
 				<h1 className="senroflux-run-heading" dir="auto">{ run.goal }</h1>
+				{ /* S22 pseudo-locale: the model NAME half of this line is
+				 * data (mechanically resolved from `run.model`, same as
+				 * `LedgerGroup`'s ability labels), so only that half carries
+				 * `data-senroflux-content`/`dir="auto"` — "Model: " itself is
+				 * translatable chrome, same split `withheld_roles` above
+				 * does not need since a role list has no independent bidi
+				 * direction of its own the way a model name might. */ }
+				<p className="senroflux-run-model">
+					{ __( 'Model:', 'senroflux' ) }{ ' ' }
+					<span data-senroflux-content dir="auto">
+						{ modelLabel( run, modelChoices ) }
+					</span>
+				</p>
 				{ park && (
 					<button
 						type="button"

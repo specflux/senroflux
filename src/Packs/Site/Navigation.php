@@ -88,6 +88,13 @@ final class Navigation {
 
 		add_action( 'wp_abilities_api_categories_init', array( self::class, 'registerCategory' ) );
 		add_action( 'wp_abilities_api_init', array( self::class, 'register' ) );
+
+		// S7 quality fix (2026-09-28): the site pack's own propose-plan
+		// check ({@see filterPlanError()}) — a no-op for any plan that never
+		// names a site-pack page-create/publish verb.
+		if ( function_exists( 'add_filter' ) ) {
+			add_filter( 'senroflux_plan_error', array( self::class, 'filterPlanError' ), 10, 2 );
+		}
 	}
 
 	/**
@@ -312,6 +319,12 @@ final class Navigation {
 					),
 				),
 				'multiple_locations_assigned' => array( 'type' => 'boolean' ),
+				// S7 quality fix (2026-09-28): a hint, never a write — the id of
+				// the WordPress stock Sample Page when it is STILL published,
+				// null otherwise, so the model can see the `page_list`-fallback
+				// problem {@see \Specflux\SenroFlux\Packs\Site\SitePack}'s own
+				// guidance now names (see `structureRulesBody()`).
+				'stock_sample_page'           => array( 'type' => array( 'integer', 'null' ) ),
 			),
 		);
 	}
@@ -627,6 +640,8 @@ final class Navigation {
 			'kind'                        => $payload['kind'],
 			'items'                       => $payload['items'],
 			'multiple_locations_assigned' => $target['multiple_locations_assigned'],
+			// S7 quality fix (2026-09-28): read-only hint, no write.
+			'stock_sample_page'           => self::stockSamplePageId(),
 		);
 	}
 
@@ -818,6 +833,144 @@ final class Navigation {
 			'annotations' => $annotations,
 			'senroflux'   => array( 'hidden' => false ),
 		);
+	}
+
+	// ------------------------------------------------------------------
+	// S7 quality fix (2026-09-28): a site-pack run must not leave WordPress's
+	// stock Sample Page visible in the navigation — GOVERNED, via a
+	// propose-plan refusal, not a harness-side rewrite.
+	//
+	// A previous version of this fix ({@see Plugin::tick()}) rewrote the
+	// navigation directly once a site-pack run completed — REJECTED: it
+	// wrote outside the governed tool path (no plan, no Agent Safety
+	// gate/audit) and silently converted a `page_list` fallback into fixed
+	// links. {@see filterPlanError()} replaces it: it refuses the PLAN, on
+	// the `senroflux_plan_error` filter ({@see boot()}), so the model fixes
+	// its own plan through the ordinary approval path.
+	// ------------------------------------------------------------------
+
+	/**
+	 * The WordPress-installer stock Sample Page's content, the distinctive
+	 * substring `wp_install_defaults()` seeds every fresh install with.
+	 */
+	private const STOCK_SAMPLE_CONTENT_SIGNATURE = 'This is an example page';
+
+	/**
+	 * Site-pack pack verbs (S7 spelling, {@see SitePack::verbMap()}) that
+	 * create or publish a page — a plan naming one of these, while the
+	 * stock Sample Page is still published and visible in the resolved
+	 * navigation, needs an `site/update-navigation` step too
+	 * ({@see filterPlanError()}).
+	 */
+	private const PAGE_CREATE_OR_PUBLISH_VERBS = array( 'site/create-draft', 'site/publish' );
+
+	/** The site-pack pack verb for `update-navigation` (S7 spelling). */
+	private const UPDATE_NAVIGATION_VERB = 'site/update-navigation';
+
+	/**
+	 * S7 quality fix (2026-09-28): refuse a `senroflux/propose-plan` call
+	 * that creates or publishes a page while the stock Sample Page is still
+	 * published and the resolved navigation would show it — a `page_list`
+	 * fallback (which renders every published page), or an explicit link to
+	 * it — unless some step also names `site/update-navigation`.
+	 *
+	 * Registered on the `senroflux_plan_error` filter (see {@see boot()});
+	 * PlanTools threads every registered pack's check through this one
+	 * filter (it may not depend on `src/Packs`, see its own class docblock),
+	 * so this is the SITE pack's own contribution, not site-specific logic
+	 * living in PlanTools. A no-op for any plan that never names a
+	 * site-pack page-create/publish verb — non-site-pack plans, and
+	 * site-pack plans about anything else, are untouched.
+	 *
+	 * @param WP_Error|null                                         $current_error An earlier check's refusal (this run's OWN
+	 *                                                                             `missingImageStepError()`, or another pack's
+	 *                                                                             hook) — passed through unmodified; this check
+	 *                                                                             never overrides an existing refusal.
+	 * @param list<array{text:string,verbs:list<string>,tier:int}>  $steps         Normalized propose-plan steps.
+	 * @return WP_Error|null
+	 */
+	public static function filterPlanError( ?WP_Error $current_error, array $steps ): ?WP_Error {
+		if ( $current_error instanceof WP_Error ) {
+			return $current_error;
+		}
+
+		$verbs = array();
+		foreach ( $steps as $step ) {
+			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
+				$verbs[] = $verb;
+			}
+		}
+
+		$creates_or_publishes_page = array() !== array_intersect( self::PAGE_CREATE_OR_PUBLISH_VERBS, $verbs );
+		if ( ! $creates_or_publishes_page || in_array( self::UPDATE_NAVIGATION_VERB, $verbs, true ) ) {
+			return null;
+		}
+
+		$sample_id = self::stockSamplePageId();
+		if ( null === $sample_id || ! self::navigationWouldShowSamplePage( $sample_id ) ) {
+			return null;
+		}
+
+		return new WP_Error(
+			'navigation_shows_sample_page',
+			__( 'This site\'s menu still shows WordPress\'s sample page "Sample Page". Add update-navigation to a step and set the menu links to the site\'s real pages, leaving the sample page out, then propose the plan again.', 'senroflux' )
+		);
+	}
+
+	/**
+	 * Whether the CURRENTLY resolved navigation would show the given page —
+	 * either it appears as an explicit link, or the navigation resolves to a
+	 * `page_list` fallback (which renders every published page). Read-only:
+	 * never records a read marker, mirroring {@see currentItemsForSummary()}.
+	 * Fails closed toward "would not show it" only when the navigation
+	 * itself cannot be resolved at all (nothing to warn about then).
+	 */
+	private static function navigationWouldShowSamplePage( int $sample_id ): bool {
+		$target  = self::resolveTarget();
+		$payload = self::buildPayload( $target );
+		if ( is_wp_error( $payload ) ) {
+			return false;
+		}
+
+		if ( 'page_list' === $payload['kind'] ) {
+			return true;
+		}
+
+		foreach ( $payload['items'] as $item ) {
+			if ( ( $item['page_id'] ?? null ) === $sample_id ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The id of the currently published WordPress stock Sample Page, or
+	 * null when there is none — fails closed toward "leave it alone": a
+	 * page merely sharing the slug/title but carrying its OWN content is
+	 * never matched.
+	 */
+	private static function stockSamplePageId(): ?int {
+		if ( ! function_exists( 'get_pages' ) ) {
+			return null;
+		}
+
+		foreach ( (array) get_pages( array( 'post_status' => 'publish' ) ) as $candidate ) {
+			if ( ! is_object( $candidate ) || 'sample-page' !== $candidate->post_name ) {
+				continue;
+			}
+			if ( 'Sample Page' !== trim( $candidate->post_title ) ) {
+				continue;
+			}
+			if ( false === stripos( $candidate->post_content, self::STOCK_SAMPLE_CONTENT_SIGNATURE ) ) {
+				continue; // Edited/repurposed by the user: leave it alone.
+			}
+
+			return (int) $candidate->ID;
+		}
+
+		return null;
 	}
 
 	/**

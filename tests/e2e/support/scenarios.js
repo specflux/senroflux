@@ -88,4 +88,18 @@ function planOnly( goal = PLAN_GOAL ) {
 	];
 }
 
-module.exports = { PLAN_GOAL, call, text, fullTour, keyboardTour, quickComplete, planOnly };
+/**
+ * Runs-pack fix regression: a Tier-0 read BEFORE any plan exists. On a
+ * pack-less run this is exactly the call that used to come back
+ * `plan_required` (an empty verb map fails closed to tier 2 for every verb)
+ * — see `RunsScreenStartProducesWorkableRunTest` for the PHP-level pin of
+ * the same defect.
+ */
+function readBeforeAnyPlan() {
+	return [
+		call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-1' } ),
+		text( 'Read thing-1. Nothing else to do.' ),
+	];
+}
+
+module.exports = { PLAN_GOAL, call, text, fullTour, keyboardTour, quickComplete, planOnly, readBeforeAnyPlan };

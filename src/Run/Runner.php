@@ -35,7 +35,8 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Implements the S4 tick protocol (as amended by 0.2 S5):
  *
- *  1. Ownership + optimistic lock (echoed step_count) + 30s lock transient.
+ *  1. Ownership + optimistic lock (echoed step_count) + lock transient,
+ *     re-held before every model and tool call ({@see self::LOCK_SECONDS}).
  *  2. Terminal runs return their state unchanged.
  *  3. Parked runs (0.2: awaiting_approval | awaiting_user | awaiting_plan)
  *     resume only with a park resolution whose SHAPE matches the park kind
@@ -53,6 +54,40 @@ defined( 'ABSPATH' ) || exit;
  * another model call.
  */
 final class Runner {
+
+	/**
+	 * Live run evidence: a single transient network/timeout error from the
+	 * model (S9's gateway seam) used to fail the run outright — a run that
+	 * had already published pages died over one dropped connection. This
+	 * many CONSECUTIVE transient errors, with no successful model turn in
+	 * between, still fails as `model_error`; fewer than this just retries on
+	 * the next tick. Six, not three: a free provider answering one call in two
+	 * with an empty 502 (live batch 2026-09-28-fix3) killed runs at three.
+	 */
+	private const MAX_TRANSIENT_MODEL_ERRORS = 6;
+
+	/**
+	 * Seconds to wait, indexed by consecutive-transient-error count (1-based),
+	 * before the NEXT retry — live evidence 2026-09-29-cards1/scenario-4-1: six
+	 * "Missing the choices key" provider errors landed 2-3 s apart (all within
+	 * 13 s), so the retries never gave the provider time to recover. Capped at
+	 * 30 s; the last entry repeats for any count beyond the schedule's length.
+	 */
+	private const TRANSIENT_BACKOFF_SCHEDULE_SECONDS = array( 2, 4, 8, 16, 30 );
+
+	/**
+	 * The tick lock's lifetime, re-set before every model and tool call. A
+	 * tick can run for minutes; a lock that lapsed mid-tick let a second tick
+	 * drive the same run (live, 2026-09-28). Long enough for one model call
+	 * plus one tool call, short enough that a crashed tick frees the run.
+	 */
+	private const LOCK_SECONDS = 300;
+
+	/** Model turns, counted back from the latest, whose call arguments are resent in full. */
+	private const HISTORY_FULL_ARGS_TURNS = 2;
+
+	/** An older call argument longer than this is replaced by a note in the resent history. */
+	private const HISTORY_MAX_ARG_CHARS = 400;
 
 	public function __construct(
 		private readonly RunStore $store,
@@ -96,6 +131,28 @@ final class Runner {
 		private readonly mixed $write_object_id_resolver = null,
 		/** @var callable():(int|null)|null S14: the highest run id that existed when a pre-0.3 install was upgraded; a non-terminal run at or below it started under 0.2 and cannot continue. Absent/null = no 0.2 run was ever live here (a fresh install), so nothing is refused. */
 		private readonly mixed $legacy_run_watermark_probe = null,
+		/**
+		 * @var callable(Run,string,array<string,mixed>):(string|null)|null
+		 * Read object-id resolver: the read counterpart of
+		 * {@see $write_object_id_resolver}. A Tier-0 read of a singleton
+		 * (`read-navigation`, `read-front-page`) takes no id argument, so
+		 * without this it could never verify the object its write opened and
+		 * every such run was nudged to re-read what it had just read.
+		 * Absent/null = the args[key] extraction only.
+		 */
+		private readonly mixed $read_object_id_resolver = null,
+		/**
+		 * @var callable(int):void|null Transient-error backoff sleeper (S9
+		 * defect fix): called with the whole seconds still owed before the
+		 * next retry, right before the model is called again. Real `sleep()`
+		 * by default — a poller (the Runs screen's `driveTicks()`) re-calls
+		 * `tick()` back-to-back with no client-side delay, so the wait has to
+		 * block INSIDE this tick's HTTP request to actually space the
+		 * provider calls out; a return-early-and-let-the-client-retry seam
+		 * would just burn the client's `MAX_AUTO_TICKS` cap in a tight loop.
+		 * Tests inject a no-op that records the seconds instead of blocking.
+		 */
+		private readonly mixed $transient_backoff_sleeper = null,
 	) {
 	}
 
@@ -146,7 +203,7 @@ final class Runner {
 		if ( false !== get_transient( $lock_key ) ) {
 			return new WP_Error( 'senroflux_conflict', __( 'A tick for this run is already in flight.', 'senroflux' ), array( 'status' => 409 ) );
 		}
-		set_transient( $lock_key, 1, 30 );
+		set_transient( $lock_key, 1, self::LOCK_SECONDS );
 
 		// S14: everything this tick does — every audit row, approval and grant
 		// match — runs under ONE correlation id derived from the run row. The
@@ -434,7 +491,7 @@ final class Runner {
 			// that does not come through the loop's fence.
 			$refusal = $this->fenceRefusal( $registry, $run, $call );
 			if ( null !== $refusal ) {
-				$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
+				$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal, $this->fencedVerb( $registry, $run, $call ) );
 			} else {
 				// 0.3 S3: this is the approved re-run — the built-in gate must
 				// not re-park the SAME call it already surfaced for approval.
@@ -498,6 +555,7 @@ final class Runner {
 		}
 
 		while ( true ) {
+			$this->holdLock( $run->id );
 			if ( $run->stepCount >= $run->budget['max_steps'] ) {
 				$report = $this->failBudget( $run, 'max_steps' );
 
@@ -518,6 +576,8 @@ final class Runner {
 			$pending_calls = $this->unconsumedCalls( $run );
 
 			if ( null === $pending_calls ) {
+				$this->waitOutTransientBackoff( $run );
+
 				// S6/S7: the harness tools are declared while a question / plan
 				// remains and withdrawn at zero. Recomputed for EVERY model call,
 				// not once per tick: an `invalid_question` refusal inside this
@@ -527,18 +587,59 @@ final class Runner {
 				// touch the permission-agnostic declaration surface only.
 				$harness_declarations = array_merge(
 					HarnessTools::declarations( $this->remainingQuestions( $run ) ),
-					PlanTools::declarations( $this->remainingPlans( $run ) ),
+					// 0.3 quality fix (instruction ceiling): the run's own verb
+					// list now travels on the declaration itself (see
+					// {@see PlanTools::proposePlanDeclaration()}), the SAME list
+					// `runProposePlan()` already resolves via `knownVerbs()` for
+					// the `unknown_verb` check, so the two can never disagree.
+					PlanTools::declarations( $this->remainingPlans( $run ), $this->knownVerbs( $run, $registry ) ),
 					SuggestBriefTool::declarations()
 				);
-				$tools                = array() !== $harness_declarations
+				$tools = array() !== $harness_declarations
 					? $registry->withDeclarations( $harness_declarations )
 					: $registry;
 
 				$history = $this->historyForPrompt( $run );
-				$turn    = $this->gateway->generateTurn( $history, $instruction, $tools );
+				// The run's pinned model, resolved once at start() and
+				// carried on every tick — null (either half missing) means
+				// automatic selection.
+				$model_preference = null !== $run->modelProvider && null !== $run->modelId
+					? array( $run->modelProvider, $run->modelId )
+					: null;
+				$turn             = $this->gateway->generateTurn( $history, $instruction, $tools, $model_preference );
 
 				if ( $turn instanceof WP_Error ) {
-					$report = $this->failError( $run, 'model_error', $turn->get_error_message() );
+					if ( $this->isTransientModelError( $turn )
+						&& $this->consecutiveTransientModelErrors( $run ) + 1 < self::MAX_TRANSIENT_MODEL_ERRORS
+					) {
+						// Leave the run `running` and record the attempt as a
+						// system note — {@see StepKind::historyKinds()} never
+						// re-enters it into the prompt, so the model never
+						// sees its own failed attempts. `ui => null` mirrors
+						// the nudge path: the caller's next tick just retries.
+						$new_steps[] = $this->appendTransientModelErrorNote( $run, $turn );
+						$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
+						return array(
+							'run' => $this->refresh( $run ),
+							'ui'  => null,
+						);
+					}
+
+					// The transient-retry budget is exhausted, but {@see
+					// writesFinished()} (the same check {@see failBudget()}
+					// uses) says every write the plan authorised already
+					// landed — live evidence 2026-09-29-cards1/scenario-4-1:
+					// six provider errors killed a run whose pages were all
+					// already published. Read that as "cut short during
+					// verification", not a failure. A non-transient error
+					// (auth, an exhausted account, a protocol bug) still
+					// fails outright regardless of writesFinished() — it is
+					// never going to succeed on its own, unlike a provider
+					// hiccup that just needed more retries.
+					$report = ( $this->isTransientModelError( $turn ) && $this->writesFinished( $run ) )
+						? $this->complete( $run, 'unverified: model_error (provider)' )
+						: $this->failError( $run, 'model_error', $turn->get_error_message() );
 
 					return array(
 						'run' => $this->refresh( $run ),
@@ -628,17 +729,34 @@ final class Runner {
 					continue;
 				}
 
+				// A bare `senroflux__`-prefixed name that matches none of the
+				// three harness tools above is never a valid ability call —
+				// abilities are always `wpab__`-prefixed ({@see
+				// ToolRegistry::functionName()}) — so it is a genuinely
+				// unknown/mistyped function name, not merely one outside the
+				// allow-list. Answer with the exact available names instead
+				// of routing it into the ability resolver, where it would
+				// round-trip to a nonsense ability name and echo back as a
+				// cryptic `unknown_tool` error (S24 live evidence).
+				if ( str_starts_with( $call['name'], 'senroflux__' ) ) {
+					$new_steps[] = $this->appendUnknownFunctionResult( $run->id, $call );
+					++$tool_calls_used;
+					$run = $this->refresh( $run );
+					continue;
+				}
+
 				// S7 plan fence: before ANY ability executes, a Tier-1+ call
 				// must be inside the accepted plan's verb set. A refusal is a
 				// tool_result error the model sees, and is NEVER counted
 				// against max_tool_calls (it never executed anything).
 				$refusal = $this->fenceRefusal( $registry, $run, $call );
 				if ( null !== $refusal ) {
-					$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal );
+					$new_steps[] = $this->appendFenceRefusal( $run->id, $call, $refusal, $this->fencedVerb( $registry, $run, $call ) );
 					$run         = $this->refresh( $run );
 					continue;
 				}
 
+				$this->holdLock( $run->id );
 				$outcome = $this->executeCall( $registry, $run, $call );
 				++$tool_calls_used;
 
@@ -732,6 +850,10 @@ final class Runner {
 				)
 			)
 		)->toArray();
+
+		// The verb a plan names this call by; the Runs screen matches plan
+		// steps on it. Message::fromArray() ignores the extra key.
+		$message_array['plan_verb'] = $this->verbFor( $run, ToolRegistry::abilityName( (string) $call['name'] ), $call['args'] ?? null );
 
 		$seq = $this->store->appendStep(
 			$run_id,
@@ -881,11 +1003,25 @@ final class Runner {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Budget ceilings exhausted: mark the run failed.
+	 * Budget ceilings exhausted: mark the run failed — UNLESS the run's
+	 * writes are already finished ({@see writesFinished()}), in which case a
+	 * budget hit is read as "cut short during verification", not a failure:
+	 * the run completes through the SAME terminal path as {@see complete()},
+	 * carrying a visible `unverified` note so the report and the Runs UI can
+	 * show that verification did not finish (live evidence: 2026-09-28
+	 * bunny1/bunny4 — pages published, then `max_tokens` exhausted while
+	 * re-reading them to verify).
 	 *
 	 * @return array<string,mixed> The harness-built partial report.
 	 */
 	private function failBudget( Run $run, string $which ): array {
+		if ( $this->writesFinished( $run ) ) {
+			return $this->complete(
+				$run,
+				sprintf( 'unverified: budget_exceeded (%s)', $which )
+			);
+		}
+
 		$this->store->updateRun(
 			$run->id,
 			array(
@@ -900,6 +1036,143 @@ final class Runner {
 		$this->revokeGrants( $run->id );
 
 		return $this->report( $run->id );
+	}
+
+	/**
+	 * Whether every WRITE the run's accepted plan authorised has actually
+	 * happened, mechanically, from data the Runner already keeps.
+	 *
+	 * Definition (2026-09-28, replacing the earlier per-verb-name-only
+	 * check after live evidence — `.scratch/senroflux-live/2026-09-28-fix1/
+	 * scenario-3-1` — showed it both under- and over-fires: it required
+	 * EVERY plan-named verb across the WHOLE plan to have an ok result, even
+	 * verbs the pack's guidance tells models to name speculatively and that
+	 * are never called (`update-alt`); and it merged verb bookkeeping by
+	 * verb STRING across steps, so a plan with three steps naming the same
+	 * verb (three `pages/create` steps) was satisfied by ONE ok result,
+	 * wrongly reporting a died-before-the-last-page run as finished):
+	 *
+	 *   (a) An accepted plan exists ({@see acceptedPlan()}) — no plan, no
+	 *       claim of "finished" (fail closed).
+	 *   (b) Walk the plan's WRITE-BEARING steps (any step naming at least
+	 *       one tier ≥ 1 verb, {@see VerbTier}) in plan order, against the
+	 *       run's tier ≥ 1 tool_results in seq order, each consumed at most
+	 *       once (so repeated verb names across steps cannot double-count).
+	 *       Every write-bearing step EXCEPT THE LAST must consume one `ok`
+	 *       tool_result whose `plan_verb` ({@see appendToolResult()}) is one
+	 *       of that step's own tier ≥ 1 verbs. The LAST write-bearing step
+	 *       is satisfied more loosely — by ANY `ok` tier ≥ 1 write (any
+	 *       verb) that occurs after the second-to-last write-bearing step's
+	 *       matched write — which absorbs harness verb aliasing (e.g. a
+	 *       plan naming `publish` whose actual successful tool_result is
+	 *       tagged `update-live`). With only one write-bearing step, the
+	 *       threshold is "from the start of the run".
+	 *   (c) The single most recent tier ≥ 1 write ATTEMPT overall (any
+	 *       plan_verb, matched to a plan step or not) must be `ok` — a later
+	 *       refusal/error leaves verification unresolved.
+	 *
+	 * A plan with no write verbs at all (every step tier 0) answers false:
+	 * there is nothing a budget could have cut off mid-verification, so the
+	 * existing failed/budget_exceeded behaviour stands.
+	 */
+	private function writesFinished( Run $run ): bool {
+		$accepted = $this->acceptedPlan( $run );
+		if ( null === $accepted ) {
+			return false;
+		}
+
+		$verb_map = $this->packVerbMap( $run );
+
+		// (b) The plan's write-bearing steps, in plan order, each carrying
+		// its OWN set of tier >= 1 verbs (steps with only tier-0 verbs
+		// carry no write obligation and are skipped).
+		$write_steps = array();
+		foreach ( (array) ( $accepted['steps'] ?? array() ) as $step ) {
+			if ( ! is_array( $step ) ) {
+				continue;
+			}
+			$step_write_verbs = array();
+			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
+				if ( is_string( $verb ) && VerbTier::tierFor( $verb, $verb_map, $run->id ) >= VerbTier::TIER_1 ) {
+					$step_write_verbs[ $verb ] = true;
+				}
+			}
+			if ( array() !== $step_write_verbs ) {
+				$write_steps[] = $step_write_verbs;
+			}
+		}
+
+		if ( array() === $write_steps ) {
+			return false;
+		}
+
+		// All tier >= 1 write ATTEMPTS (any plan_verb, ok or not), in seq
+		// order, whatever their plan_verb.
+		$write_attempts = array();
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::ToolResult !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			$verb = $step->messageArray['plan_verb'] ?? null;
+			if ( ! is_string( $verb ) || VerbTier::tierFor( $verb, $verb_map, $run->id ) < VerbTier::TIER_1 ) {
+				continue;
+			}
+			$write_attempts[] = array(
+				'verb'   => $verb,
+				'status' => $step->status,
+			);
+		}
+
+		if ( array() === $write_attempts ) {
+			return false;
+		}
+
+		// (c) No later write attempt is unresolved.
+		if ( 'ok' !== end( $write_attempts )['status'] ) {
+			return false;
+		}
+
+		$ok_writes = array();
+		foreach ( $write_attempts as $index => $attempt ) {
+			if ( 'ok' === $attempt['status'] ) {
+				$ok_writes[] = array(
+					'verb'  => $attempt['verb'],
+					'index' => $index,
+				);
+			}
+		}
+
+		$pointer            = 0;
+		$prev_matched_index = -1;
+		$last_step_index    = count( $write_steps ) - 1;
+
+		foreach ( $write_steps as $step_index => $step_write_verbs ) {
+			if ( $step_index === $last_step_index ) {
+				break; // The last write-bearing step is checked below.
+			}
+
+			$matched = null;
+			for ( $i = $pointer, $count = count( $ok_writes ); $i < $count; $i++ ) {
+				if ( isset( $step_write_verbs[ $ok_writes[ $i ]['verb'] ] ) ) {
+					$matched = $i;
+					break;
+				}
+			}
+			if ( null === $matched ) {
+				return false; // This write-bearing step never got its write.
+			}
+
+			$pointer            = $matched + 1;
+			$prev_matched_index = $ok_writes[ $matched ]['index'];
+		}
+
+		foreach ( $ok_writes as $ok_write ) {
+			if ( $ok_write['index'] > $prev_matched_index ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -942,11 +1215,165 @@ final class Runner {
 	}
 
 	/**
+	 * Live run evidence: "cURL error 28: Operation timed out ... 0 bytes
+	 * received" and its kin are transport hiccups, not the model rejecting
+	 * the request — worth one retry rather than killing a run that may have
+	 * already published real changes. {@see \Specflux\SenroFlux\Model\AiClientGateway}'s catch block
+	 * carries the AI Client HTTP exception's own status code as error data
+	 * (`ServerException`/`ClientException` code = the real HTTP status;
+	 * `NetworkException` code = 0), so a rate limit or a 5xx is read from
+	 * that rather than sniffed out of prose; a network/timeout failure has no
+	 * status to read, so its distinctive message text is the only signal.
+	 * `gateway_unavailable` (no WP AI Client at all) is a standing
+	 * misconfiguration retrying can never fix.
+	 */
+	private function isTransientModelError( WP_Error $error ): bool {
+		if ( 'gateway_unavailable' === $error->get_error_code() ) {
+			return false;
+		}
+
+		// OpenAI reports an exhausted account as a 429 too; no retry can fix it.
+		$message = $error->get_error_message();
+		if ( false !== stripos( $message, 'insufficient_quota' ) || false !== stripos( $message, 'no credits' ) ) {
+			return false;
+		}
+
+		$data   = $error->get_error_data();
+		$status = is_array( $data ) ? ( $data['status'] ?? null ) : null;
+		if ( is_numeric( $status ) && ( 429 === (int) $status || (int) $status >= 500 ) ) {
+			return true;
+		}
+
+		return false !== stripos( $message, 'curl error 28' )
+			|| false !== stripos( $message, 'timed out' )
+			|| false !== stripos( $message, 'network error' );
+	}
+
+	/**
+	 * How many transient model errors ({@see isTransientModelError()}) sit at
+	 * the tail of this run's steps, with no successful `model` step since.
+	 * Walking from the end works because a transient failure appends nothing
+	 * but its own system note — the model turn it failed on never became a
+	 * step — so any run of these notes is contiguous at the tail until either
+	 * a `model` step (a turn that DID succeed) or the run's start.
+	 */
+	private function consecutiveTransientModelErrors( Run $run ): int {
+		$count = 0;
+		$steps = $this->store->getSteps( $run->id );
+		for ( $i = count( $steps ) - 1; $i >= 0; --$i ) {
+			$step = $steps[ $i ];
+			if ( StepKind::Model === $step->kind ) {
+				break;
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'transient_model_error' === ( $step->messageArray['note'] ?? '' )
+			) {
+				++$count;
+			}
+		}
+
+		return $count;
+	}
+
+	/**
+	 * `createdAtUtc` of the MOST RECENT transient-error system note (the same
+	 * contiguous tail {@see consecutiveTransientModelErrors()} counts) — null
+	 * when there is none, so a fresh run never waits.
+	 */
+	private function lastTransientModelErrorAt( Run $run ): ?string {
+		$steps = $this->store->getSteps( $run->id );
+		for ( $i = count( $steps ) - 1; $i >= 0; --$i ) {
+			$step = $steps[ $i ];
+			if ( StepKind::Model === $step->kind ) {
+				break;
+			}
+			if ( StepKind::System === $step->kind && is_array( $step->messageArray )
+				&& 'transient_model_error' === ( $step->messageArray['note'] ?? '' )
+			) {
+				return $step->createdAtUtc;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Space retries out (live evidence 2026-09-29-cards1/scenario-4-1): six
+	 * "Missing the choices key" provider errors landed 2-3 s apart, all
+	 * within 13 s, because every retry called the model again immediately.
+	 * Blocks for whatever's left of {@see TRANSIENT_BACKOFF_SCHEDULE_SECONDS}'
+	 * entry for the run's current consecutive-error count, measured from the
+	 * last error step's own timestamp — not from "now" — so a tick that took
+	 * a while to reach this point (a slow lock, a slow instruction render)
+	 * doesn't wait on top of time that already passed. A no-op when the run
+	 * has no transient errors at its tail.
+	 */
+	private function waitOutTransientBackoff( Run $run ): void {
+		$consecutive = $this->consecutiveTransientModelErrors( $run );
+		if ( 0 === $consecutive ) {
+			return;
+		}
+
+		$schedule = self::TRANSIENT_BACKOFF_SCHEDULE_SECONDS;
+		$backoff  = $schedule[ max( 0, min( $consecutive, count( $schedule ) ) - 1 ) ];
+
+		$last_error_at = $this->lastTransientModelErrorAt( $run );
+		$elapsed       = null !== $last_error_at ? $this->elapsedSince( $last_error_at ) : 0;
+		$remaining     = $backoff - $elapsed;
+
+		if ( $remaining > 0 ) {
+			$this->sleepSeconds( $remaining );
+		}
+	}
+
+	/**
+	 * The one seam {@see waitOutTransientBackoff()} sleeps through — real
+	 * `sleep()` unless a test injected {@see $transient_backoff_sleeper}.
+	 */
+	private function sleepSeconds( int $seconds ): void {
+		if ( null !== $this->transient_backoff_sleeper ) {
+			( $this->transient_backoff_sleeper )( $seconds );
+
+			return;
+		}
+
+		sleep( $seconds );
+	}
+
+	/**
+	 * Record a transient model error as a `system` step. `StepKind::System`
+	 * is deliberately excluded from {@see historyForPrompt()}'s history
+	 * kinds: the retry must be invisible to the model, which never asked for
+	 * anything and never saw a turn fail.
+	 *
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:null,approval_id:null,status:string}
+	 */
+	private function appendTransientModelErrorNote( Run $run, WP_Error $error ): array {
+		$payload = array(
+			'note'    => 'transient_model_error',
+			'code'    => (string) $error->get_error_code(),
+			'message' => $error->get_error_message(),
+		);
+
+		return array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+	}
+
+	/**
 	 * The model produced no function calls: the run completed.
 	 *
+	 * @param string|null $unverified_note Optional note surfaced on the report
+	 *                                      (e.g. a budget cut verification short);
+	 *                                      see {@see failBudget()}.
 	 * @return array<string,mixed> The harness-built report.
 	 */
-	private function complete( Run $run ): array {
+	private function complete( Run $run, ?string $unverified_note = null ): array {
 		$this->store->updateRun(
 			$run->id,
 			array(
@@ -956,7 +1383,7 @@ final class Runner {
 		);
 		$this->revokeGrants( $run->id );
 
-		return $this->report( $run->id );
+		return $this->report( $run->id, $unverified_note );
 	}
 
 	/**
@@ -987,6 +1414,12 @@ final class Runner {
 		 * @param Run  $run     The run.
 		 */
 		return (bool) apply_filters( 'senroflux_can_tick', $user_id === $run->userId, $run );
+	}
+
+	private function holdLock( int $run_id ): void {
+		if ( function_exists( 'set_transient' ) ) {
+			set_transient( 'senroflux_lock_' . $run_id, 1, self::LOCK_SECONDS );
+		}
 	}
 
 	private function releaseLock( int $run_id ): void {
@@ -1111,23 +1544,150 @@ final class Runner {
 	}
 
 	/**
+	 * The write-bearing abilities whose LATEST call {@see historyForPrompt()}
+	 * never trims — a model must always be able to see its own most recent
+	 * write attempt in full, however old the turn that made it is (live
+	 * evidence 2026-09-29-cards1/scenario-1-1 step 115: two unrelated tool
+	 * calls pushed a `create-post` attempt out of the full-args window before
+	 * the model tried again, and it echoed back the trimmed placeholder as
+	 * `sections`).
+	 */
+	private const WRITE_ABILITY_NAMES = array(
+		'senroflux/create-post',
+		'senroflux/update-post',
+		'senroflux/publish-post',
+	);
+
+	/**
 	 * Rebuild prompt history from history-bearing steps.
 	 *
 	 * @return list<Message>
 	 */
 	private function historyForPrompt( Run $run ): array {
+		$steps = array_values(
+			array_filter(
+				$this->store->getSteps( $run->id ),
+				static fn ( Step $step ): bool => in_array( $step->kind, StepKind::historyKinds(), true ) && null !== $step->messageArray
+			)
+		);
+
+		$model_positions = array_keys( array_filter( $steps, static fn ( Step $step ): bool => StepKind::Model === $step->kind ) );
+		$latest_model    = array() === $model_positions ? -1 : (int) end( $model_positions );
+		$recent_models   = array_slice( $model_positions, -self::HISTORY_FULL_ARGS_TURNS );
+		$protected_ids   = self::protectedWriteCallIds( $steps );
+
 		$messages = array();
-		foreach ( $this->store->getSteps( $run->id ) as $step ) {
-			if ( ! in_array( $step->kind, StepKind::historyKinds(), true ) ) {
-				continue;
+		foreach ( $steps as $position => $step ) {
+			/** @var array<string,mixed> $message_array */
+			$message_array = $step->messageArray;
+			if ( StepKind::Model === $step->kind && $position !== $latest_model ) {
+				$message_array = self::compactModelMessage( $message_array, ! in_array( $position, $recent_models, true ), $protected_ids );
 			}
-			$message = $step->toMessage();
-			if ( null !== $message ) {
-				$messages[] = $message;
-			}
+			$messages[] = Message::fromArray( $message_array );
 		}
 
 		return $messages;
+	}
+
+	/**
+	 * The call id of the MOST RECENT call to each {@see WRITE_ABILITY_NAMES}
+	 * ability across the whole run, keyed by nothing but returned as a flat
+	 * id set — {@see compactModelMessage()} only needs to ask "is this call
+	 * protected", never which ability it protects.
+	 *
+	 * @param list<Step> $steps History-bearing steps, in run order.
+	 * @return array<string,true>
+	 */
+	private static function protectedWriteCallIds( array $steps ): array {
+		$latest_by_ability = array();
+		foreach ( $steps as $step ) {
+			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			foreach ( (array) ( $step->messageArray['parts'] ?? array() ) as $part ) {
+				$name = $part['functionCall']['name'] ?? null;
+				$id   = $part['functionCall']['id'] ?? null;
+				if ( ! is_string( $name ) || ! is_string( $id ) || '' === $id ) {
+					continue;
+				}
+				if ( in_array( ToolRegistry::abilityName( $name ), self::WRITE_ABILITY_NAMES, true ) ) {
+					$latest_by_ability[ ToolRegistry::abilityName( $name ) ] = $id;
+				}
+			}
+		}
+
+		return array_fill_keys( array_values( $latest_by_ability ), true );
+	}
+
+	/**
+	 * Every model turn is resent on every tick, so an old turn's encrypted
+	 * reasoning (a third of a live 4-page run's history) and its full page
+	 * markup (another fifth) were paid for again each turn. The stored step
+	 * is untouched; only the resent copy is trimmed. The latest turn keeps
+	 * its reasoning, which the provider pairs with that turn's calls.
+	 *
+	 * @param array<string,mixed>  $message_array A stored model message.
+	 * @param bool                 $trim_args     Whether to shorten long call arguments.
+	 * @param array<string,true>  $protected_ids Call ids ({@see protectedWriteCallIds()}) never trimmed, whatever `$trim_args` says.
+	 * @return array<string,mixed>
+	 */
+	private static function compactModelMessage( array $message_array, bool $trim_args, array $protected_ids = array() ): array {
+		$parts = array();
+		foreach ( (array) ( $message_array['parts'] ?? array() ) as $part ) {
+			if ( ! is_array( $part ) || 'thought' === ( $part['channel'] ?? null ) ) {
+				continue;
+			}
+			$call_id = $part['functionCall']['id'] ?? null;
+			if ( $trim_args && ! isset( $protected_ids[ $call_id ] ) && is_array( $part['functionCall']['args'] ?? null ) ) {
+				$part['functionCall']['args'] = self::shortenBulkyArrays( self::shortenLongStrings( $part['functionCall']['args'] ) );
+			}
+			$parts[] = $part;
+		}
+
+		if ( array() === $parts ) {
+			return $message_array;
+		}
+		$message_array['parts'] = $parts;
+
+		return $message_array;
+	}
+
+	/**
+	 * A layouts payload (`sections`) is many short strings, each under
+	 * {@see HISTORY_MAX_ARG_CHARS}, so {@see shortenLongStrings()} left whole
+	 * refused page attempts in every later turn (live batch 2026-09-29-final).
+	 *
+	 * @param array<mixed> $args Top-level call arguments.
+	 * @return array<mixed>
+	 */
+	private static function shortenBulkyArrays( array $args ): array {
+		foreach ( $args as $key => $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			$length = strlen( (string) wp_json_encode( $item ) );
+			if ( $length > 4 * self::HISTORY_MAX_ARG_CHARS ) {
+				$args[ $key ] = sprintf( ToolExecutor::HISTORY_PLACEHOLDER_FORMAT, $length );
+			}
+		}
+
+		return $args;
+	}
+
+	/**
+	 * @param array<mixed> $value Call arguments, or a nested part of them.
+	 * @return array<mixed>
+	 */
+	private static function shortenLongStrings( array $value ): array {
+		foreach ( $value as $key => $item ) {
+			if ( is_array( $item ) ) {
+				$value[ $key ] = self::shortenLongStrings( $item );
+			} elseif ( is_string( $item ) && strlen( $item ) > self::HISTORY_MAX_ARG_CHARS ) {
+				$value[ $key ] = sprintf( ToolExecutor::HISTORY_PLACEHOLDER_FORMAT, strlen( $item ) );
+			}
+		}
+
+		return $value;
 	}
 
 	/**
@@ -1149,8 +1709,14 @@ final class Runner {
 	 * @return string|WP_Error
 	 */
 	private function instructionFor( Run $run, array &$new_steps ): string|WP_Error {
-		$pack   = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
-		$skills = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale );
+		$pack = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
+
+		// 0.3 quality fix (images budget 0): a pack's own skill bodies must
+		// not steer the model toward media-generate/generate-image when the
+		// run's images budget is 0 (see ToolRegistry::forRun()) — see
+		// Pack::skills()'s $images_available parameter.
+		$images_available = 0 !== (int) ( $run->budget[ Budget::IMAGES ] ?? 0 );
+		$skills           = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale, $images_available );
 
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
@@ -1432,13 +1998,47 @@ final class Runner {
 			if ( $function_call instanceof FunctionCall ) {
 				$calls[] = array(
 					'id'   => (string) ( $function_call->getId() ?? '' ),
-					'name' => (string) $function_call->getName(),
+					'name' => self::normalizeFunctionName( (string) $function_call->getName() ),
 					'args' => $function_call->getArgs(),
 				);
 			}
 		}
 
 		return $calls;
+	}
+
+	/**
+	 * Collapse a doubled leading `senroflux__` namespace prefix (live
+	 * evidence 2026-09-28: space-bunny called `senroflux__senroflux__
+	 * propose-plan` twice per run) down to one, so it resolves to the same
+	 * harness tool as `senroflux__propose-plan`/`senroflux__ask-user`/
+	 * `senroflux__suggest-brief-addition` instead of falling through to the
+	 * ability resolver, where it would round-trip to a nonsense ability name
+	 * (`senroflux/senroflux/propose-plan`) and echo back as a cryptic
+	 * `unknown_tool` error.
+	 *
+	 * Applied to EVERY extracted call, at the single point every call name
+	 * enters the Runner, so every downstream comparison (harness-tool
+	 * dispatch, ability resolution, crash-resume matching, the persisted
+	 * `tool_name`) sees the canonical name.
+	 *
+	 * Handles the `wpab__` (ability) form too, defensively: a doubled
+	 * `senroflux__` inside `wpab__senroflux__senroflux__X` collapses the
+	 * same way, in case a real ability ever lives in the `senroflux/`
+	 * namespace (e.g. `senroflux/generate-image`) and gets doubled the same
+	 * way. Harness tools themselves are never `wpab__`-prefixed (see
+	 * {@see HarnessTools}'s docblock), so this is belt-and-braces only.
+	 */
+	private static function normalizeFunctionName( string $name ): string {
+		$prefix = '';
+		if ( str_starts_with( $name, 'wpab__' ) ) {
+			$prefix = 'wpab__';
+			$name   = substr( $name, strlen( $prefix ) );
+		}
+
+		$collapsed = preg_replace( '/^(?:senroflux__)+/', 'senroflux__', $name );
+
+		return $prefix . ( is_string( $collapsed ) ? $collapsed : $name );
 	}
 
 	/**
@@ -1644,7 +2244,7 @@ final class Runner {
 
 		$payload = HarnessTools::validateAskUser( $call['args'] ?? null );
 		if ( is_wp_error( $payload ) ) {
-			$new_steps[] = $this->appendAskUserError( $run->id, $call, HarnessTools::ERROR_INVALID_QUESTION );
+			$new_steps[] = $this->appendAskUserError( $run->id, $call, HarnessTools::ERROR_INVALID_QUESTION, $payload->get_error_message() );
 
 			return array();
 		}
@@ -1682,7 +2282,7 @@ final class Runner {
 	private function runSuggestBrief( Run $run, array $call, array &$new_steps ): void {
 		$payload = SuggestBriefTool::validate( $call['args'] ?? null );
 		if ( is_wp_error( $payload ) ) {
-			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_INVALID );
+			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_INVALID, $payload->get_error_message() );
 			return;
 		}
 
@@ -1702,7 +2302,18 @@ final class Runner {
 		}
 
 		if ( $accepted >= SuggestBriefTool::MAX_PER_RUN ) {
-			$new_steps[] = $this->appendSuggestBriefError( $run->id, $call, SuggestBriefTool::ERROR_SUGGESTION_LIMIT );
+			// 0.3 quality fix 4 (live run: 13 suggest-brief-addition calls in a
+			// row, each refused suggestion_limit) — the tool stays DECLARED at
+			// the limit on purpose (see SuggestBriefTool's own class doc: a
+			// human still benefits from seeing "the model tried to suggest N
+			// more things"), but the bare code alone told the model nothing
+			// about what to do next. The message does.
+			$new_steps[] = $this->appendSuggestBriefError(
+				$run->id,
+				$call,
+				SuggestBriefTool::ERROR_SUGGESTION_LIMIT,
+				SuggestBriefTool::LIMIT_MESSAGE
+			);
 			return;
 		}
 
@@ -1778,11 +2389,19 @@ final class Runner {
 	 * suggest-brief-addition call. Counts as a tool call (the caller bumps
 	 * the counter).
 	 *
-	 * @param array{id:string,name:string,args:mixed} $call Call shape.
-	 * @param string                                  $code invalid_suggestion | suggestion_limit | suggestion_dismissed.
+	 * @param array{id:string,name:string,args:mixed} $call    Call shape.
+	 * @param string                                  $code    invalid_suggestion | suggestion_limit | suggestion_dismissed.
+	 * @param string|null                              $message Optional human-readable detail (suggestion_limit
+	 *                                                          only — see the call site); omitted keeps the
+	 *                                                          response shape `{error}` exactly as before.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendSuggestBriefError( int $run_id, array $call, string $code ): array {
+	private function appendSuggestBriefError( int $run_id, array $call, string $code, ?string $message = null ): array {
+		$response = array( 'error' => $code );
+		if ( null !== $message ) {
+			$response['message'] = $message;
+		}
+
 		$message_array = (
 			new UserMessage(
 				array(
@@ -1790,7 +2409,7 @@ final class Runner {
 						new FunctionResponse(
 							'' !== $call['id'] ? $call['id'] : null,
 							SuggestBriefTool::functionName(),
-							array( 'error' => $code )
+							$response
 						)
 					),
 				)
@@ -1994,14 +2613,92 @@ final class Runner {
 	}
 
 	/**
+	 * Tool_result error to the model for a function name that is neither a
+	 * harness tool nor an admittable ability — echoing the mangled name
+	 * back (the pre-2026-09-28 behaviour) left the model no way to recover.
+	 * This names the failure and lists the harness tools that DO exist, so
+	 * the model can self-correct instead of retrying the same bad name.
+	 * Counts as a tool call (the caller bumps the counter), same as any
+	 * other refused call.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
+	 */
+	private function appendUnknownFunctionResult( int $run_id, array $call ): array {
+		$available = array(
+			HarnessTools::functionName(),
+			PlanTools::functionName(),
+			SuggestBriefTool::functionName(),
+		);
+
+		$closest = $available[0];
+		$best    = null;
+		foreach ( $available as $candidate ) {
+			$distance = levenshtein( $call['name'], $candidate );
+			if ( null === $best || $distance < $best ) {
+				$best    = $distance;
+				$closest = $candidate;
+			}
+		}
+
+		$response = array(
+			'error'   => 'unknown_function',
+			'message' => sprintf(
+				'Unknown function "%s". Did you mean "%s"? Available functions: %s.',
+				$call['name'],
+				$closest,
+				implode( ', ', $available )
+			),
+		);
+
+		$message_array = (
+			new UserMessage(
+				array(
+					new MessagePart(
+						new FunctionResponse(
+							'' !== $call['id'] ? $call['id'] : null,
+							$call['name'],
+							$response
+						)
+					),
+				)
+			)
+		)->toArray();
+
+		$seq = $this->store->appendStep(
+			$run_id,
+			StepKind::ToolResult,
+			$message_array,
+			$call['name'],
+			null,
+			'error'
+		);
+
+		return array(
+			'seq'         => $seq,
+			'kind'        => StepKind::ToolResult->value,
+			'message'     => $message_array,
+			'tool_name'   => $call['name'],
+			'approval_id' => null,
+			'status'      => 'error',
+		);
+	}
+
+	/**
 	 * Tool_result error to the model for an invalid/exhausted ask-user call.
 	 * Counts as a tool call (the caller bumps the counter).
 	 *
-	 * @param array{id:string,name:string,args:mixed} $call Call shape.
-	 * @param string                                  $code invalid_question | questions_exhausted.
+	 * @param array{id:string,name:string,args:mixed} $call    Call shape.
+	 * @param string                                  $code    invalid_question | questions_exhausted.
+	 * @param string|null                             $message Why the question was refused, so the model can fix it.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendAskUserError( int $run_id, array $call, string $code ): array {
+	private function appendAskUserError( int $run_id, array $call, string $code, ?string $message = null ): array {
+		$response = array( 'error' => $code );
+		if ( null !== $message ) {
+			$response['message'] = $message;
+		}
+
 		$message_array = (
 			new UserMessage(
 				array(
@@ -2009,7 +2706,7 @@ final class Runner {
 						new FunctionResponse(
 							'' !== $call['id'] ? $call['id'] : null,
 							HarnessTools::functionName(),
-							array( 'error' => $code )
+							$response
 						)
 					),
 				)
@@ -2211,12 +2908,15 @@ final class Runner {
 			$this->remainingQuestions( $run )
 		);
 		if ( is_wp_error( $payload ) ) {
-			$code        = (string) $payload->get_error_code();
-			$new_steps[] = $this->appendPlanError(
-				$run->id,
-				$call,
-				PlanTools::ERROR_UNKNOWN_VERB === $code ? $code : PlanTools::ERROR_INVALID_PLAN
-			);
+			$code = (string) $payload->get_error_code();
+			// page_needs_image and unknown_verb are codes the model must act on
+			// differently than the generic invalid_plan. Every code but
+			// unknown_verb carries the validator's reason: live runs retried a
+			// bare invalid_plan up to 7 times, guessing what was wrong.
+			$distinct_codes = array( PlanTools::ERROR_UNKNOWN_VERB, PlanTools::ERROR_PAGE_NEEDS_IMAGE );
+			$mapped_code    = in_array( $code, $distinct_codes, true ) ? $code : PlanTools::ERROR_INVALID_PLAN;
+			$message        = PlanTools::ERROR_UNKNOWN_VERB === $code ? null : $payload->get_error_message();
+			$new_steps[]    = $this->appendPlanError( $run->id, $call, $mapped_code, $message );
 
 			return array();
 		}
@@ -2612,11 +3312,19 @@ final class Runner {
 	 * Tool_result error to the model for an invalid/exhausted propose-plan call.
 	 * Counts as a tool call (the caller bumps the counter).
 	 *
-	 * @param array{id:string,name:string,args:mixed} $call Call shape.
-	 * @param string                                  $code invalid_plan | plans_exhausted.
+	 * @param array{id:string,name:string,args:mixed} $call    Call shape.
+	 * @param string                                  $code    invalid_plan | plans_exhausted | unknown_verb | page_needs_image.
+	 * @param string|null                              $message Optional human-readable detail (page_needs_image only —
+	 *                                                          see the call site); omitted keeps the response
+	 *                                                          shape `{error}` exactly as before.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendPlanError( int $run_id, array $call, string $code ): array {
+	private function appendPlanError( int $run_id, array $call, string $code, ?string $message = null ): array {
+		$response = array( 'error' => $code );
+		if ( null !== $message ) {
+			$response['message'] = $message;
+		}
+
 		$message_array = (
 			new UserMessage(
 				array(
@@ -2624,7 +3332,7 @@ final class Runner {
 						new FunctionResponse(
 							'' !== $call['id'] ? $call['id'] : null,
 							PlanTools::functionName(),
-							array( 'error' => $code )
+							$response
 						)
 					),
 				)
@@ -2655,11 +3363,31 @@ final class Runner {
 	 * is the ability's function name (functionNameFor), matching the call, so
 	 * crash-resume sees it consumed. NEVER counted as a tool call.
 	 *
+	 * 0.3 quality fix (live run, pages budget exhaustion): `not_in_plan` alone
+	 * told the model WHAT went wrong but not WHAT TO DO about it — a run that
+	 * forgot a media verb re-planned twice (`max_plans`) before it worked out
+	 * which verb was missing, then ran out of `max_steps` anyway. `verb`
+	 * carries the exact verb spelling {@see \Specflux\SenroFlux\Run\VerbTier}
+	 * fenced this call as, so the very next turn can propose a plan step that
+	 * names it, in one round trip instead of a guess-and-check loop. `error`
+	 * itself is UNCHANGED — {@see toolResultErrorCode()} matches it verbatim.
+	 *
 	 * @param array{id:string,name:string,args:mixed} $call Call shape.
 	 * @param string                                  $code plan_required | not_in_plan.
+	 * @param string|null                             $verb The verb this call was fenced as, when known.
 	 * @return array{seq:int,kind:string,message:array<string,mixed>,tool_name:string,status:string}
 	 */
-	private function appendFenceRefusal( int $run_id, array $call, string $code ): array {
+	private function appendFenceRefusal( int $run_id, array $call, string $code, ?string $verb = null ): array {
+		$response = array( 'error' => $code );
+		if ( 'not_in_plan' === $code && null !== $verb ) {
+			$response['verb']    = $verb;
+			$response['message'] = sprintf(
+				/* translators: %s: the verb the accepted plan is missing. */
+				__( 'Refused: not_in_plan. Add the verb "%s" to a plan step (propose a new plan if the accepted one cannot cover it) before retrying this call.', 'senroflux' ),
+				$verb
+			);
+		}
+
 		$message_array = (
 			new UserMessage(
 				array(
@@ -2667,7 +3395,7 @@ final class Runner {
 						new FunctionResponse(
 							'' !== $call['id'] ? $call['id'] : null,
 							self::functionNameFor( $call['name'] ),
-							array( 'error' => $code )
+							$response
 						)
 					),
 				)
@@ -2743,6 +3471,25 @@ final class Runner {
 	}
 
 	/**
+	 * The verb {@see fenceRefusal()} fenced `$call` as, recomputed the same
+	 * way (S9's resolver is pure over run/ability/args) so an
+	 * `appendFenceRefusal()` call site never has to thread an extra return
+	 * value through `fenceRefusal()`'s existing `?string` contract. Null for
+	 * an un-admitted ability — {@see fenceRefusal()} never reaches
+	 * `verbFor()` for one either, so there is nothing to name.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Call shape.
+	 */
+	private function fencedVerb( ToolRegistry $registry, Run $run, array $call ): ?string {
+		$ability = ToolRegistry::abilityName( (string) $call['name'] );
+		if ( ! $registry->admits( $ability ) ) {
+			return null;
+		}
+
+		return $this->verbFor( $run, $ability, $call['args'] ?? null );
+	}
+
+	/**
 	 * The verb one ability call is fenced as, through the injected resolver.
 	 *
 	 * Fail closed on a resolver that misbehaves: a non-string answer (or none)
@@ -2777,7 +3524,23 @@ final class Runner {
 	private function knownVerbs( Run $run, ToolRegistry $registry ): array {
 		$map = $this->packVerbMap( $run );
 
-		return null !== $map ? array_keys( $map ) : $registry->names();
+		$verbs = null !== $map ? array_keys( $map ) : $registry->names();
+
+		// 0.3 quality fix: a run with a zero images budget never lists a
+		// media-generate verb as "known" — the ability itself is withheld
+		// from the tool surface (see ToolRegistry::forRun()), so a plan
+		// naming it here would only be refused unknown_tool later, at
+		// execution, after already costing a plan and a tool-call retry.
+		if ( 0 === (int) ( $run->budget[ Budget::IMAGES ] ?? 0 ) ) {
+			$verbs = array_values(
+				array_filter(
+					$verbs,
+					static fn ( string $verb ): bool => 'generate-image' !== $verb && ! str_ends_with( $verb, '/media-generate' )
+				)
+			);
+		}
+
+		return $verbs;
 	}
 
 	/**
@@ -2796,7 +3559,7 @@ final class Runner {
 			}
 		}
 
-		return array_keys( $verbs );
+		return PlanTools::coveredVerbs( array_keys( $verbs ) );
 	}
 
 	/**
@@ -2976,17 +3739,20 @@ final class Runner {
 	 * Public so Plugin::cancel() can build a partial report on a user-initiated
 	 * terminal transition that never passes through the loop.
 	 *
+	 * @param string|null $unverified_note Optional note surfaced as the report's
+	 *                                      `unverified` field; see {@see failBudget()}.
 	 * @return array{summary:string,changes:list<array<string,mixed>>}
 	 */
-	public function report( int $run_id ): array {
+	public function report( int $run_id, ?string $unverified_note = null ): array {
 		$fresh   = $this->store->getRun( $run_id );
 		$objects = ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
 		$report  = Report::build(
-			$this->latestModelText( $run_id ),
+			$this->finalSummaryText( $run_id, $objects ),
 			$objects,
 			$this->post_lookup,
 			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety,
-			null !== $fresh ? $fresh->withheldRoles : array()
+			null !== $fresh ? $fresh->withheldRoles : array(),
+			$unverified_note
 		);
 
 		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );
@@ -3041,9 +3807,17 @@ final class Runner {
 			}
 		} elseif ( VerbTier::TIER_0 === $tier ) {
 			$args    = $call['args'] ?? null;
-			$read_id = is_array( $args ) ? self::objectIdIn( $args, $key ) : null;
-			if ( null !== $read_id ) {
-				$qualified = $prefix . $read_id;
+			$args    = is_array( $args ) ? $args : array();
+			$read_id = $this->readObjectIdFor( $run, $verb, $args ) ?? self::objectIdIn( $args, $key );
+
+			// S12 (defect fix, live run 61): `read-content`'s query mode names
+			// several ids at once via `include` rather than the single-id key
+			// above — each one is just as much a verification as a single-id
+			// read, so every valid id in the list counts too.
+			$read_ids = null !== $read_id ? array( $read_id ) : self::includeIdsIn( $args );
+
+			foreach ( $read_ids as $one_read_id ) {
+				$qualified = $prefix . $one_read_id;
 				if ( array_key_exists( $qualified, $objects ) ) {
 					$objects = Tracker::recordVerification( $objects, $qualified, $seq );
 				}
@@ -3090,6 +3864,22 @@ final class Runner {
 	}
 
 	/**
+	 * The id a Tier-0 read just read, per {@see $read_object_id_resolver},
+	 * else null. A resolver that misbehaves is treated as null.
+	 *
+	 * @param array<string,mixed> $args The call's args.
+	 */
+	private function readObjectIdFor( Run $run, string $verb, array $args ): ?string {
+		if ( ! is_callable( $this->read_object_id_resolver ) ) {
+			return null;
+		}
+
+		$id = ( $this->read_object_id_resolver )( $run, $verb, $args );
+
+		return ( is_string( $id ) && '' !== $id ) ? $id : null;
+	}
+
+	/**
 	 * The object-id PREFIX for one verb: whatever the injected resolver
 	 * answers, else '' (no prefix, S12 pre-existing behaviour). A resolver
 	 * that misbehaves falls back to '' rather than corrupting every id.
@@ -3118,6 +3908,34 @@ final class Runner {
 		}
 
 		return ( is_string( $value ) && '' !== $value ) ? $value : null;
+	}
+
+	/**
+	 * S12 (defect fix, live run 61): the ids in a Tier-0 read's `include`
+	 * list — `read-content`'s query mode names several objects at once this
+	 * way, rather than the single-id key {@see objectIdKeyFor()} extracts.
+	 * Only integers and numeric strings count; a missing/malformed `include`
+	 * is an empty list, never an error.
+	 *
+	 * @param array<string,mixed> $args The call's args.
+	 * @return list<string>
+	 */
+	private static function includeIdsIn( array $args ): array {
+		$include = $args['include'] ?? null;
+		if ( ! is_array( $include ) ) {
+			return array();
+		}
+
+		$ids = array();
+		foreach ( $include as $value ) {
+			if ( is_int( $value ) ) {
+				$ids[] = (string) $value;
+			} elseif ( is_string( $value ) && is_numeric( $value ) ) {
+				$ids[] = $value;
+			}
+		}
+
+		return $ids;
 	}
 
 	/**
@@ -3323,6 +4141,31 @@ final class Runner {
 	}
 
 	/**
+	 * S12 (defect fix, live run 61): the report's final summary text.
+	 *
+	 * A verify nudge's whole point is to make the model re-read before
+	 * finishing — but its post-nudge finish text is answering "did the
+	 * verification turn up anything new?", not restating the summary it
+	 * already gave. When nothing was written after the nudge, the model's
+	 * PRE-nudge finish text is the real summary and the post-nudge text (a
+	 * "no changes" placeholder in practice) must not overwrite it. A write
+	 * after the nudge means the model had something new to report, so the
+	 * latest text stands.
+	 *
+	 * @param array<string,mixed> $objects The run's objects_json map.
+	 */
+	private function finalSummaryText( int $run_id, array $objects ): string {
+		$nudge_seq = $this->latestVerifyNudgeSeq( $run_id );
+		if ( null === $nudge_seq || $this->newWriteAfterNudge( $objects, $nudge_seq ) ) {
+			return $this->latestModelText( $run_id );
+		}
+
+		$pre_nudge_text = $this->modelTextBefore( $run_id, $nudge_seq );
+
+		return '' !== $pre_nudge_text ? $pre_nudge_text : $this->latestModelText( $run_id );
+	}
+
+	/**
 	 * The newest model step's text parts joined ('' when none).
 	 *
 	 * @return string
@@ -3330,6 +4173,26 @@ final class Runner {
 	private function latestModelText( int $run_id ): string {
 		$text = '';
 		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
+				continue;
+			}
+			$text = $this->joinedText( $step->messageArray );
+		}
+
+		return $text;
+	}
+
+	/**
+	 * The newest model step's text parts joined, among steps strictly before
+	 * `$seq_limit` ('' when none) — {@see finalSummaryText()}'s pre-nudge
+	 * lookup.
+	 */
+	private function modelTextBefore( int $run_id, int $seq_limit ): string {
+		$text = '';
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( $step->seq >= $seq_limit ) {
+				break;
+			}
 			if ( StepKind::Model !== $step->kind || null === $step->messageArray ) {
 				continue;
 			}

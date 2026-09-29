@@ -122,6 +122,15 @@ if ( ! function_exists( 'wp_enqueue_style' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_style_add_data' ) ) {
+	/** No-op shim. */
+	function wp_style_add_data( ...$args ): bool {
+		unset( $args );
+
+		return true;
+	}
+}
+
 if ( ! function_exists( 'wp_enqueue_script' ) ) {
 	/** No-op shim. */
 	function wp_enqueue_script( ...$args ): void {
@@ -130,9 +139,17 @@ if ( ! function_exists( 'wp_enqueue_script' ) ) {
 }
 
 if ( ! function_exists( 'wp_localize_script' ) ) {
-	/** No-op shim. */
+	/**
+	 * Records the last payload localized under each JS object name, keyed by
+	 * `$object_name` (e.g. `senrofluxRunsConfig`) — a test wanting to assert
+	 * on what a screen handed its script reads
+	 * `$GLOBALS['senroflux_test_localized'][ $object_name ]` rather than
+	 * mocking the WP function itself.
+	 */
 	function wp_localize_script( string $handle, string $object_name, array $data ): bool {
-		unset( $handle, $object_name, $data );
+		unset( $handle );
+
+		$GLOBALS['senroflux_test_localized'][ $object_name ] = $data;
 
 		return true;
 	}

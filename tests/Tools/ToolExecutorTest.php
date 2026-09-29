@@ -81,6 +81,80 @@ final class ToolExecutorTest extends TestCase {
 		$this->assertStringContainsString( 'allow-list', (string) $outcome->errorMessage );
 	}
 
+	public function test_a_bare_false_permission_still_gives_the_model_a_reason(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/denied' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/denied',
+				permission_result: false,
+				execute_result: array( 'ok' => true )
+			),
+		);
+
+		$outcome = $this->executor->call( 'agsafe-smoke/denied', null );
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'not_allowed', $outcome->errorCode );
+		$this->assertNotSame( '', (string) $outcome->errorMessage );
+	}
+
+	/**
+	 * Live evidence 2026-09-29-cards1/scenario-1-1 step 115: the model resent
+	 * {@see ToolExecutor::HISTORY_PLACEHOLDER_FORMAT}'s exact text as its
+	 * `sections` argument, having read it in the history as a value rather
+	 * than a note about the history. Caught here, before the ability ever
+	 * runs, with a message that says what actually happened.
+	 */
+	public function test_a_resent_history_placeholder_is_refused_before_execute(): void {
+		$executed                            = false;
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/write',
+				execute_result: function () use ( &$executed ) {
+					$executed = true;
+
+					return array( 'ok' => true );
+				},
+			),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(
+				'sections' => sprintf( ToolExecutor::HISTORY_PLACEHOLDER_FORMAT, 3626 ),
+			)
+		);
+
+		$this->assertFalse( $executed, 'a placeholder resent as content must never reach execute()' );
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'history_placeholder', $outcome->errorCode );
+		$this->assertStringContainsString( 'note left behind by history compaction', (string) $outcome->errorMessage );
+	}
+
+	/**
+	 * The same placeholder text nested inside an array argument (a `sections`
+	 * item, not the top-level value) is caught too — the resent history
+	 * placeholder always replaces a whole argument or a whole array item,
+	 * never a substring, but it can land at any depth.
+	 */
+	public function test_a_nested_history_placeholder_is_refused_too(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write' ),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(
+				'sections' => array(
+					array( 'layout' => 'text' ),
+					sprintf( ToolExecutor::HISTORY_PLACEHOLDER_FORMAT, 500 ),
+				),
+			)
+		);
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'history_placeholder', $outcome->errorCode );
+	}
+
 	public function test_success_wraps_scalar_output_as_text(): void {
 		$GLOBALS['senroflux_test_abilities'] = array(
 			'tool/text' => new SenroFlux_Test_Fake_Ability( 'tool/text', execute_result: 'just a string' ),
@@ -222,5 +296,59 @@ final class ToolExecutorTest extends TestCase {
 		$outcome = $this->executor->call( 'agsafe-smoke/write', array(), null );
 
 		$this->assertSame( 'result', $outcome->kind );
+	}
+
+	/**
+	 * Live batches 2026-09-29-final/final3 scenario 4: the model sent page
+	 * sections as JSON strings ("input[sections][0] is not of type object"),
+	 * and each refusal cost a full page-sized turn.
+	 */
+	public function test_json_encoded_strings_are_decoded_where_the_schema_expects_objects_or_arrays(): void {
+		$received = null;
+		$GLOBALS['senroflux_test_abilities']['senroflux/publish-post'] = new SenroFlux_Test_Fake_Ability(
+			'senroflux/publish-post',
+			execute_result: function ( $input ) use ( &$received ) {
+				$received = $input;
+
+				return array( 'ok' => true );
+			},
+			input_schema: array(
+				'type'       => 'object',
+				'properties' => array(
+					'title'    => array( 'type' => 'string' ),
+					'sections' => array(
+						'type'  => 'array',
+						'items' => array(
+							'type'       => 'object',
+							'properties' => array(
+								'paragraphs' => array(
+									'type'  => 'array',
+									'items' => array( 'type' => 'string' ),
+								),
+							),
+						),
+					),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'senroflux/publish-post',
+			array(
+				'title'    => '{"not":"decoded, the schema says string"}',
+				'sections' => array( '{"layout":"text","paragraphs":"[\"One.\",\"Two.\"]"}' ),
+			)
+		);
+
+		$this->assertSame( '{"not":"decoded, the schema says string"}', $received['title'] );
+		$this->assertSame(
+			array(
+				array(
+					'layout'     => 'text',
+					'paragraphs' => array( 'One.', 'Two.' ),
+				),
+			),
+			$received['sections']
+		);
 	}
 }

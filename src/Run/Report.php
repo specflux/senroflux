@@ -51,9 +51,14 @@ final class Report {
 	 *                                         Null means the default wpAdapter.
 	 * @param GateMode            $gate_mode   The run's pinned gate mode (0.3 S3).
 	 * @param list<string>        $withheld_roles The run's withheld role names (0.3 S6).
+	 * @param string|null         $unverified_note Optional note (Runner's `writesFinished()`
+	 *                                             budget-exceeded path): the run completed
+	 *                                             with its writes done, but a budget ceiling
+	 *                                             cut verification short — e.g.
+	 *                                             `unverified: budget_exceeded (max_tokens)`.
 	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string,withheld_roles:list<string>}
 	 */
-	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array() ): array {
+	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array(), ?string $unverified_note = null ): array {
 		$lookup  = $post_lookup ?? self::wpPostLookup();
 		$changes = array();
 
@@ -93,6 +98,10 @@ final class Report {
 
 		if ( GateMode::BuiltIn === $gate_mode ) {
 			$report['gate_mode_note'] = __( 'Approvals for this run are recorded only on this page.', 'senroflux' );
+		}
+
+		if ( null !== $unverified_note && '' !== $unverified_note ) {
+			$report['unverified'] = $unverified_note;
 		}
 
 		return $report;

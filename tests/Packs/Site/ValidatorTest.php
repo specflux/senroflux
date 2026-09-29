@@ -157,6 +157,7 @@ HTML;
 <div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
 <!-- wp:heading --><h2 class="wp-block-heading">Visit Crumb &amp; Co</h2><!-- /wp:heading -->
 <!-- wp:paragraph --><p>Find us at 12 Mill Lane, Tuesday through Sunday, 7am&#8211;3pm. We're closed on Mondays.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>Call ahead for large orders; walk-ins are always welcome during opening hours.</p><!-- /wp:paragraph -->
 </div><!-- /wp:group -->
 HTML;
 
@@ -188,6 +189,7 @@ HTML;
 <div class="wp-block-group">
 <!-- wp:heading --><h2 class="wp-block-heading">Visit Crumb &amp; Co</h2><!-- /wp:heading -->
 <!-- wp:paragraph --><p>Find us at 12 Mill Lane, Tuesday through Sunday, 7am&#8211;3pm. We're closed on Mondays.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>Call ahead for large orders; walk-ins are always welcome during opening hours.</p><!-- /wp:paragraph -->
 </div><!-- /wp:group -->
 HTML;
 

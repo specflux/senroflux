@@ -151,6 +151,35 @@ if ( ! function_exists( 'get_posts' ) ) {
 	}
 }
 
+if ( ! function_exists( 'trailingslashit' ) ) {
+	function trailingslashit( string $path ): string {
+		return rtrim( $path, '/\\' ) . '/';
+	}
+}
+
+if ( ! function_exists( 'get_attached_file' ) ) {
+	/**
+	 * 0.3 quality fix 3: the on-disk path `generateAltText()`'s caller falls
+	 * back to when no intermediate size is registered. Scripted per
+	 * attachment via `$GLOBALS['senroflux_test_attached_files'][$id]`;
+	 * absent means "no file on disk" (the missing-file refusal path).
+	 */
+	function get_attached_file( int $attachment_id ): string|false {
+		return $GLOBALS['senroflux_test_attached_files'][ $attachment_id ] ?? false;
+	}
+}
+
+if ( ! function_exists( 'image_get_intermediate_size' ) ) {
+	/**
+	 * 0.3 quality fix 3: scripted per attachment+size via
+	 * `$GLOBALS['senroflux_test_intermediate_sizes'][$id][$size]` (a
+	 * `basedir`-relative `path`, mirroring the real function's shape).
+	 */
+	function image_get_intermediate_size( int $attachment_id, string $size = 'thumbnail' ): array|false {
+		return $GLOBALS['senroflux_test_intermediate_sizes'][ $attachment_id ][ $size ] ?? false;
+	}
+}
+
 if ( ! function_exists( 'wp_get_attachment_metadata' ) ) {
 	/**
 	 * `read-media`'s dimensions source (defect fix): scripted per attachment

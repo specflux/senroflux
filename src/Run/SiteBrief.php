@@ -48,7 +48,7 @@ final class SiteBrief {
 	 *
 	 * @return true|WP_Error True when valid; a `brief_too_long` WP_Error otherwise.
 	 */
-	public static function validate( string $text ): true|WP_Error {
+	public static function validate( string $text ): bool|WP_Error {
 		if ( mb_strlen( $text ) > self::MAX_CHARS ) {
 			return new WP_Error(
 				self::ERROR_TOO_LONG,
@@ -70,7 +70,7 @@ final class SiteBrief {
 	 *
 	 * @return true|WP_Error
 	 */
-	public static function set( string $text ): true|WP_Error {
+	public static function set( string $text ): bool|WP_Error {
 		$valid = self::validate( $text );
 		if ( is_wp_error( $valid ) ) {
 			return $valid;

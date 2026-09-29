@@ -44,7 +44,8 @@ final class SkillSetTest extends TestCase {
 			}
 
 			/** @return list<Skill> */
-			public function skills(): array {
+			public function skills( bool $images_available = true ): array {
+				unset( $images_available );
 				return $this->packSkills;
 			}
 
@@ -94,6 +95,29 @@ final class SkillSetTest extends TestCase {
 			'never announce work you have not yet done',
 			$workflow->body
 		);
+	}
+
+	/**
+	 * Live runs (2026-09-28): a site run never asked for the services and
+	 * invented generic ones; a Contact page went out without address or hours;
+	 * a blog post ignored a tone it never asked about. Facts come first: read
+	 * the site, then ask once for everything still missing.
+	 */
+	public function test_workflow_skill_gathers_the_facts_before_planning(): void {
+		$workflow = '';
+		foreach ( SkillSet::harnessSkills() as $skill ) {
+			if ( 'harness/workflow' === $skill->id ) {
+				$workflow = $skill->body;
+			}
+		}
+
+		$this->assertStringContainsString( 'read what the site already says', $workflow );
+		$this->assertStringContainsString( 'in one `senroflux/ask-user` call', $workflow );
+		foreach ( array( 'who each is for', 'address', 'hours', 'tone', 'proof point' ) as $fact ) {
+			$this->assertStringContainsString( $fact, $workflow );
+		}
+		$this->assertStringContainsString( 'Never invent a missing fact', $workflow );
+		$this->assertStringContainsString( 'senroflux/suggest-brief-addition', $workflow );
 	}
 
 	public function test_collect_builds_harness_then_pack_then_consumer(): void {

@@ -41,4 +41,24 @@ interface ThemePatternSource {
 	 * (S21), for the `list-patterns` payload's `theme_patterns_skipped`.
 	 */
 	public function themePatternsSkippedCount(): int;
+
+	/**
+	 * Whether `$name` is one of this pack's own curated (hand-authored)
+	 * patterns, as opposed to a theme-derived one (0.3 quality fix, live run:
+	 * a `sections` item sent a curated pattern's name through the
+	 * numbered-slot `{pattern, slots}` form only theme-derived patterns
+	 * accept, and got the SAME generic "not available" message a genuine typo
+	 * would — {@see \Specflux\SenroFlux\Packs\Content\Abilities::themePatternUnknownError()}
+	 * uses this to say what is actually wrong instead).
+	 */
+	public function isCuratedPatternName( string $name ): bool;
+
+	/**
+	 * The names of every eligible theme-derived pattern (S21), for the
+	 * `theme_pattern_unknown` refusal to list so a genuinely unknown name is
+	 * actionable without a second `list-patterns` round trip.
+	 *
+	 * @return list<string>
+	 */
+	public function themePatternNames(): array;
 }

@@ -226,9 +226,18 @@ export function stepTier( step ) {
  * @return {Array} One entry per plan step: `{ done, total, active, waiting }`.
  */
 export function planProgress( plan, steps ) {
+	let lastPlan = -1;
+	steps.forEach( ( step, index ) => {
+		if ( 'plan' === step.kind ) {
+			lastPlan = index;
+		}
+	} );
+	// A tool_result records the verb its plan names it by (`plan_verb`);
+	// older rows only carry the function name.
 	const executedVerbs = steps
+		.slice( lastPlan + 1 )
 		.filter( ( step ) => 'tool_result' === step.kind && 'ok' === step.status )
-		.map( ( step ) => stepVerb( step ) );
+		.map( ( step ) => ( step.message && step.message.plan_verb ) || stepVerb( step ) );
 
 	let cursor = 0;
 	const parkedVerb = ( () => {
@@ -240,9 +249,12 @@ export function planProgress( plan, steps ) {
 		const verbs = Array.isArray( planStep.verbs ) ? planStep.verbs : [];
 		let done = 0;
 		verbs.forEach( ( verb ) => {
-			if ( executedVerbs[ cursor ] === verb ) {
+			// Search forward: unplanned calls in between, or a planned verb
+			// that never ran, must not stall the steps after it.
+			const found = executedVerbs.indexOf( verb, cursor );
+			if ( -1 !== found ) {
 				done++;
-				cursor++;
+				cursor = found + 1;
 			}
 		} );
 		return {
@@ -329,6 +341,18 @@ export function stepLabel( step, fallbackLabel ) {
 		return verb;
 	}
 	return words.charAt( 0 ).toUpperCase() + words.slice( 1 );
+}
+
+/**
+ * The distinct labels of a ledger group's calls, in first-seen order, so a
+ * collapsed group's summary never hides a write between reads.
+ *
+ * @param {Array}  calls         `{ step }` entries from `groupSteps`.
+ * @param {string} fallbackLabel Label for a call with no verb.
+ * @return {Array<string>} Labels.
+ */
+export function ledgerLabels( calls, fallbackLabel ) {
+	return [ ...new Set( calls.map( ( call ) => stepLabel( call.step, fallbackLabel ) ) ) ];
 }
 
 /**

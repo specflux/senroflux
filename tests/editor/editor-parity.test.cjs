@@ -101,6 +101,20 @@ test( 'a full page after Validator::clean() opens in the editor without recovery
 	assert.deepEqual( invalidBlocks( fixtures.page ), [] );
 } );
 
+test( 'a page built from layouts after Validator::clean() opens in the editor without recovery', () => {
+	assert.ok( fixtures.layouts.includes( 'wp:cover' ) );
+	assert.deepEqual( invalidBlocks( fixtures.layouts ), [] );
+} );
+
+// D3a (S4): a real Ollie pattern's shipped colour (backgroundColor="primary",
+// textColor="base"), filled through the plugin's own fill path and cleaned
+// by the Validator, must still open in the editor without recovery.
+test( 'a filled Ollie pattern opens in the editor without recovery', () => {
+	assert.ok( fixtures.ollie.includes( 'numbers-stacked' ) );
+	assert.ok( fixtures.ollie.includes( '"backgroundColor":"primary"' ) );
+	assert.deepEqual( invalidBlocks( fixtures.ollie ), [] );
+} );
+
 // Negative control: the check must be able to fail. Removing a colour from the
 // block comment while the HTML keeps its inline style — what the old step-5
 // strip did — has to be flagged.

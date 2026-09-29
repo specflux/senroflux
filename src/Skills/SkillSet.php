@@ -57,7 +57,7 @@ final class SkillSet {
 			new Skill(
 				'harness/workflow',
 				'Workflow',
-				'Work in four phases: clarify, plan, act, verify. Clarify with `senroflux/ask-user`: one question per call, only for things you cannot look up with a read tool. A goal that names only a subject still leaves real choices open — who it is for, which parts to include, what it should say — so ask about those one at a time before you plan; stop asking when the answer would not change what you build. Before your first write, call `senroflux/propose-plan`; every step must list the verbs it needs, spelled exactly as the guidance for this site gives them. Writes outside an accepted plan are refused. After writing, re-read every object you changed before you finish. A reply with no tool call ends the run immediately and becomes your final report to the human, whatever phase you are in — so never announce work you have not yet done in plain text. If work remains, do it with a tool call: ask with `senroflux/ask-user`, propose with `senroflux/propose-plan`, or act; only send a plain-text reply once everything is actually finished. Finish with a short plain-language summary that names objects by title; do not paste URLs, and write it as plain sentences with no markdown formatting at all — no **bold**, no # headings, no bullet lists, no backtick code spans.',
+				'Work in four phases: clarify, plan, act, verify. Clarify: first read what the site already says (its pages, especially home and contact). Then ask, in one `senroflux/ask-user` call, for every fact the goal needs that you still lack: the business name, the services or products and who each is for, phone, email, address, hours, how to book or buy, the tone, and one proof point (years open, a qualification, a named client). Ask a follow-up only when an answer leaves the plan open. Never invent a missing fact: ask for it or leave it out. Offer lasting facts the owner gives you with `senroflux/suggest-brief-addition`. Before your first write, call `senroflux/propose-plan`; every step must list the verbs it needs, spelled exactly as the guidance for this site gives them. Writes outside an accepted plan are refused. After writing, re-read every object you changed before you finish. A reply with no tool call ends the run immediately and becomes your final report to the human, whatever phase you are in — so never announce work you have not yet done in plain text. If work remains, do it with a tool call: ask with `senroflux/ask-user`, propose with `senroflux/propose-plan`, or act; only send a plain-text reply once everything is actually finished. Finish with a short plain-language summary that names objects by title; do not paste URLs, and write it as plain sentences with no markdown formatting at all — no **bold**, no # headings, no bullet lists, no backtick code spans. A refusal or error is yours to fix, not the user\'s.',
 				true
 			),
 			new Skill(
@@ -110,11 +110,13 @@ final class SkillSet {
 	 * @param mixed             $pack           The run's Pack, or null. Anything
 	 *                                          that is not a Pack is treated as
 	 *                                          null (the direct-allow reading).
-	 * @param list<string>|null $skills_disable Skill ids to suppress (required ids ignored).
-	 * @param string|null       $content_locale The site content locale for `harness/content-language`.
+	 * @param list<string>|null $skills_disable    Skill ids to suppress (required ids ignored).
+	 * @param string|null       $content_locale    The site content locale for `harness/content-language`.
+	 * @param bool              $images_available  0.3 quality fix (images budget 0): forwarded to
+	 *                                              {@see Pack::skills()} verbatim.
 	 * @return list<Skill>
 	 */
-	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null, ?string $content_locale = null ): array {
+	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null, ?string $content_locale = null, bool $images_available = true ): array {
 		$pack = $pack instanceof Pack ? $pack : null;
 
 		$base = array();
@@ -123,7 +125,7 @@ final class SkillSet {
 		}
 
 		if ( null !== $pack ) {
-			foreach ( $pack->skills() as $skill ) {
+			foreach ( $pack->skills( $images_available ) as $skill ) {
 				if ( ! isset( $base[ $skill->id ] ) ) {
 					$base[ $skill->id ] = $skill;
 				}

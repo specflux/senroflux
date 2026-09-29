@@ -1,4 +1,4 @@
-import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel, stepResult } from '../utils';
+import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel, stepResult, ledgerLabels } from '../utils';
 
 // Every RunStatus case (src/Run/RunStatus.php), kept in sync by hand: a
 // future status added there and not here would silently fall through the
@@ -157,6 +157,38 @@ describe( 'planProgress', () => {
 		expect( progress[ 0 ] ).toMatchObject( { done: 1, total: 1 } );
 		expect( progress[ 1 ] ).toMatchObject( { done: 1, total: 2 } );
 	} );
+
+	// Smoke run 2026-09-26 (and outline4 scenario 2-2): a finished run read
+	// "~0 / 2". Plan verbs are pack verbs, calls before the plan came first,
+	// and a planned verb that never ran must not stall the rest.
+	it( 'matches pack plan verbs through plan_verb, from the plan onward', () => {
+		const plan = {
+			steps: [
+				{ verbs: [ 'pages/media-search', 'pages/media-generate', 'pages/create-draft' ] },
+				{ verbs: [ 'pages/read' ] },
+			],
+		};
+		const result = ( tool, verb, status = 'ok' ) => ( {
+			kind: 'tool_result',
+			status,
+			tool_name: tool,
+			message: { role: 'user', parts: [], plan_verb: verb },
+		} );
+		const steps = [
+			result( 'senroflux/ask-user', 'senroflux/ask-user' ),
+			result( 'wpab__senroflux__read-content', 'pages/read' ),
+			{ kind: 'plan', status: 'ok', message: plan },
+			result( 'senroflux/propose-plan', 'senroflux/propose-plan' ),
+			result( 'wpab__senroflux__media-search', 'pages/media-search' ),
+			result( 'wpab__senroflux__create-post', 'pages/create-draft', 'error' ),
+			result( 'wpab__senroflux__create-post', 'pages/create-draft' ),
+			result( 'wpab__senroflux__read-content', 'pages/read' ),
+		];
+
+		const progress = planProgress( plan, steps );
+		expect( progress[ 0 ] ).toMatchObject( { done: 2, total: 3 } );
+		expect( progress[ 1 ] ).toMatchObject( { done: 1, total: 1 } );
+	} );
 } );
 
 describe( 'stepLabel derives a readable label, distinct from the raw ability id (live-review finding)', () => {
@@ -196,5 +228,16 @@ describe( 'stepResult never returns the bare "Rejected by you, not done" fallbac
 			message: { parts: [ { functionResponse: { response: { error: 'boom' } } } ] },
 		};
 		expect( stepResult( step ) ).toBe( 'boom' );
+	} );
+} );
+
+// Smoke run 2026-09-26: a group summarised as "4 actions: Read content" hid
+// the create-post write inside it, because only the last call was named.
+describe( 'ledgerLabels', () => {
+	it( 'names every distinct action in a group, in order', () => {
+		const calls = [ 'read-content', 'create-post', 'read-content', 'read-content' ].map( ( slug ) => ( {
+			step: { tool_name: `wpab__senroflux__${ slug }` },
+		} ) );
+		expect( ledgerLabels( calls, 'Tool call' ) ).toEqual( [ 'Read content', 'Create post' ] );
 	} );
 } );

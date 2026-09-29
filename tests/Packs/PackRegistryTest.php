@@ -434,7 +434,8 @@ final class PackRegistryTest extends TestCase {
 			}
 
 			/** @return list<Skill> */
-			public function skills(): array {
+			public function skills( bool $images_available = true ): array {
+				unset( $images_available );
 				return array(
 					new Skill(
 						'pages/copy-rules',

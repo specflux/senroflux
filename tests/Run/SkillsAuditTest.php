@@ -186,7 +186,8 @@ final class SkillsAuditTest extends TestCase {
 			}
 
 			/** @return list<Skill> */
-			public function skills(): array {
+			public function skills( bool $images_available = true ): array {
+				unset( $images_available );
 				return $this->packSkills;
 			}
 

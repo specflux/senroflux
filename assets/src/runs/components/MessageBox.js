@@ -1,5 +1,35 @@
-import { useState } from '@wordpress/element';
-import { __ } from '@wordpress/i18n';
+import { useEffect, useState } from '@wordpress/element';
+import { __, sprintf } from '@wordpress/i18n';
+import { SelectControl } from '@wordpress/components';
+
+/** Automatic sentinel value for the model `<select>`. */
+const AUTOMATIC_VALUE = '';
+
+/**
+ * Flatten `modelChoices` (`{ providerId: { name, models: [{id, name}] } }`)
+ * into an ordered list the `<select>` can index into by POSITION rather than
+ * by a composite string key — provider ids and model ids are opaque values
+ * from the AI Client registry, so building a separator-joined key risks a
+ * collision if either ever contains that separator. An index is always safe.
+ *
+ * @param {Object} modelChoices `senrofluxRunsConfig.modelChoices`.
+ * @return {Array<{provider: string, providerName: string, id: string, name: string}>}
+ */
+function flattenModelChoices( modelChoices ) {
+	const flat = [];
+	Object.keys( modelChoices || {} ).forEach( ( providerId ) => {
+		const provider = modelChoices[ providerId ];
+		( provider.models || [] ).forEach( ( model ) => {
+			flat.push( {
+				provider: providerId,
+				providerName: provider.name,
+				id: model.id,
+				name: model.name,
+			} );
+		} );
+	} );
+	return flat;
+}
 
 /**
  * The message box (S10). It only ever starts a NEW run — this system has no
@@ -10,20 +40,68 @@ import { __ } from '@wordpress/i18n';
  * driven automatically once started; see `App`'s `driveTicks`) both disable
  * it, same as before 17c wired the actual submit.
  *
- * @param {Object} props
- * @param {string} props.state       'idle' | 'parked' | 'running'.
- * @param {Function} [props.onSend]  `( goal ) => void`, starts a new run.
- * @param {string}   [props.initialText] Pre-fills the box (0.3 S10, the
- *                                       command palette's "SenroFlux: run
- *                                       "<text>"" command) — this ONLY seeds
- *                                       the textarea; it never calls
- *                                       `onSend()` itself, so landing here
- *                                       from the palette never starts a run
- *                                       on its own.
+ * A NEW run needs a capability pack (runs-pack fix): a pack-less start has an
+ * empty verb map, so every read/plan call the model makes is refused
+ * fail-closed ({@see \Specflux\SenroFlux\Tools\VerbTier}) and the run
+ * deadlocks. `packs` is the CURRENT viewer's runnable packs
+ * ({@see \Specflux\SenroFlux\Admin\RunsScreen::runnablePacks()}), each a data
+ * `{ name, label }` pair. Exactly one pack auto-selects; two or more show a
+ * "Choose what to work on" placeholder and hold Start disabled until one is
+ * picked; zero packs render no picker at all and Start stays disabled.
+ *
+ * Runs-pack fix: a pack whose preflight refuses this viewer used to simply
+ * vanish, so when EVERY pack failed the box went silent — no picker AND no
+ * explanation. `unavailablePacks` renders that reason as a short notice
+ * (below the picker, or in its place when there is none), for every case
+ * from "one pack unavailable, one runnable" up to "zero runnable".
+ *
+ * A per-run model picker sits alongside the pack picker, defaulting to
+ * "Automatic" — `onSend` is called with that choice as its third argument
+ * (`null` for automatic) so `App`/`startRun` never has to re-derive it. The
+ * picker is omitted entirely when `modelChoices` names no configured
+ * provider, since there is nothing to choose between.
+ *
+ * @param {Object}   props
+ * @param {string}   props.state          'idle' | 'parked' | 'running'.
+ * @param {Function} [props.onSend]       `( goal, pack, model ) => void`, starts a new run. `model` is `{ provider, id } | null`.
+ * @param {string}   [props.initialText]  Pre-fills the box (0.3 S10, the
+ *                                        command palette's "SenroFlux: run
+ *                                        "<text>"" command) — this ONLY seeds
+ *                                        the textarea; it never calls
+ *                                        `onSend()` itself, so landing here
+ *                                        from the palette never starts a run
+ *                                        on its own.
+ * @param {Array<{name:string,label:string}>}  [props.packs]             The viewer's runnable packs.
+ * @param {Array<{name:string,reason:string}>} [props.unavailablePacks] Packs whose preflight
+ *                                                                       refused this viewer, with why
+ *                                                                       ({@see \Specflux\SenroFlux\Admin\RunsScreen::unavailablePacks()}) —
+ *                                                                       rendered as a short notice so a
+ *                                                                       viewer with zero (or fewer)
+ *                                                                       runnable packs finds out why,
+ *                                                                       rather than the box just going
+ *                                                                       quiet.
+ * @param {Object}   [props.modelChoices] `senrofluxRunsConfig.modelChoices` — `{ providerId: { name, models: [{id, name}] } }`, only configured providers.
  */
-export default function MessageBox( { state, onSend, initialText } ) {
+export default function MessageBox( { state, onSend, initialText, packs, unavailablePacks, modelChoices } ) {
+	const packList = Array.isArray( packs ) ? packs : [];
+	const unavailableList = Array.isArray( unavailablePacks ) ? unavailablePacks : [];
 	const [ text, setText ] = useState( initialText || '' );
-	const disabled = 'idle' !== state || ! onSend;
+	const [ pack, setPack ] = useState( () => ( 1 === packList.length ? packList[ 0 ].name : '' ) );
+	const [ modelIndex, setModelIndex ] = useState( AUTOMATIC_VALUE );
+	const flatModels = flattenModelChoices( modelChoices );
+
+	// Keeps the single-pack case auto-selected even if `packs` only resolves
+	// after mount (e.g. a later config load); a no-op once `pack` is already
+	// that pack's name.
+	useEffect( () => {
+		if ( 1 === packList.length && pack !== packList[ 0 ].name ) {
+			setPack( packList[ 0 ].name );
+		}
+	}, [ pack, packList ] );
+
+	const packReady = 0 === packList.length ? false : 1 === packList.length ? true : '' !== pack;
+	const boxDisabled = 'idle' !== state || ! onSend;
+	const disabled = boxDisabled || ! packReady;
 
 	const placeholder =
 		'parked' === state
@@ -32,33 +110,118 @@ export default function MessageBox( { state, onSend, initialText } ) {
 			? __( 'Working. Keep this page open; the run pauses if you leave and continues when you come back.', 'senroflux' )
 			: __( 'Describe what you want done…', 'senroflux' );
 
+	// Grouped by provider via real `<optgroup>` elements (SelectControl
+	// renders whatever `children` it is given instead of its own flat
+	// `options` list once `children` is non-empty) — each `<option>`'s
+	// `value` is its POSITION in `flatModels`, matching how `submit()` below
+	// decodes the selection.
+	const modelGroups = new Map();
+	flatModels.forEach( ( model, index ) => {
+		if ( ! modelGroups.has( model.provider ) ) {
+			modelGroups.set( model.provider, {
+				providerName: model.providerName,
+				options: [],
+			} );
+		}
+		modelGroups.get( model.provider ).options.push( { index, model } );
+	} );
+
 	const submit = () => {
 		const goal = text.trim();
-		if ( '' === goal || ! onSend ) {
+		if ( '' === goal || ! onSend || ! packReady ) {
 			return;
 		}
-		onSend( goal );
+		const chosenModel =
+			AUTOMATIC_VALUE === modelIndex ? null : flatModels[ Number( modelIndex ) ];
+		onSend(
+			goal,
+			packList.length > 0 ? pack : undefined,
+			chosenModel ? { provider: chosenModel.provider, id: chosenModel.id } : null
+		);
 		setText( '' );
 	};
 
 	return (
-		<div className="senroflux-message-box">
-			<textarea
-				className="senroflux-message-box-input"
-				disabled={ disabled }
-				placeholder={ placeholder }
-				value={ text }
-				onChange={ ( e ) => setText( e.target.value ) }
-				onKeyDown={ ( e ) => {
-					if ( 'Enter' === e.key && ! e.shiftKey && ! disabled ) {
-						e.preventDefault();
-						submit();
-					}
-				} }
-			/>
-			<button type="button" className="button button-primary" disabled={ disabled || '' === text.trim() } onClick={ submit }>
-				{ __( 'Start run', 'senroflux' ) }
-			</button>
+		<div className="senroflux-message-box-wrap">
+			{ unavailableList.length > 0 && (
+				<ul className="senroflux-unavailable-packs">
+					{ unavailableList.map( ( p ) => (
+						<li key={ p.name }>
+							{ sprintf(
+								/* translators: 1: a capability pack's name, e.g. "widgets". 2: why it can't run right now. */
+								__( '%1$s pack unavailable: %2$s', 'senroflux' ),
+								p.name,
+								p.reason
+							) }
+						</li>
+					) ) }
+				</ul>
+			) }
+			<div className="senroflux-message-box">
+				{ packList.length > 0 && (
+					<SelectControl
+						className="senroflux-message-box-pack"
+						label={ __( 'Pack', 'senroflux' ) }
+						hideLabelFromVision
+						__next40pxDefaultSize
+						disabled={ boxDisabled }
+						value={ pack }
+						onChange={ setPack }
+					>
+						{ 1 !== packList.length && (
+							<option value="" disabled dir="auto">
+								{ __( 'Choose what to work on', 'senroflux' ) }
+							</option>
+						) }
+						{ /* Pack and model names are data, not UI chrome (S22). */ }
+						{ packList.map( ( p ) => (
+							<option key={ p.name } value={ p.name } dir="auto" data-senroflux-content>
+								{ p.label }
+							</option>
+						) ) }
+					</SelectControl>
+				) }
+				{ flatModels.length > 0 && (
+					<SelectControl
+						className="senroflux-message-box-model"
+						label={ __( 'Model', 'senroflux' ) }
+						hideLabelFromVision
+						disabled={ boxDisabled }
+						value={ modelIndex }
+						onChange={ setModelIndex }
+						__next40pxDefaultSize
+					>
+						<option value={ AUTOMATIC_VALUE }>
+							{ __( 'Automatic (let WordPress choose)', 'senroflux' ) }
+						</option>
+						{ Array.from( modelGroups.entries() ).map( ( [ providerId, group ] ) => (
+							<optgroup key={ providerId } label={ group.providerName }>
+								{ group.options.map( ( { index, model } ) => (
+									<option key={ index } value={ String( index ) } dir="auto" data-senroflux-content>
+										{ model.name }
+									</option>
+								) ) }
+							</optgroup>
+						) ) }
+					</SelectControl>
+				) }
+				<textarea
+					className="senroflux-message-box-input"
+					disabled={ disabled }
+					placeholder={ placeholder }
+					value={ text }
+					onChange={ ( e ) => setText( e.target.value ) }
+					onKeyDown={ ( e ) => {
+						if ( 'Enter' === e.key && ! e.shiftKey && ! disabled ) {
+							e.preventDefault();
+							submit();
+						}
+					} }
+				/>
+				<button type="button" className="button button-primary" disabled={ disabled || '' === text.trim() } onClick={ submit }>
+					{ __( 'Start run', 'senroflux' ) }
+				</button>
+			</div>
 		</div>
 	);
 }

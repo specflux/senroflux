@@ -87,11 +87,15 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	public const RULES_MAX_REPEAT   = 2;
 
 	/**
-	 * The core block names the seven patterns may use (Validator step 2). A
-	 * block outside this set — `core/image` included — is `unknown_block`.
+	 * The core block names pages may use (Validator step 2). A block outside
+	 * this set is `unknown_block`.
 	 *
 	 * `core/cite` is intentionally absent: the testimonials `cite` is inner
 	 * content of the quote block, never a standalone block.
+	 *
+	 * `core/image` (0.3 quality feature 4) never appears in one of the seven
+	 * curated patterns' own shapes — only inside a theme pattern's own image
+	 * slot, and only with mandatory alt text ({@see Validator::checkImageAlt()}).
 	 *
 	 * @return list<string>
 	 */
@@ -108,6 +112,11 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 			'core/details',
 			'core/summary',
 			'core/quote',
+			'core/image',
+			// 0.3 quality fix (images required on new pages): the two
+			// image-led curated patterns, `cover-hero` and `media-text`.
+			'core/cover',
+			'core/media-text',
 		);
 	}
 
@@ -130,6 +139,13 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 			$this->faq(),
 			$this->testimonials(),
 			$this->cta(),
+			// 0.3 quality fix (images required on new pages): appended, not
+			// interleaved — several callers (tests, `sections` composition)
+			// index the ORIGINAL seven positionally (`all()[0]` is hero,
+			// `all()[1]` is text-section); appending keeps every one of them
+			// correct without an audit.
+			$this->coverHero(),
+			$this->mediaText(),
 		);
 	}
 
@@ -143,7 +159,33 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * @return list<array<string,mixed>>
 	 */
 	public function themeDerived(): array {
-		return ThemePatterns::eligible();
+		return array_map( array( self::class, 'withServicesImageOptional' ), ThemePatterns::eligible() );
+	}
+
+	/**
+	 * 0.3 quality fix (images budget 0): {@see Layouts} renders the
+	 * `services` layout's card photos only when every item supplies one,
+	 * and drops the pattern's `core/image` blocks entirely when none do —
+	 * there is rarely a third distinct, relevant CC0 photo for every
+	 * industry. The Validator's structural match ({@see Validator::matchesShape()})
+	 * must accept both shapes, so THIS ONE theme pattern's `core/image`
+	 * becomes a 0..n repeatable child instead of the fixed one the theme
+	 * ships. Every other theme pattern (the hero, text-with-image) keeps
+	 * requiring its image exactly as the theme shipped it.
+	 *
+	 * @param array<string,mixed> $pattern One theme-derived vocabulary entry.
+	 * @return array<string,mixed>
+	 */
+	private static function withServicesImageOptional( array $pattern ): array {
+		if ( ( $pattern['name'] ?? null ) !== ( Layouts::profile()['services']['pattern'] ?? null ) ) {
+			return $pattern;
+		}
+
+		$pattern['repeatable'] = array_values(
+			array_unique( array_merge( $pattern['repeatable'] ?? array(), array( 'core/image' ) ) )
+		);
+
+		return $pattern;
 	}
 
 	/**
@@ -183,6 +225,43 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	}
 
 	/**
+	 * Whether `$name` names one of the curated seven, not a theme-derived
+	 * pattern (0.3 quality fix, {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}).
+	 */
+	public function isCuratedPatternName( string $name ): bool {
+		foreach ( $this->curated() as $curated ) {
+			if ( $name === $curated['name'] ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The names of every eligible theme-derived pattern (0.3 quality fix,
+	 * {@see \Specflux\SenroFlux\Packs\Content\ThemePatternSource}).
+	 *
+	 * @return list<string>
+	 */
+	public function themePatternNames(): array {
+		return array_map(
+			static fn ( array $entry ): string => (string) $entry['name'],
+			$this->themeDerived()
+		);
+	}
+
+	/**
+	 * Whether `list-patterns` offers this theme's patterns for numbered-slot
+	 * filling. The pages pack builds them through
+	 * {@see \Specflux\SenroFlux\Packs\Pages\Layouts} instead: a live run
+	 * offered both mixed them and left a pattern's sample text on the page.
+	 */
+	public function offersThemeSlots(): bool {
+		return false;
+	}
+
+	/**
 	 * The `senroflux/list-patterns` payload (0.3 S7 gap fix): metadata,
 	 * constraints AND the pattern's shipped sample markup. Prose shape lines
 	 * (in the pack's `layout-rules`/`page-links` skill) are a lossy summary —
@@ -201,11 +280,57 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * carries `theme_patterns_skipped`, the count this theme's patterns that
 	 * did not qualify.
 	 *
-	 * @return array<string,mixed> { patterns: list<array<string,mixed>>, theme_patterns_skipped: int }
+	 * Token cost: every full entry's `markup`/`constraints`/`slots`
+	 * cost real conversation tokens on every later turn once returned, so
+	 * with `$names` empty this returns a compact INDEX — name, title,
+	 * description, `theme_derived` when true — and no markup/constraints/
+	 * slots at all. With `$names` given, returns full entries (today's shape)
+	 * for exactly those names, in vocabulary order; a name not found in this
+	 * vocabulary is reported back in `not_found` instead of failing the call.
+	 *
+	 * @param list<string> $names Pattern names to return full entries for.
+	 * @return array<string,mixed> { patterns: list<array<string,mixed>>, theme_patterns_skipped: int, not_found?: list<string> }
 	 */
-	public function listPayload(): array {
+	public function listPayload( array $names = array() ): array {
+		if ( empty( $names ) ) {
+			$patterns = array();
+			foreach ( $this->listable() as $pattern ) {
+				$entry = array(
+					'name'        => $pattern['name'],
+					'title'       => $pattern['title'],
+					'description' => $pattern['description'],
+				);
+
+				if ( ! empty( $pattern['theme_derived'] ) ) {
+					$entry['theme_derived'] = true;
+					// 0.3 quality fix (theme patterns first): a one-line slot
+					// summary in the INDEX itself — "3 text, 1 image" — so a
+					// theme pattern with an image slot is easy to prefer for a
+					// page that needs one, without a second `list-patterns`
+					// round trip just to find out. Named `slots_summary`
+					// (never `slots`) so its shape never collides with the
+					// full entry's `slots` array below. Costs a few words per
+					// entry, not the ~9 KB a full `text_slots` array would.
+					$entry['slots_summary'] = self::slotSummary( $pattern['text_slots'] ?? array() );
+				}
+
+				$patterns[] = $entry;
+			}
+
+			return array(
+				'patterns'               => $patterns,
+				'theme_patterns_skipped' => $this->themePatternsSkippedCount(),
+			);
+		}
+
+		$wanted   = array_flip( $names );
 		$patterns = array();
-		foreach ( $this->all() as $pattern ) {
+		foreach ( $this->listable() as $pattern ) {
+			if ( ! isset( $wanted[ $pattern['name'] ] ) ) {
+				continue;
+			}
+			unset( $wanted[ $pattern['name'] ] );
+
 			$entry = array(
 				'name'        => $pattern['name'],
 				'title'       => $pattern['title'],
@@ -223,10 +348,26 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 			$patterns[] = $entry;
 		}
 
-		return array(
+		$payload = array(
 			'patterns'               => $patterns,
 			'theme_patterns_skipped' => $this->themePatternsSkippedCount(),
 		);
+
+		if ( ! empty( $wanted ) ) {
+			$payload['not_found'] = array_keys( $wanted );
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * The patterns `list-patterns` may name: all of them, less this theme's
+	 * own where {@see offersThemeSlots()} is false.
+	 *
+	 * @return list<array<string,mixed>>
+	 */
+	private function listable(): array {
+		return $this->offersThemeSlots() ? $this->all() : $this->curated();
 	}
 
 	/**
@@ -273,6 +414,39 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	}
 
 	/**
+	 * A short slot summary for the `list-patterns` compact index — "3 text,
+	 * 1 image" — never the full slot list (0.3 quality fix, theme patterns
+	 * first). Omits a kind with zero slots; "no slots" when none at all
+	 * (S21's `theme_derived` eligibility already requires at least one text
+	 * slot, so this only happens for a pattern with url slots alone).
+	 *
+	 * @param list<array<string,mixed>> $slots {@see ThemePatterns::textSlots()}.
+	 */
+	private static function slotSummary( array $slots ): string {
+		$counts = array(
+			'text'  => 0,
+			'image' => 0,
+			'url'   => 0,
+		);
+
+		foreach ( $slots as $slot ) {
+			$kind = (string) ( $slot['kind'] ?? '' );
+			if ( isset( $counts[ $kind ] ) ) {
+				++$counts[ $kind ];
+			}
+		}
+
+		$parts = array();
+		foreach ( $counts as $kind => $count ) {
+			if ( $count > 0 ) {
+				$parts[] = $count . ' ' . $kind;
+			}
+		}
+
+		return array() === $parts ? 'no slots' : implode( ', ', $parts );
+	}
+
+	/**
 	 * hero — group[align=full, layout=constrained] › heading(h1) › paragraph ›
 	 * buttons › button.
 	 *
@@ -303,8 +477,79 @@ HTML
 				),
 				'stated' => array(
 					'Headline: one clear promise, at most 12 words.',
-					'Subheadline: one supporting sentence, at most 24 words.',
+					'Subheadline: one supporting sentence, at most 35 words.',
 					'Buttons: verb-first labels, at most 4 words each.',
+				),
+			),
+		);
+	}
+
+	/**
+	 * cover-hero — a `core/cover` hero: a full-width background image with
+	 * heading(h1) › paragraph › buttons › button, exactly like {@see hero()}
+	 * except the group is a cover carrying a real photo (0.3 quality fix:
+	 * images required on new pages). An alternative to `hero`, not a
+	 * replacement — {@see \Specflux\SenroFlux\Packs\Pages\Validator::isHeroSlug()}
+	 * treats it as a hero for "hero first", and its own H1 triggers the
+	 * no-title template the same way `hero`'s does ({@see HeroTemplate}, which
+	 * matches on ANY `<h1` in the content, not the pattern name).
+	 *
+	 * `dimRatio`/`overlayColor` are fixed to the shipped default, the same as
+	 * every other decorative attribute in this vocabulary (spacing presets are
+	 * the one documented exception) — a run varies the image and the copy,
+	 * never the chrome. `overlayColor` is a THEME PRESET SLUG, never
+	 * `customOverlayColor`/a hex value, so this still carries no raw colour
+	 * value (S11 compliance, the same rule {@see Validator::findDecorativeColor()}
+	 * enforces for `backgroundColor`/`textColor`/`gradient`).
+	 *
+	 * 0.3 quality fix (hero readability): `dimRatio` ships at 60, not core's
+	 * own 50 default — live pages put white hero text straight over a bright
+	 * stock photo, and 50 was not always enough overlay to keep it readable.
+	 * `dimRatio` itself is excluded from {@see BlockShells}'s shape identity
+	 * (the same treatment as `id`/`url`/`alt`/`focalPoint`, above) so a run's
+	 * own lower value never blocks the match — {@see Validator::MIN_COVER_DIM_RATIO}
+	 * silently raises it instead of refusing.
+	 *
+	 * The `id`/`url`/`alt` triple is a real attachment's — never the sample's
+	 * — on every write, exactly like `core/image` (0.3 quality feature 4):
+	 * {@see BlockShells::attributeKey()} excludes `id`/`url`/`alt` from this
+	 * block's identity the same way it already excludes `core/image`'s `id`,
+	 * and the `wp-image-<n>` class WordPress derives from `id` is excluded
+	 * from the HTML-shell comparison for the same reason (0.3 quality fix).
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function coverHero(): array {
+		return array(
+			'slug'        => 'cover-hero',
+			'name'        => 'senroflux/cover-hero',
+			'title'       => 'Cover hero',
+			'description' => __( 'An image-led hero: a full-width background photo with one headline, one subheadline and up to two calls to action.', 'senroflux' ),
+			'markup'      => <<<'HTML'
+<!-- wp:cover {"metadata":{"name":"senroflux/cover-hero"},"url":"https://example.test/photo.jpg","id":501,"alt":"A descriptive alt","dimRatio":60,"overlayColor":"contrast","align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
+<div class="wp-block-cover alignfull" style="padding-top:var(--wp--preset--spacing--60);padding-bottom:var(--wp--preset--spacing--60)"><img class="wp-block-cover__image-background wp-image-501" alt="A descriptive alt" src="https://example.test/photo.jpg" data-object-fit="cover"/><span aria-hidden="true" class="wp-block-cover__background has-contrast-background-color has-background-dim-60 has-background-dim"></span>
+<div class="wp-block-cover__inner-container">
+<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">A headline that states the promise</h1><!-- /wp:heading -->
+<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">One supporting sentence saying who this is for and what they get.</p><!-- /wp:paragraph -->
+<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
+</div>
+</div>
+<!-- /wp:cover -->
+HTML
+			,
+			'repeatable'  => array( 'core/button' ),
+			'constraints' => array(
+				'slots'  => array(
+					'buttons' => array(
+						'min' => 1,
+						'max' => 2,
+					),
+				),
+				'stated' => array(
+					'Headline: one clear promise, at most 12 words.',
+					'Subheadline: one supporting sentence, at most 35 words.',
+					'Buttons: verb-first labels, at most 4 words each.',
+					'Image: a real attachment from read-media/media-search/media-generate; alt text required.',
 				),
 			),
 		);
@@ -320,13 +565,13 @@ HTML
 			'slug'        => 'text-section',
 			'name'        => 'senroflux/text-section',
 			'title'       => 'Text section',
-			'description' => __( 'A plain prose section: an H2 heading followed by one to four paragraphs.', 'senroflux' ),
+			'description' => __( 'A plain prose section: an H2 heading followed by two to four paragraphs.', 'senroflux' ),
 			'markup'      => <<<'HTML'
 <!-- wp:group {"metadata":{"name":"senroflux/text-section"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
 <div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
 <!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
-<!-- wp:paragraph --><p>One short paragraph that makes a single concrete point.</p><!-- /wp:paragraph -->
-<!-- wp:paragraph --><p>A second paragraph, only when it adds something new.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>Open with the point a visitor came for: what this is, who it suits and what they get from it. Use the business's own facts, such as its services, place, hours and people, and name them exactly.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>Then answer the next question they would ask, such as what happens at a first visit, how long it takes or how to book. One idea per paragraph, no filler, and nothing invented.</p><!-- /wp:paragraph -->
 </div><!-- /wp:group -->
 HTML
 			,
@@ -334,13 +579,69 @@ HTML
 			'constraints' => array(
 				'slots'  => array(
 					'paragraphs' => array(
-						'min' => 1,
+						'min' => 2,
 						'max' => 4,
 					),
 				),
 				'stated' => array(
 					'Heading: states the section subject, at most 9 words.',
-					'Paragraphs: short, concrete, one idea each.',
+					'Paragraphs: two to four, each 40 to 90 words, one concrete idea each.',
+				),
+			),
+		);
+	}
+
+	/**
+	 * media-text — a `core/media-text`: an image on one side, heading(h2) ›
+	 * paragraph* › buttons? on the other (0.3 quality fix: images required on
+	 * new pages). `mediaPosition` is fixed to `left`: a `right` variant would
+	 * need a second shell identity, so the model is told left only.
+	 *
+	 * `mediaId`/`mediaSizeSlug` are the block's own stored attributes;
+	 * `mediaAlt`/`mediaUrl` are NOT — WordPress derives both from the `<img>`
+	 * itself (`source: attribute`, {@see https://schemas.wp.org/}), so they
+	 * never appear in the comment JSON here, only in the HTML. `mediaId` is
+	 * excluded from this block's identity the same way `core/image`'s `id`
+	 * is (0.3 quality feature 4); the `wp-image-<n>`/`size-<slug>` classes it
+	 * drives are excluded from the HTML-shell comparison for the same reason.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function mediaText(): array {
+		return array(
+			'slug'        => 'media-text',
+			'name'        => 'senroflux/media-text',
+			'title'       => 'Media and text',
+			'description' => __( 'An image beside a short text block: a photo on one side, an H2 heading and one to three paragraphs (with an optional button) on the other.', 'senroflux' ),
+			'markup'      => <<<'HTML'
+<!-- wp:media-text {"metadata":{"name":"senroflux/media-text"},"mediaId":502,"mediaType":"image","mediaWidth":50,"mediaSizeSlug":"full","mediaPosition":"left"} -->
+<div class="wp-block-media-text is-stacked-on-mobile alignwide"><figure class="wp-block-media-text__media"><img src="https://example.test/photo.jpg" alt="A descriptive alt" class="wp-image-502 size-full"/></figure>
+<div class="wp-block-media-text__content">
+<!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
+<!-- wp:paragraph --><p>Say what the photo shows and why it matters to the visitor: what they will experience, who does the work and what to do next. Two to four sentences built from the business's own facts.</p><!-- /wp:paragraph -->
+</div>
+</div>
+<!-- /wp:media-text -->
+HTML
+			,
+			'repeatable'  => array( 'core/paragraph', 'core/buttons', 'core/button' ),
+			'constraints' => array(
+				'slots'  => array(
+					'paragraphs' => array(
+						'min' => 1,
+						'max' => 3,
+					),
+					'buttons'    => array(
+						'min' => 0,
+						'max' => 1,
+					),
+				),
+				'stated' => array(
+					'Heading: states the section subject, at most 9 words.',
+					'Paragraphs: one to three, at least 30 words in total, concrete.',
+					'Button: optional, verb-first label, at most 4 words.',
+					'Keep mediaPosition "left" exactly as the sample has it.',
+					'Image: a real attachment from read-media/media-search/media-generate; alt text required.',
 				),
 			),
 		);
@@ -362,7 +663,7 @@ HTML
 <!-- wp:group {"metadata":{"name":"senroflux/feature-grid"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
 <div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
 <!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">What you get</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">First feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this feature does for the reader.</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Second feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this feature does for the reader.</p><!-- /wp:paragraph --></div><!-- /wp:column --></div><!-- /wp:columns -->
+<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">First feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>What this feature does for the reader and why it matters, in one or two concrete sentences.</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Second feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>What this feature does for the reader and why it matters, in one or two concrete sentences.</p><!-- /wp:paragraph --></div><!-- /wp:column --></div><!-- /wp:columns -->
 </div><!-- /wp:group -->
 HTML
 			,
@@ -377,7 +678,7 @@ HTML
 				'stated' => array(
 					'Heading: the shared benefit of the features, at most 9 words.',
 					'Each column title: at most 6 words.',
-					'Each column body: at most 18 words.',
+					'Each column body: 12 to 40 words (one or two sentences).',
 				),
 			),
 		);
@@ -418,7 +719,7 @@ HTML
 				),
 				'stated' => array(
 					'Heading: the pricing question answered, at most 9 words.',
-					'Price: "$—/month (price TBC)" unless a price was given.',
+					'Price: only a price the user gave.',
 					'Feature list: 3 to 6 items, each at most 12 words.',
 					'Buttons: verb-first labels, at most 4 words each.',
 				),
@@ -457,7 +758,7 @@ HTML
 				),
 				'stated' => array(
 					'Question: asks what a reader actually asks, at most 11 words.',
-					'Answer: direct and short, at most 40 words.',
+					'Answer: direct, up to 70 words.',
 				),
 			),
 		);
@@ -529,7 +830,7 @@ HTML
 				),
 				'stated' => array(
 					'Headline: an imperative that states exactly what the reader should do, at most 9 words.',
-					'Body: one line of supporting benefit, at most 18 words.',
+					'Body: one line of supporting benefit, up to 30 words.',
 					'Button: verb-first label, at most 4 words.',
 				),
 			),

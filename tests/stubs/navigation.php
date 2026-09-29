@@ -134,6 +134,34 @@ if ( ! function_exists( 'wp_delete_post' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_pages' ) ) {
+	/**
+	 * Minimal stand-in over the shared `senroflux_test_posts` store (0.3
+	 * quality fix 5): published `page` posts, optionally status-filtered,
+	 * sorted by title (core's own `get_pages()` default sort).
+	 *
+	 * @param array{post_status?:string} $args
+	 * @return list<object>
+	 */
+	function get_pages( array $args = array() ): array {
+		$status = $args['post_status'] ?? 'publish';
+		$pages  = array();
+		foreach ( (array) ( $GLOBALS['senroflux_test_posts'] ?? array() ) as $post ) {
+			if ( ! is_object( $post ) || 'page' !== ( $post->post_type ?? '' ) ) {
+				continue;
+			}
+			if ( '' !== $status && ( $post->post_status ?? '' ) !== $status ) {
+				continue;
+			}
+			$pages[] = $post;
+		}
+
+		usort( $pages, static fn ( $a, $b ): int => strcmp( (string) ( $a->post_title ?? '' ), (string) ( $b->post_title ?? '' ) ) );
+
+		return $pages;
+	}
+}
+
 if ( ! function_exists( 'get_permalink' ) ) {
 	function get_permalink( int $id ): string {
 		return 'https://example.test/?page_id=' . $id;

@@ -56,6 +56,17 @@ $GLOBALS['senroflux_test_abilities'] = array();
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
 }
+// RunsScreen::assets() (S10) reads these for its enqueue URLs/paths — a real
+// WP load order defines both from the plugin's own file location; under bare
+// PHPUnit there is no such file, so point them at the plugin root, matching
+// senroflux.php's own definitions closely enough for tests that call
+// assets() directly (it only needs `build/runs/index.asset.php` to resolve).
+if ( ! defined( 'SENROFLUX_PATH' ) ) {
+	define( 'SENROFLUX_PATH', dirname( __DIR__ ) . '/' );
+}
+if ( ! defined( 'SENROFLUX_URL' ) ) {
+	define( 'SENROFLUX_URL', 'http://example.test/wp-content/plugins/senroflux/' );
+}
 if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
 	define( 'MINUTE_IN_SECONDS', 60 );
 }
@@ -104,6 +115,26 @@ if ( ! function_exists( 'apply_filters' ) ) {
 		}
 
 		return $value;
+	}
+}
+
+if ( ! function_exists( 'get_stylesheet' ) ) {
+	/**
+	 * Active theme slug; Twenty Twenty-Five unless a test sets
+	 * `$GLOBALS['senroflux_test_stylesheet']`.
+	 */
+	function get_stylesheet(): string {
+		return $GLOBALS['senroflux_test_stylesheet'] ?? 'twentytwentyfive';
+	}
+}
+
+if ( ! function_exists( 'get_template' ) ) {
+	/**
+	 * Parent theme slug; follows the stylesheet unless a test sets
+	 * `$GLOBALS['senroflux_test_template']`.
+	 */
+	function get_template(): string {
+		return $GLOBALS['senroflux_test_template'] ?? get_stylesheet();
 	}
 }
 
@@ -369,7 +400,8 @@ if ( ! function_exists( 'get_transient' ) ) {
 if ( ! function_exists( 'set_transient' ) ) {
 	/** Recording shim. */
 	function set_transient( string $key, mixed $value, int $expiration = 0 ): bool {
-		$GLOBALS['senroflux_test_transients'][ $key ] = $value;
+		$GLOBALS['senroflux_test_transients'][ $key ]     = $value;
+		$GLOBALS['senroflux_test_transient_ttls'][ $key ] = $expiration;
 
 		return true;
 	}

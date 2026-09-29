@@ -351,22 +351,31 @@ final class FrontPage {
 				);
 			}
 
+			// Every input is checked before any option is written: a refusal
+			// after a partial write would report failure for a change that
+			// landed, and leave the read marker stale for the retry.
+			$posts_page_id = null;
+			if ( isset( $input['page_for_posts_id'] ) && is_numeric( $input['page_for_posts_id'] ) ) {
+				$posts_page_id = (int) $input['page_for_posts_id'];
+				// 0 is WordPress's own "no posts page", not a page id.
+				if ( 0 !== $posts_page_id ) {
+					$posts_page = function_exists( 'get_post' ) ? get_post( $posts_page_id ) : null;
+					if ( null === $posts_page || 'page' !== ( $posts_page->post_type ?? '' ) ) {
+						return new WP_Error(
+							'not_found',
+							__( 'Posts page not found.', 'senroflux' ),
+							array( 'status' => 400 )
+						);
+					}
+				}
+			}
+
 			// ONE write: show_on_front, page_on_front and (when given, S7:
 			// "sets page_for_posts in the same write") page_for_posts all land
 			// together. The OLD front page's post is never touched.
 			update_option( 'show_on_front', 'page' );
 			update_option( 'page_on_front', $page_id );
-
-			if ( isset( $input['page_for_posts_id'] ) && is_numeric( $input['page_for_posts_id'] ) ) {
-				$posts_page_id = (int) $input['page_for_posts_id'];
-				$posts_page    = function_exists( 'get_post' ) ? get_post( $posts_page_id ) : null;
-				if ( null === $posts_page || 'page' !== ( $posts_page->post_type ?? '' ) ) {
-					return new WP_Error(
-						'not_found',
-						__( 'Posts page not found.', 'senroflux' ),
-						array( 'status' => 400 )
-					);
-				}
+			if ( null !== $posts_page_id ) {
 				update_option( 'page_for_posts', $posts_page_id );
 			}
 		} else {

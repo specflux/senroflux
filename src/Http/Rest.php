@@ -10,6 +10,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Http;
 
+use Specflux\SenroFlux\Admin\RunsScreen;
+use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Plugin;
 
 // Bail on direct access.
@@ -17,7 +19,7 @@ defined( 'ABSPATH' ) || exit;
 
 /**
  * Routes under senroflux/v1:
- *   POST /runs                          {consumer, goal, budget?, follow_up_of?}  (allow-list via senroflux_http_consumers)
+ *   POST /runs                          {consumer, goal, pack?, budget?, follow_up_of?, model_provider?, model_id?}  (allow-list via senroflux_http_consumers)
  *   POST /runs/{id}/tick                {step_count, approval_action?}
  *   POST /runs/{id}/cancel
  *   GET  /runs                          {limit?} (0.3 S10; scoped to the runs the viewer may see)
@@ -38,21 +40,38 @@ final class Rest {
 				'callback'            => array( $this, 'routeStart' ),
 				'permission_callback' => static fn (): bool => is_user_logged_in() && current_user_can( 'read' ),
 				'args'                => array(
-					'consumer'     => array(
+					'consumer'       => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'goal'         => array(
+					'goal'           => array(
 						'type'     => 'string',
 						'required' => true,
 					),
-					'budget'       => array(
+					// Runs-pack fix (mirrors Ajax::handleStart()): a REST
+					// consumer had no way to bind a run to a capability pack.
+					'pack'           => array(
+						'type'     => 'string',
+						'required' => false,
+					),
+					'budget'         => array(
 						'type'     => 'object',
 						'required' => false,
 					),
 					// 0.3 S20: follow-up runs.
-					'follow_up_of' => array(
+					'follow_up_of'   => array(
 						'type'     => 'integer',
+						'required' => false,
+					),
+					// Optional per-run model pin; both omitted (or a
+					// follow-up whose source is automatic) means automatic
+					// selection.
+					'model_provider' => array(
+						'type'     => 'string',
+						'required' => false,
+					),
+					'model_id'       => array(
+						'type'     => 'string',
 						'required' => false,
 					),
 				),
@@ -160,15 +179,44 @@ final class Rest {
 		);
 	}
 
-	/** POST /runs. */
+	/**
+	 * POST /runs.
+	 *
+	 * Runs-pack fix: mirrors {@see Ajax::handleStart()} exactly — the Runs
+	 * screen's own consumer ({@see RunsScreen::CONSUMER}) has no allow-list
+	 * without a pack, so a pack-less start from it is refused outright rather
+	 * than started to deadlock; every other consumer may still start
+	 * pack-less. An unknown pack name overrides no budget here and is left
+	 * for `start()`'s own `pack_unknown` refusal.
+	 */
 	public function routeStart( \WP_REST_Request $request ): \WP_REST_Response {
 		$consumer = (string) $request->get_param( 'consumer' );
-		$policy   = ConsumerPolicy::resolve( $consumer, $request->get_param( 'budget' ) );
+		$pack     = (string) ( $request->get_param( 'pack' ) ?? '' );
+
+		if ( RunsScreen::CONSUMER === $consumer && '' === $pack ) {
+			return $this->respond(
+				new \WP_Error(
+					'senroflux_bad_request',
+					__( 'Choose what to work on before starting a run.', 'senroflux' ),
+					array( 'status' => 400 )
+				)
+			);
+		}
+
+		$pack_obj              = '' !== $pack ? PackRegistry::fromFilters()->get( $pack ) : null;
+		$pack_budget_overrides = null !== $pack_obj ? $pack_obj->defaultBudget() : array();
+
+		$policy = ConsumerPolicy::resolve( $consumer, $request->get_param( 'budget' ), $pack_budget_overrides );
 		if ( is_wp_error( $policy ) ) {
 			return $this->respond( $policy );
 		}
 
 		$follow_up_of = $request->get_param( 'follow_up_of' );
+
+		// Optional per-run model pin; a blank string reads as null,
+		// matching the admin-ajax handler.
+		$model_provider = $request->get_param( 'model_provider' );
+		$model_id       = $request->get_param( 'model_id' );
 
 		return $this->respond(
 			senroflux()->start(
@@ -176,9 +224,11 @@ final class Rest {
 				(string) $request->get_param( 'goal' ),
 				$policy['allow'],
 				$policy['budget'],
+				'' !== $pack ? $pack : null,
 				null,
-				null,
-				null !== $follow_up_of ? (int) $follow_up_of : null
+				null !== $follow_up_of ? (int) $follow_up_of : null,
+				is_string( $model_provider ) && '' !== $model_provider ? $model_provider : null,
+				is_string( $model_id ) && '' !== $model_id ? $model_id : null
 			)
 		);
 	}

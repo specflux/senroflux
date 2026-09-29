@@ -12,6 +12,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Packs\Posts;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Packs\Pages\PagesPack;
 use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Packs\Posts\PostsPack;
@@ -44,6 +45,27 @@ final class PostsPackTest extends TestCase {
 		$this->assertSame( 'posts/update-alt', $pack->verbFor( 'senroflux/update-alt', array() ) );
 		$this->assertSame( 'posts/set-terms', $pack->verbFor( 'senroflux/set-terms', array() ) );
 		$this->assertSame( 'posts/create-term', $pack->verbFor( 'senroflux/create-term', array() ) );
+	}
+
+	/**
+	 * Stock-photo-fallback build plan: the new verbs, at the right tiers, and
+	 * `stock-import` withheld the same way `upload`/`generate` are.
+	 */
+	public function test_stock_image_verbs_are_tiered_and_gated_like_the_other_media_writes(): void {
+		$pack = new PostsPack();
+
+		$this->assertSame( 'posts/media-stock-search', $pack->verbFor( 'senroflux/stock-image-search', array() ) );
+		$this->assertSame( 'posts/media-stock-import', $pack->verbFor( 'senroflux/stock-image-import', array() ) );
+
+		$map = $pack->verbMap();
+		$this->assertSame( 0, $map['posts/media-stock-search'] );
+		$this->assertSame( 1, $map['posts/media-stock-import'] );
+
+		$this->assertSame( array( 'posts/media-stock-search' ), $pack->roleVerbs()['stock-search'] );
+		$this->assertSame( array( 'posts/media-stock-import' ), $pack->roleVerbs()['stock-import'] );
+
+		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
+		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
 	public function test_publish_verb_routes_publish_future_and_update_live(): void {
@@ -98,8 +120,9 @@ final class PostsPackTest extends TestCase {
 
 		$this->assertSame(
 			array(
-				'upload'   => 'upload_files',
-				'generate' => 'upload_files',
+				'upload'       => 'upload_files',
+				'generate'     => 'upload_files',
+				'stock-import' => 'upload_files',
 			),
 			$pack->roleCapabilities()
 		);
@@ -112,6 +135,20 @@ final class PostsPackTest extends TestCase {
 		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'generate' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array( 'read' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array() ) );
+	}
+
+	/**
+	 * Bug 2 (live run: a café photo repeated at the top of a post) — the
+	 * model needs to know WHY, not just that a write got refused: TT25's
+	 * single template prints the featured image above the post.
+	 */
+	public function test_media_rules_warns_against_repeating_the_featured_image_in_content(): void {
+		$skills = ( new PostsPack() )->skills();
+		$media  = array_values( array_filter( $skills, static fn ( $s ) => 'posts/media-rules' === $s->id ) );
+
+		$this->assertCount( 1, $media );
+		$this->assertStringContainsString( 'featured image', $media[0]->body );
+		$this->assertStringContainsString( 'above the post', $media[0]->body );
 	}
 
 	public function test_skills_returns_three_pack_skills_never_content_language(): void {
@@ -162,5 +199,20 @@ final class PostsPackTest extends TestCase {
 
 		$this->assertSame( 1, $map['senroflux/update-post'] );
 		$this->assertSame( 2, $map['senroflux/publish-post'] );
+	}
+
+	/**
+	 * space-bunny live runs (2026-09-28 bunny1-4, fix1) used 228k-286k tokens
+	 * and 51-62 steps against the shipped 250000/60.
+	 */
+	public function test_default_budget_raises_steps_calls_and_tokens(): void {
+		$this->assertSame(
+			array(
+				Budget::MAX_STEPS      => 90,
+				Budget::MAX_TOOL_CALLS => 45,
+				Budget::MAX_TOKENS     => 400000,
+			),
+			( new PostsPack() )->defaultBudget()
+		);
 	}
 }

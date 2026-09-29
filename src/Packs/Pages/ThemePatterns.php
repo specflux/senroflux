@@ -37,8 +37,14 @@ defined( 'ABSPATH' ) || exit;
  *     the SAME set {@see \Specflux\SenroFlux\Packs\Pages\Vocabulary::blockNames()}
  *     already fences curated patterns to;
  *   - its block tree is no more than 5 levels deep;
- *   - no block anywhere in it carries `backgroundColor`, `textColor`,
- *     `gradient` or `style.color`;
+ *   - every `backgroundColor`/`textColor`/`gradient` a block carries, and
+ *     every matching `has-*-color`/`has-*-background-color`/
+ *     `has-*-gradient-background` class its markup carries, names a preset
+ *     slug in the active theme's global settings (D3a, S4:
+ *     {@see hasIneligibleColor()}) -- `wp_get_global_settings( array(
+ *     'color', 'palette' ) )` for colours, `...'gradients'` for gradients,
+ *     all merged origins. Raw colour (`style.color` with a hex/rgb/hsl
+ *     value) still makes the pattern ineligible;
  *   - it has at least one text slot ({@see textSlots()}).
  *
  * Everything that fails is counted, never named — {@see skippedCount()}
@@ -94,7 +100,9 @@ final class ThemePatterns {
 	 * Forget the per-request memo (test-only).
 	 */
 	public static function resetCache(): void {
-		self::$memo = null;
+		self::$memo           = null;
+		self::$palette_memo   = null;
+		self::$gradients_memo = null;
 	}
 
 	/**
@@ -240,7 +248,7 @@ final class ThemePatterns {
 			return false;
 		}
 
-		if ( self::hasDecorativeColor( $blocks ) ) {
+		if ( self::hasIneligibleColor( $blocks ) ) {
 			return false;
 		}
 
@@ -295,21 +303,152 @@ final class ThemePatterns {
 	}
 
 	/**
+	 * The active theme's palette, `wp_get_global_settings( array( 'color',
+	 * 'palette' ) )`, all merged origins (D3a). Memoised alongside
+	 * {@see $memo}, cleared by {@see resetCache()}.
+	 *
+	 * @var list<string>|null
+	 */
+	private static ?array $palette_memo = null;
+
+	/**
+	 * @var list<string>|null
+	 */
+	private static ?array $gradients_memo = null;
+
+	/**
+	 * @return list<string>
+	 */
+	private static function paletteSlugs(): array {
+		if ( null === self::$palette_memo ) {
+			self::$palette_memo = self::presetSlugs( 'palette' );
+		}
+
+		return self::$palette_memo;
+	}
+
+	/**
+	 * @return list<string>
+	 */
+	private static function gradientSlugs(): array {
+		if ( null === self::$gradients_memo ) {
+			self::$gradients_memo = self::presetSlugs( 'gradients' );
+		}
+
+		return self::$gradients_memo;
+	}
+
+	/**
+	 * @return list<string>
+	 */
+	private static function presetSlugs( string $key ): array {
+		if ( ! function_exists( 'wp_get_global_settings' ) ) {
+			return array();
+		}
+
+		$entries = (array) wp_get_global_settings( array( 'color', $key ) );
+
+		return array_values(
+			array_filter(
+				array_map(
+					static fn ( $entry ): string => is_array( $entry ) ? (string) ( $entry['slug'] ?? '' ) : '',
+					$entries
+				),
+				static fn ( string $slug ): bool => '' !== $slug
+			)
+		);
+	}
+
+	/**
+	 * D3a (S4): a theme pattern is no longer cut just for carrying a colour —
+	 * only for carrying one the active theme's own global settings do not
+	 * define. Checked: `backgroundColor`/`textColor` against the palette,
+	 * `gradient` against the gradients list, and the matching
+	 * `has-*-background-color`/`has-*-gradient-background`/`has-*-color`
+	 * classes each block's own markup carries (core's own generic classes —
+	 * `has-text-color`, `has-link-color`, `has-border-color`, `has-icon-color`,
+	 * `has-inline-color` — name no preset at all and never gate). Raw colour
+	 * (`style.color` with a hex/rgb/hsl value, or a `custom*Color` attribute
+	 * such as `core/cover`'s `customOverlayColor` — core only ever writes
+	 * that one with a literal value, never a preset slug) still makes the
+	 * pattern ineligible outright — nothing here admits it.
+	 *
 	 * @param list<array<string,mixed>> $blocks Parsed blocks.
 	 */
-	private static function hasDecorativeColor( array $blocks ): bool {
+	private static function hasIneligibleColor( array $blocks ): bool {
+		$palette   = self::paletteSlugs();
+		$gradients = self::gradientSlugs();
+
 		foreach ( $blocks as $block ) {
 			$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
-			foreach ( array( 'backgroundColor', 'textColor', 'gradient' ) as $key ) {
-				if ( array_key_exists( $key, $attrs ) ) {
+
+			foreach ( array_keys( $attrs ) as $attr_key ) {
+				if ( is_string( $attr_key ) && str_starts_with( $attr_key, 'custom' ) && str_ends_with( $attr_key, 'Color' ) ) {
+					return true; // e.g. customOverlayColor -- always a raw literal, never a preset.
+				}
+			}
+
+			foreach ( array( 'backgroundColor', 'textColor' ) as $key ) {
+				if ( array_key_exists( $key, $attrs ) && ! in_array( (string) $attrs[ $key ], $palette, true ) ) {
 					return true;
 				}
 			}
-			if ( is_array( $attrs['style'] ?? null ) && array_key_exists( 'color', $attrs['style'] ) ) {
+			if ( array_key_exists( 'gradient', $attrs ) && ! in_array( (string) $attrs['gradient'], $gradients, true ) ) {
 				return true;
 			}
-			if ( self::hasDecorativeColor( $block['innerBlocks'] ?? array() ) ) {
+			if ( is_array( $attrs['style'] ?? null ) && array_key_exists( 'color', $attrs['style'] ) ) {
+				return true; // Raw colour (hex/rgb/hsl) -- D3a never admits it.
+			}
+
+			if ( self::hasIneligibleColorClass( (string) ( $block['innerHTML'] ?? '' ), $palette, $gradients ) ) {
 				return true;
+			}
+
+			if ( self::hasIneligibleColor( $block['innerBlocks'] ?? array() ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * @param list<string> $palette   Palette slugs.
+	 * @param list<string> $gradients Gradient slugs.
+	 */
+	private static function hasIneligibleColorClass( string $html, array $palette, array $gradients ): bool {
+		if ( preg_match_all( '/\bhas-([a-z0-9-]+?)-gradient-background\b/', $html, $matches ) ) {
+			foreach ( $matches[1] as $slug ) {
+				if ( ! in_array( $slug, $gradients, true ) ) {
+					return true;
+				}
+			}
+		}
+		if ( preg_match_all( '/\bhas-([a-z0-9-]+?)-background-color\b/', $html, $matches ) ) {
+			foreach ( $matches[1] as $slug ) {
+				if ( ! in_array( $slug, $palette, true ) ) {
+					return true;
+				}
+			}
+		}
+
+		// The two class shapes above both also end in `-color`; strip them
+		// (and the unrelated, never-gated `has-*-border-color`) before the
+		// generic `has-<slug>-color` scan, so their own slug is never
+		// re-read as if it were a plain text-colour class.
+		$remainder = (string) preg_replace(
+			array( '/\bhas-[a-z0-9-]+-background-color\b/', '/\bhas-[a-z0-9-]+-gradient-background\b/', '/\bhas-[a-z0-9-]+-border-color\b/' ),
+			'',
+			$html
+		);
+		if ( preg_match_all( '/\bhas-([a-z0-9-]+?)-color\b/', $remainder, $matches ) ) {
+			foreach ( $matches[1] as $slug ) {
+				if ( in_array( $slug, array( 'text', 'link', 'border', 'icon', 'inline' ), true ) ) {
+					continue; // Core's own generic classes -- name no preset.
+				}
+				if ( ! in_array( $slug, $palette, true ) ) {
+					return true;
+				}
 			}
 		}
 
@@ -338,8 +477,17 @@ final class ThemePatterns {
 				'stated' => self::statedLines( $slots ),
 			),
 			'theme_derived' => true,
-			'is_hero'       => in_array( 'banner', $categories, true ),
-			'is_cta'        => in_array( 'call-to-action', $categories, true ),
+			// 0.3 quality fix: a pattern counts as a hero/cta for the page-shape
+			// rules only when the theme dedicates it to EXACTLY that one role.
+			// A real TT25 pattern (`pricing-3-col`) carries `banner,
+			// call-to-action, services` all at once — a multi-purpose content
+			// pattern, not a page's hero or its one call-to-action section.
+			// Counting it under either would refuse (hero_first false match is
+			// harmless, but max_cta) a good page that also uses a real,
+			// single-purpose CTA pattern. Requiring an exact one-category match
+			// keeps the rule meaningful for genuinely dedicated theme patterns.
+			'is_hero'       => array( 'banner' ) === $categories,
+			'is_cta'        => array( 'call-to-action' ) === $categories,
 			'text_slots'    => $slots,
 		);
 	}
@@ -359,6 +507,12 @@ final class ThemePatterns {
 					$slot['tag'],
 					$slot['shipped_text'],
 					$slot['max_words']
+				);
+			} elseif ( 'image' === $slot['kind'] ) {
+				$lines[] = sprintf(
+					/* translators: %d: slot number. */
+					__( 'Slot %1$d: an image. Value is "URL||ALT TEXT" (the literal characters || separate the two) — the URL of an attachment you found or generated, and non-empty, descriptive alt text. Both parts are required.', 'senroflux' ),
+					$slot['index'] + 1
 				);
 			} else {
 				$lines[] = sprintf(
@@ -393,12 +547,14 @@ final class ThemePatterns {
 	 * the filled markup, still subject to the pack's OWN {@see Validator::clean()}
 	 * afterwards (S21 decision: one validation path).
 	 *
-	 * @param string       $markup The pattern's shipped markup.
-	 * @param list<string> $slots  The model's slot values, in slot order.
+	 * @param string          $markup    The pattern's shipped markup.
+	 * @param list<string>    $slots     The model's slot values, in slot order.
+	 * @param array<int, int> $max_words Slot index => word limit, replacing
+	 *                                   the derived limit for that slot.
 	 * @return array{ok:bool, content:string, wp_error:WP_Error|null}
 	 */
-	public static function fill( string $markup, array $slots ): array {
-		$result = self::walk( $markup, $slots );
+	public static function fill( string $markup, array $slots, array $max_words = array() ): array {
+		$result = self::walk( $markup, $slots, $max_words );
 
 		if ( null !== $result['error_code'] ) {
 			return array(
@@ -430,14 +586,14 @@ final class ThemePatterns {
 	 */
 	private static function refusalMessage( string $code, array $data ): string {
 		return match ( $code ) {
-			'slot_missing'      => __( 'A theme pattern slot was left empty.', 'senroflux' ),
+			'slot_missing'      => __( 'A theme pattern slot was left empty, or an image slot is missing its alt text.', 'senroflux' ),
 			'slot_sample_text'  => __( 'A theme pattern slot still holds the shipped sample text.', 'senroflux' ),
 			'slot_too_long'     => sprintf(
 				/* translators: %d: maximum word count. */
 				__( 'A theme pattern slot is over its %d-word limit.', 'senroflux' ),
 				$data['max_words'] ?? 0
 			),
-			'unsafe_url'        => __( 'A theme pattern link is missing a safe destination.', 'senroflux' ),
+			'unsafe_url'        => __( 'A theme pattern slot is missing a safe URL (a link destination, or an image\'s source).', 'senroflux' ),
 			default             => __( 'That theme pattern slot is invalid.', 'senroflux' ),
 		};
 	}
@@ -456,9 +612,10 @@ final class ThemePatterns {
 	 * @param string            $markup The pattern's rendered/shipped markup.
 	 * @param list<string>|null $values The model's slot values, or null to
 	 *                                   only derive slots.
+	 * @param array<int, int>   $limits Slot index => word limit override.
 	 * @return array{slots:list<array<string,mixed>>, output:string|null, error_code:string|null, error_index:int|null, error_data:array<string,mixed>}
 	 */
-	private static function walk( string $markup, ?array $values ): array {
+	private static function walk( string $markup, ?array $values, array $limits = array() ): array {
 		$parts = preg_split( '/(<[^>]+>)/', $markup, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY );
 		$parts = false === $parts ? array() : $parts;
 
@@ -478,6 +635,44 @@ final class ThemePatterns {
 			$is_tag = (bool) preg_match( '#^<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>$#', $part, $match );
 
 			if ( null === $open_tag ) {
+				// 0.3 quality feature 4: `<img>` is a void element (no
+				// closing tag, no text content), so it is resolved to a slot
+				// immediately, rather than via the open/close buffering the
+				// TEXT_TAGS below use.
+				if ( $is_tag && '' === $match[1] && 'img' === strtolower( $match[2] ) ) {
+					$image_index = $index++;
+					$shipped_src = (string) ( self::attrValue( $match[3], 'src' ) ?? '' );
+					$shipped_alt = (string) ( self::attrValue( $match[3], 'alt' ) ?? '' );
+
+					$slots[] = array(
+						'index'         => $image_index,
+						'kind'          => 'image',
+						'tag'           => 'img',
+						'shipped_text'  => $shipped_alt,
+						'shipped_src'   => $shipped_src,
+						'shipped_words' => 0,
+						'max_words'     => 0,
+					);
+
+					$tag = $part;
+					if ( null !== $values && null === $error_code ) {
+						$provided = (string) ( $values[ $image_index ] ?? '' );
+						$reason   = self::checkImageSlot( $provided );
+						if ( null !== $reason ) {
+							$error_code  = $reason;
+							$error_index = $image_index;
+							$error_data  = array();
+						} else {
+							[$url, $alt] = self::splitImageSlot( $provided );
+							$tag         = self::replaceAttr( $tag, 'src', $url );
+							$tag         = self::replaceAttr( $tag, 'alt', $alt );
+						}
+					}
+
+					$out .= $tag;
+					continue;
+				}
+
 				if ( $is_tag && '' === $match[1] && in_array( strtolower( $match[2] ), self::TEXT_TAGS, true ) ) {
 					$open_tag      = strtolower( $match[2] );
 					$open_tag_raw  = $part;
@@ -493,7 +688,7 @@ final class ThemePatterns {
 			if ( $is_tag && '/' === $match[1] && strtolower( $match[2] ) === $open_tag ) {
 				$shipped_text  = trim( self::stripTags( $buffer ) );
 				$shipped_words = self::wordCount( $shipped_text );
-				$max_words     = max( 3, (int) ceil( 1.5 * $shipped_words ) );
+				$max_words     = $limits[ $index ] ?? max( 3, (int) ceil( 1.5 * $shipped_words ) );
 				$text_index    = $index++;
 
 				$slots[] = array(
@@ -592,6 +787,39 @@ final class ThemePatterns {
 		}
 
 		return ! Validator::urlIsSafe( $trimmed );
+	}
+
+	/**
+	 * An image slot's value is `"URL||ALT"` (0.3 quality feature 4) — the
+	 * only two-part slot value this class produces, documented in
+	 * {@see statedLines()}'s own line for it. Both parts are mandatory: no
+	 * URL means nothing to point the `<img>` at, no alt means the write would
+	 * only recreate the very `missing_alt` refusal
+	 * {@see \Specflux\SenroFlux\Packs\Content\ImageAlt} exists to catch —
+	 * catching it HERE, before the block is even assembled, gives a clearer
+	 * `slot_missing`/`unsafe_url` message than a generic `missing_alt` would.
+	 *
+	 * @return string|null The single refusal code, or null when the value is fine.
+	 */
+	private static function checkImageSlot( string $provided ): ?string {
+		[$url, $alt] = self::splitImageSlot( $provided );
+		if ( '' === trim( $alt ) ) {
+			return 'slot_missing';
+		}
+		if ( self::urlUnsafe( $url ) ) {
+			return 'unsafe_url';
+		}
+
+		return null;
+	}
+
+	/**
+	 * @return array{0:string, 1:string} [url, alt].
+	 */
+	private static function splitImageSlot( string $provided ): array {
+		$parts = explode( '||', $provided, 2 );
+
+		return array( trim( $parts[0] ?? '' ), trim( $parts[1] ?? '' ) );
 	}
 
 	private static function normalize( string $text ): string {

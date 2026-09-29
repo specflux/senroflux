@@ -38,11 +38,22 @@ if ( ! class_exists( FakeGateway::class ) ) {
 		/** @var list<list<mixed>> The message history each generateTurn() received, verbatim. */
 		public array $histories = array();
 
-		public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): ModelTurn|WP_Error {
+		/** @var (\Closure(int):void)|null Called with the 1-based call number before each turn is returned. */
+		public ?\Closure $onCall = null;
+
+		/** @var list<array{0:string,1:string}|null> The model preference each generateTurn() received. */
+		public array $modelPreferences = array();
+
+		public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools, ?array $model_preference = null ): ModelTurn|WP_Error {
 			$this->calls[]              = array( 'history_count' => count( $history ) );
 			$this->histories[]          = array_values( $history );
 			$this->systemInstructions[] = $system_instruction;
 			$this->toolsLog[]           = $tools;
+			$this->modelPreferences[]   = $model_preference;
+
+			if ( null !== $this->onCall ) {
+				( $this->onCall )( count( $this->calls ) );
+			}
 
 			if ( array() === $this->script ) {
 				return new WP_Error( 'script_empty', 'FakeGateway has no scripted turns left.' );

@@ -37,6 +37,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Posts;
 
+use Specflux\SenroFlux\Packs\Content\ImageAlt;
 use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
 use WP_Error;
 
@@ -122,7 +123,7 @@ final class Validator implements ContentValidator {
 	 * @param array<string,mixed> $ctx     Context (e.g. post_type).
 	 * @return true|WP_Error
 	 */
-	public function validate( string $content, array $ctx = array() ): true|WP_Error {
+	public function validate( string $content, array $ctx = array() ): bool|WP_Error {
 		$res = $this->run( $content, $ctx );
 		if ( ! $res['ok'] ) {
 			/** @var WP_Error $error */
@@ -603,7 +604,7 @@ final class Validator implements ContentValidator {
 	private function checkImageAlt( array $blocks ): ?WP_Error {
 		$index = 0;
 		foreach ( $blocks as $block ) {
-			if ( $this->findMissingAlt( $block ) ) {
+			if ( ImageAlt::missing( $block ) ) {
 				return new WP_Error(
 					'missing_alt',
 					$this->message( 'missing_alt', array(), array( 'index' => $index ) ),
@@ -619,29 +620,6 @@ final class Validator implements ContentValidator {
 		}
 
 		return null;
-	}
-
-	/**
-	 * @param array<string,mixed> $block One parsed block.
-	 */
-	private function findMissingAlt( array $block ): bool {
-		if ( 'core/image' === ( $block['blockName'] ?? null ) ) {
-			$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
-			$alt   = isset( $attrs['alt'] ) && is_string( $attrs['alt'] ) ? trim( $attrs['alt'] ) : '';
-			if ( '' === $alt ) {
-				return true;
-			}
-		}
-
-		$children = $block['innerBlocks'] ?? array();
-		/** @var list<array<string,mixed>> $children */
-		foreach ( $children as $child ) {
-			if ( $this->findMissingAlt( $child ) ) {
-				return true;
-			}
-		}
-
-		return false;
 	}
 
 	/**
@@ -837,7 +815,10 @@ final class Validator implements ContentValidator {
 	}
 
 	/**
-	 * Step 5 — normalise `metadata.name` on the two feature patterns.
+	 * Step 5 — normalise `metadata.name` on the two feature patterns, and give
+	 * a `closing-cta` the shell's constrained layout when it arrives without
+	 * one: an `align:full` group with no layout renders its contents flush to
+	 * the viewport edge (live run 2026-09-28-fix5).
 	 *
 	 * @param list<array<string,mixed>> $blocks     Parsed top-level blocks.
 	 * @param array<int,string>         $identities parse offset => slug.
@@ -847,8 +828,11 @@ final class Validator implements ContentValidator {
 		foreach ( $mutated as $i => $block ) {
 			$slug = $identities[ $i ] ?? null;
 			if ( 'closing-cta' === $slug || 'pull-quote' === $slug ) {
-				$attrs                  = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
-				$attrs['metadata']      = array( 'name' => 'senroflux/' . $slug );
+				$attrs             = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+				$attrs['metadata'] = array( 'name' => 'senroflux/' . $slug );
+				if ( 'closing-cta' === $slug && ! isset( $attrs['layout'] ) ) {
+					$attrs['layout'] = array( 'type' => 'constrained' );
+				}
 				$mutated[ $i ]['attrs'] = $attrs;
 			}
 		}

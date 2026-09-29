@@ -20,7 +20,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Pack;
+use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
@@ -36,12 +38,29 @@ final class PagesPack extends Pack {
 	public function __construct() {
 		parent::__construct(
 			array(
-				'read'     => 'read-content',
-				'create'   => 'create-post',
-				'update'   => 'update-post',
-				'publish'  => 'publish-post',
-				'preview'  => 'get-preview-url',
-				'patterns' => 'list-patterns',
+				'read'         => 'read-content',
+				'create'       => 'create-post',
+				'update'       => 'update-post',
+				'publish'      => 'publish-post',
+				'preview'      => 'get-preview-url',
+				'patterns'     => 'list-patterns',
+				// 0.3 quality feature 4: the pages pack's own images (a
+				// featured image, or an existing/generated attachment for a
+				// theme pattern's image slot), mirroring the posts pack's
+				// media roles verbatim so tracking/verification/report rows
+				// work the same way.
+				'search'       => 'media-search',
+				'missing-alt'  => 'list-missing-alt',
+				'upload'       => 'media-upload',
+				'generate'     => 'generate-image',
+				'alt-text'     => 'generate-alt-text',
+				'featured'     => 'set-featured-image',
+				'alt'          => 'update-alt',
+				'read-media'   => 'read-media',
+				// Stock-photo-fallback build plan: the escape hatch between
+				// `generate` (spends the images budget) and `no_image_reason`.
+				'stock-search' => 'stock-image-search',
+				'stock-import' => 'stock-image-import',
 			)
 		);
 	}
@@ -83,12 +102,22 @@ final class PagesPack extends Pack {
 	protected function inputProperties( string $template ): array {
 		return match ( $template ) {
 			'read-content'    => array( 'id', 'post_type', 'slug', 'status', 'author', 'parent', 'fields' ),
-			'create-post'     => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
-			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
-			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
-			'get-preview-url' => array( 'id' ),
-			'list-patterns'   => array(),
-			default           => array(),
+			'create-post'     => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
+			'update-post'     => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
+			'publish-post'    => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
+			'get-preview-url'    => array( 'id' ),
+			'list-patterns'      => array(),
+			'media-search'       => array( 'query' ),
+			'list-missing-alt'   => array(),
+			'media-upload'       => array( 'file_path' ),
+			'generate-image'     => array( 'prompt' ),
+			'generate-alt-text'  => array( 'attachment_id' ),
+			'set-featured-image' => array( 'post_id', 'attachment_id' ),
+			'update-alt'         => array( 'attachment_id', 'alt' ),
+			'read-media'         => array( 'attachment_id' ),
+			'stock-image-search' => array( 'query' ),
+			'stock-image-import' => array( 'id', 'alt' ),
+			default              => array(),
 		};
 	}
 
@@ -136,6 +165,20 @@ final class PagesPack extends Pack {
 			'create-post'     => 'pages/create-draft',
 			'update-post'     => 'pages/update-draft',
 			'publish-post'    => $this->publishVerb( $input ),
+			'media-search'       => 'pages/media-search',
+			'list-missing-alt'   => 'pages/list-missing-alt',
+			'media-upload'       => 'pages/media-upload',
+			'generate-image'     => 'pages/media-generate',
+			// Not in S5's table (see PostsPack::verbFor()'s identical
+			// deviation note): a suggestion changes nothing on the site, so
+			// this is a Tier-0 read-alike, not the Tier-1 write `generate-image`
+			// itself.
+			'generate-alt-text'  => 'pages/generate-alt-text',
+			'set-featured-image' => 'pages/set-featured-image',
+			'update-alt'         => 'pages/update-alt',
+			'read-media'         => 'pages/read-media',
+			'stock-image-search' => 'pages/media-stock-search',
+			'stock-image-import' => 'pages/media-stock-import',
 			// S9: an ability this pack does not name keeps the ability id as
 			// its verb, which no entry of verbMap() answers — the fence then
 			// fails closed on it.
@@ -170,13 +213,23 @@ final class PagesPack extends Pack {
 	 */
 	public function verbMap(): array {
 		return array(
-			'pages/read'          => 0,
-			'pages/list-patterns' => 0,
-			'pages/preview'       => 0,
-			'pages/create-draft'  => 1,
-			'pages/update-draft'  => 1,
-			'pages/update-live'   => 2,
-			'pages/publish'       => 2,
+			'pages/read'               => 0,
+			'pages/list-patterns'      => 0,
+			'pages/preview'            => 0,
+			'pages/media-search'       => 0,
+			'pages/list-missing-alt'   => 0,
+			'pages/generate-alt-text'  => 0,
+			'pages/read-media'         => 0,
+			'pages/media-stock-search' => 0,
+			'pages/create-draft'       => 1,
+			'pages/update-draft'       => 1,
+			'pages/media-upload'       => 1,
+			'pages/media-generate'     => 1,
+			'pages/set-featured-image' => 1,
+			'pages/update-alt'         => 1,
+			'pages/media-stock-import' => 1,
+			'pages/update-live'        => 2,
+			'pages/publish'            => 2,
 		);
 	}
 
@@ -194,12 +247,109 @@ final class PagesPack extends Pack {
 	public function roleVerbs(): array {
 		// Same order as roles(), so the two stay readable side by side.
 		return array(
-			'read'     => array( 'pages/read' ),
-			'create'   => array( 'pages/create-draft' ),
-			'update'   => array( 'pages/update-draft' ),
-			'publish'  => array( 'pages/update-live', 'pages/publish' ),
-			'preview'  => array( 'pages/preview' ),
-			'patterns' => array( 'pages/list-patterns' ),
+			'read'         => array( 'pages/read' ),
+			'create'       => array( 'pages/create-draft' ),
+			'update'       => array( 'pages/update-draft' ),
+			'publish'      => array( 'pages/update-live', 'pages/publish' ),
+			'preview'      => array( 'pages/preview' ),
+			'patterns'     => array( 'pages/list-patterns' ),
+			'search'       => array( 'pages/media-search' ),
+			'missing-alt'  => array( 'pages/list-missing-alt' ),
+			'upload'       => array( 'pages/media-upload' ),
+			'generate'     => array( 'pages/media-generate' ),
+			'alt-text'     => array( 'pages/generate-alt-text' ),
+			'featured'     => array( 'pages/set-featured-image' ),
+			'alt'          => array( 'pages/update-alt' ),
+			'read-media'   => array( 'pages/read-media' ),
+			'stock-search' => array( 'pages/media-stock-search' ),
+			'stock-import' => array( 'pages/media-stock-import' ),
+		);
+	}
+
+	/**
+	 * S12 (defect fix, mirrors PostsPack): `update-alt`'s output and
+	 * `read-media`'s input both carry the attachment id as `attachment_id`,
+	 * never `id` — the base's default would silently track/verify nothing
+	 * for either.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdKey( string $verb ): string {
+		return match ( $verb ) {
+			'pages/update-alt', 'pages/read-media' => 'attachment_id',
+			default => parent::objectIdKey( $verb ),
+		};
+	}
+
+	/**
+	 * S12 (defect fix, mirrors PostsPack): an attachment and a page can share
+	 * the same numeric id, so the two verbs above qualify it with
+	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		return match ( $verb ) {
+			'pages/update-alt', 'pages/read-media' => Media::OBJECT_ID_PREFIX,
+			default => parent::objectIdPrefix( $verb ),
+		};
+	}
+
+	/**
+	 * S6: `media-upload` and `generate-image` require `upload_files` — a role
+	 * that can `edit_pages` but not `upload_files` holds neither in stock
+	 * WordPress, but a custom role could, so this is withheld the same way
+	 * the posts pack withholds it.
+	 *
+	 * @return array<string,string>
+	 */
+	public function roleCapabilities(): array {
+		return array(
+			'upload'       => 'upload_files',
+			'generate'     => 'upload_files',
+			'stock-import' => 'upload_files',
+		);
+	}
+
+	/**
+	 * S6: one line, in the pack's own words, when the image roles are
+	 * withheld.
+	 *
+	 * @param list<string> $withheld The role names withheld from this run's start().
+	 */
+	public function withheldRoleNotice( array $withheld ): ?string {
+		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) || in_array( 'stock-import', $withheld, true ) ) {
+			return __( 'This run cannot add images.', 'senroflux' );
+		}
+
+		return null;
+	}
+
+	/**
+	 * 0.3 quality fix: the pages pack's own budget override, applied over the
+	 * shipped table before `senroflux_default_budget` runs (same seam as
+	 * {@see \Specflux\SenroFlux\Packs\Site\SitePack::defaultBudget()}). Before
+	 * this override existed, a pages run used the SHIPPED table unchanged
+	 * (60/30/250000) — sized from runs with no image work at all. A live run
+	 * that searched for and inserted an image (cover-hero/media-text, 0.3
+	 * quality features 2/3) hit `max_steps` at 61: image tool calls plus their
+	 * own retries were never in the sample the shipped table was sized from.
+	 * `images` stays at the shipped default (6) — image COUNT didn't move,
+	 * only the steps/calls/tokens spent finding and placing them. Tokens went
+	 * 400000 -> 600000 after space-bunny live runs (2026-09-28 bunny1-4) spent
+	 * 315k-396k and six of eight died of `max_tokens`; 600000 -> 800000 after
+	 * "make my site better" spent 592k, 592k and 617k (2026-09-28/29);
+	 * 800000 -> 1000000 after it spent 630k, 639k, 799k and 815k (failed)
+	 * in 2026-09-29 final6, cards1, cards2 and seed1.
+	 *
+	 * @return array<string,int>
+	 */
+	public function defaultBudget(): array {
+		return array(
+			Budget::MAX_STEPS      => 120,
+			Budget::MAX_TOOL_CALLS => 60,
+			Budget::MAX_TOKENS     => 1000000,
+			Budget::IMAGES         => 6,
 		);
 	}
 
@@ -211,7 +361,7 @@ final class PagesPack extends Pack {
 	 *
 	 * @return list<Skill>
 	 */
-	public function skills(): array {
+	public function skills( bool $images_available = true ): array {
 		$vocabulary = new Vocabulary();
 
 		return array(
@@ -226,7 +376,15 @@ final class PagesPack extends Pack {
 			new Skill(
 				'pages/copy-rules',
 				'Copy rules',
-				$this->copyRulesBody( $vocabulary->all() ),
+				$this->copyRulesBody( $vocabulary->curated() ),
+				false,
+				SkillSource::Pack,
+				'1'
+			),
+			new Skill(
+				'pages/media-rules',
+				'Media rules',
+				$this->mediaRulesBody( $images_available ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -247,16 +405,28 @@ final class PagesPack extends Pack {
 		return implode(
 			"\n",
 			array(
-				'Compose pages ONLY from the pattern vocabulary: hero, text-section, feature-grid, pricing-table, faq, testimonials and cta. Put the hero first. Use at most one cta. A page is 2–8 patterns. No pattern more than twice except text-section. No core/image anywhere. No colour attributes. Set spacing and typography only through the standard preset slugs. Re-read every object after writing.',
-				'A pattern is NOT a block: it is a core/group you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote.',
+				'Write a page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme design is built for you. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Write `markup` only when no layout fits.',
+				'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
+				'Give a visitor what they need to decide: for each service, who it is for and what happens; what happens at the first visit; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between.',
+				'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
+				'Markup patterns, if none fits: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only. Re-read every object after writing.',
+				'A pattern is NOT a block: it is a core/group (or core/cover, or core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. In an faq, the question is the <summary> element inside the core/details block and the answer is a core/paragraph block inside it.',
-				'To publish a page you already created, call the update ability with the id and status only and OMIT content entirely — do not send an empty content either. Omitted or empty content means "content unchanged": the stored markup is kept as it is. Never resend content you have not changed; re-sending it risks a whole-write refusal on markup that is already stored and accepted.',
+				'To publish a page you already created, call the update ability with the id and status only; omit content entirely (omitted content means unchanged). Never resend unchanged content.',
 				'Close everything you open: every `<!-- wp:x -->` needs its matching `<!-- /wp:x -->`, and every wrapper element a block opens (a group\'s <div>, a details, a list) must be closed before that block ends. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				'When you propose a plan, spell each step\'s verbs exactly as one of: pages/read, pages/list-patterns, pages/preview, pages/create-draft, pages/update-draft, pages/update-live, pages/publish. Creating the page as a draft is pages/create-draft; making a draft live is pages/publish. Any other word is refused as unknown_verb.',
-				'Give a block ONLY the attributes its shape names below. An attribute the shape does not name — an extra align, an extra layout — changes the pattern\'s identity and the write is refused as unknown_pattern. In particular only the hero and the cta give their buttons block `{"layout":{"type":"flex"}}`; a buttons block anywhere else carries no layout at all. Exception: a top-level group\'s `style.spacing.padding` is optional decoration, accepted whichever way you write it — call pages/list-patterns for each pattern\'s exact sample markup and copy it (with or without that one attribute); every OTHER attribute in the sample is load-bearing.',
+				// 0.3 quality fix (instruction ceiling): the full verb list used
+				// to live here (~170 tokens); it now travels on the
+				// propose-plan tool's own declaration instead (see
+				// PlanTools::proposePlanDeclaration()), built per run from the
+				// SAME verb set this pack's runProposePlan() check uses, so it
+				// cannot drift from what is actually accepted.
+				'When you propose a plan, spell each step\'s verbs exactly as the propose-plan tool\'s own verb list gives them. Creating the page as a draft is pages/create-draft; making a draft live is pages/publish. Any other word is refused as unknown_verb.',
+				'Give a block ONLY the attributes its shape names below; any other (an extra align or layout) is refused as unknown_pattern. Only hero, cover-hero and cta give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call pages/list-patterns with the pattern names.',
 				'Shapes (">" = child, "(n–m)" = how many of that child):',
 				'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
-				'text-section: group > heading level 2, paragraph (1–4)',
+				'cover-hero: cover align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
+				'text-section: group > heading level 2, paragraph (2–4)',
+				'media-text: media-text > heading level 2, paragraph (1–3), buttons > button (0–1)',
 				'feature-grid: group > heading level 2, columns > column (2–3) each > heading level 3, paragraph',
 				'pricing-table: group > heading level 2, columns > column (1–3) each > heading level 3, paragraph, list (3–6 items), buttons > button',
 				'faq: group > heading level 2, details (2–8) each > paragraph',
@@ -267,27 +437,55 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * The `pages/copy-rules` body (S11) — RENDERED from the vocabulary's
-	 * `constraints.stated` lines so the tool payload and the instruction can
-	 * never drift (asserted by the Vocabulary/Validator single-source test). It
-	 * appends the global copy limits.
+	 * The `pages/copy-rules` body (S11): a pointer to `pages/list-patterns`
+	 * for each pattern's copy limits ({@see Pack::copyRulesLines()}), plus the
+	 * global copy limits.
 	 *
 	 * @param list<array<string,mixed>> $vocabulary {@see Vocabulary::all()}.
 	 */
 	public function copyRulesBody( array $vocabulary ): string {
-		$lines = array();
-		foreach ( $vocabulary as $pattern ) {
-			$stated = $pattern['constraints']['stated'] ?? array();
-			foreach ( $stated as $line ) {
-				$lines[] = $line;
-			}
-		}
+		$lines = self::copyRulesLines( $vocabulary, 'pages/list-patterns' );
 
-		$lines[] = 'Card bodies are at most 18 words.';
+		$lines[] = 'Say plainly what the client gets and what happens; no hedges like "may help" or "can be discussed" unless the brief itself hedges.';
+		$lines[] = 'Card bodies are at most 40 words.';
 		$lines[] = 'Buttons are verb-first (for example "Get started").';
-		$lines[] = 'Give prices as "$—/month (price TBC)" unless the user supplied a price.';
+		$lines[] = 'Use a pricing pattern only when the user gave the prices; never write a placeholder price.';
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * The `pages/media-rules` body (0.3 quality feature 4, mirrors
+	 * PostsPack::mediaRulesBody()): search before generating, alt text is
+	 * mandatory for a theme pattern's image slot, generation costs real
+	 * money, and re-read after any change — nothing else re-reads an
+	 * attachment for you.
+	 */
+	private function mediaRulesBody( bool $images_available = true ): string {
+		if ( ! $images_available ) {
+			// 0.3 quality fix (images budget 0): no mention of the withheld
+			// media-generate ability — search then stock is the only path
+			// this run's tool surface actually offers.
+			return implode(
+				"\n",
+				array(
+					'A page image lives ONLY in a layout\'s image slot (or a cover-hero or media-text you write), and each slot needs a different image. This run has no image-generation budget left: search the media library first, then stock-image-search and stock-image-import; else no_image_reason.',
+					'Write each image\'s alt text yourself and put it in the slot with the URL (a layout\'s image.alt). No update-alt call is needed for that.',
+					'After update-alt, media-upload or stock-image-import, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
+				)
+			);
+		}
+
+		return implode(
+			"\n",
+			array(
+				'A page image lives ONLY in a layout\'s image slot (or a cover-hero or media-text you write), and each slot needs a different image. Search the media library first; generate only what is missing.',
+				'Write each image\'s alt text yourself and put it in the slot with the URL (a layout\'s image.alt). No update-alt call is needed for that.',
+				'Generating an image costs real money and a limited run budget; do not generate more than the goal actually needs.',
+				'No image budget left? stock-image-search, then stock-image-import; else no_image_reason.',
+				'After update-alt, media-upload or generate-image, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
+			)
+		);
 	}
 
 	/**

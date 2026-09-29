@@ -20,6 +20,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Site;
 
+use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Skills\Skill;
@@ -37,16 +38,31 @@ final class SitePack extends Pack {
 	public function __construct() {
 		parent::__construct(
 			array(
-				'read'       => 'read-content',
-				'create'     => 'create-post',
-				'update'     => 'update-post',
-				'publish'    => 'publish-post',
-				'preview'    => 'get-preview-url',
-				'patterns'   => 'list-patterns',
-				'read-nav'   => 'read-navigation',
-				'update-nav' => 'update-navigation',
-				'read-front' => 'read-front-page',
-				'set-front'  => 'set-front-page',
+				'read'         => 'read-content',
+				'create'       => 'create-post',
+				'update'       => 'update-post',
+				'publish'      => 'publish-post',
+				'preview'      => 'get-preview-url',
+				'patterns'     => 'list-patterns',
+				'read-nav'     => 'read-navigation',
+				'update-nav'   => 'update-navigation',
+				'read-front'   => 'read-front-page',
+				'set-front'    => 'set-front-page',
+				// 0.3 quality feature 4: the same media roles the pages pack
+				// gained, mirrored verbatim.
+				'search'       => 'media-search',
+				'missing-alt'  => 'list-missing-alt',
+				'upload'       => 'media-upload',
+				'generate'     => 'generate-image',
+				'alt-text'     => 'generate-alt-text',
+				'featured'     => 'set-featured-image',
+				'alt'          => 'update-alt',
+				'read-media'   => 'read-media',
+				'stock-search' => 'stock-image-search',
+				'stock-import' => 'stock-image-import',
+				// 0.3 quality feature 5: the style-variation pair.
+				'read-style'   => 'read-style',
+				'set-style'    => 'set-style',
 			)
 		);
 	}
@@ -87,16 +103,28 @@ final class SitePack extends Pack {
 	protected function inputProperties( string $template ): array {
 		return match ( $template ) {
 			'read-content'      => array( 'id', 'post_type', 'slug', 'status', 'author', 'parent', 'fields' ),
-			'create-post'       => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
-			'update-post'       => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
-			'publish-post'      => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt' ),
+			'create-post'       => array( 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
+			'update-post'       => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
+			'publish-post'      => array( 'id', 'post_type', 'title', 'content', 'sections', 'status', 'slug', 'parent', 'excerpt', 'no_image_reason' ),
 			'get-preview-url'   => array( 'id' ),
 			'list-patterns'     => array(),
-			'read-navigation'   => array(),
-			'update-navigation' => array( 'items' ),
-			'read-front-page'   => array(),
-			'set-front-page'    => array( 'show_on_front', 'page_id', 'page_for_posts_id' ),
-			default             => array(),
+			'read-navigation'    => array(),
+			'update-navigation'  => array( 'items' ),
+			'read-front-page'    => array(),
+			'set-front-page'     => array( 'show_on_front', 'page_id', 'page_for_posts_id' ),
+			'media-search'       => array( 'query' ),
+			'list-missing-alt'   => array(),
+			'media-upload'       => array( 'file_path' ),
+			'generate-image'     => array( 'prompt' ),
+			'generate-alt-text'  => array( 'attachment_id' ),
+			'set-featured-image' => array( 'post_id', 'attachment_id' ),
+			'update-alt'         => array( 'attachment_id', 'alt' ),
+			'read-media'         => array( 'attachment_id' ),
+			'stock-image-search' => array( 'query' ),
+			'stock-image-import' => array( 'id', 'alt' ),
+			'read-style'         => array(),
+			'set-style'          => array( 'slug' ),
+			default              => array(),
 		};
 	}
 
@@ -136,6 +164,20 @@ final class SitePack extends Pack {
 			'update-navigation'  => 'site/update-navigation',
 			'read-front-page'    => 'site/read-front-page',
 			'set-front-page'     => 'site/set-front-page',
+			'media-search'       => 'site/media-search',
+			'list-missing-alt'   => 'site/list-missing-alt',
+			'media-upload'       => 'site/media-upload',
+			'generate-image'     => 'site/media-generate',
+			// Documented deviation (mirrors PostsPack/PagesPack): a
+			// suggestion changes nothing on the site, so this is Tier 0.
+			'generate-alt-text'  => 'site/generate-alt-text',
+			'set-featured-image' => 'site/set-featured-image',
+			'update-alt'         => 'site/update-alt',
+			'read-media'         => 'site/read-media',
+			'stock-image-search' => 'site/media-stock-search',
+			'stock-image-import' => 'site/media-stock-import',
+			'read-style'         => 'site/read-style',
+			'set-style'          => 'site/set-style',
 			default              => $ability,
 		};
 	}
@@ -167,17 +209,29 @@ final class SitePack extends Pack {
 	 */
 	public function verbMap(): array {
 		return array(
-			'site/read'              => 0,
-			'site/list-patterns'     => 0,
-			'site/preview'           => 0,
-			'site/create-draft'      => 1,
-			'site/update-draft'      => 1,
-			'site/update-live'       => 2,
-			'site/publish'           => 2,
-			'site/read-navigation'   => 0,
-			'site/update-navigation' => 2,
-			'site/read-front-page'   => 0,
-			'site/set-front-page'    => 2,
+			'site/read'               => 0,
+			'site/list-patterns'      => 0,
+			'site/preview'            => 0,
+			'site/create-draft'       => 1,
+			'site/update-draft'       => 1,
+			'site/update-live'        => 2,
+			'site/publish'            => 2,
+			'site/read-navigation'    => 0,
+			'site/update-navigation'  => 2,
+			'site/read-front-page'    => 0,
+			'site/set-front-page'     => 2,
+			'site/media-search'       => 0,
+			'site/list-missing-alt'   => 0,
+			'site/generate-alt-text'  => 0,
+			'site/read-media'         => 0,
+			'site/media-upload'       => 1,
+			'site/media-generate'     => 1,
+			'site/set-featured-image' => 1,
+			'site/update-alt'         => 1,
+			'site/media-stock-search' => 0,
+			'site/media-stock-import' => 1,
+			'site/read-style'         => 0,
+			'site/set-style'          => 2,
 		);
 	}
 
@@ -200,8 +254,84 @@ final class SitePack extends Pack {
 		return match ( $verb ) {
 			'site/update-navigation' => Navigation::OBJECT_ID,
 			'site/set-front-page' => FrontPage::OBJECT_ID,
+			// 0.3 quality feature 5: the style variation is a third
+			// singleton, same reasoning as the other two.
+			'site/set-style' => Style::OBJECT_ID,
 			default => null,
 		};
+	}
+
+	/**
+	 * `read-navigation` and `read-front-page` read the same singletons
+	 * {@see objectIdForWrite()} names, so they verify those writes.
+	 *
+	 * @param string              $verb The pack verb.
+	 * @param array<string,mixed> $args The call's args (unused: both ids are fixed).
+	 */
+	public function objectIdForRead( string $verb, array $args ): ?string {
+		unset( $args );
+
+		return match ( $verb ) {
+			'site/read-navigation' => Navigation::OBJECT_ID,
+			'site/read-front-page' => FrontPage::OBJECT_ID,
+			'site/read-style' => Style::OBJECT_ID,
+			default => null,
+		};
+	}
+
+	/**
+	 * S12 (defect fix, mirrors PostsPack/PagesPack): `update-alt`'s output
+	 * and `read-media`'s input both carry the attachment id as
+	 * `attachment_id`, never `id`.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdKey( string $verb ): string {
+		return match ( $verb ) {
+			'site/update-alt', 'site/read-media' => 'attachment_id',
+			default => parent::objectIdKey( $verb ),
+		};
+	}
+
+	/**
+	 * S12 (defect fix, mirrors PostsPack/PagesPack): an attachment and a post
+	 * can share the same numeric id, so the two verbs above qualify it with
+	 * {@see Media::OBJECT_ID_PREFIX}.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		return match ( $verb ) {
+			'site/update-alt', 'site/read-media' => Media::OBJECT_ID_PREFIX,
+			default => parent::objectIdPrefix( $verb ),
+		};
+	}
+
+	/**
+	 * S6: `media-upload` and `generate-image` require `upload_files`.
+	 *
+	 * @return array<string,string>
+	 */
+	public function roleCapabilities(): array {
+		return array(
+			'upload'       => 'upload_files',
+			'generate'     => 'upload_files',
+			'stock-import' => 'upload_files',
+		);
+	}
+
+	/**
+	 * S6: one line, in the pack's own words, when the image roles are
+	 * withheld.
+	 *
+	 * @param list<string> $withheld The role names withheld from this run's start().
+	 */
+	public function withheldRoleNotice( array $withheld ): ?string {
+		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) || in_array( 'stock-import', $withheld, true ) ) {
+			return __( 'This run cannot add images.', 'senroflux' );
+		}
+
+		return null;
 	}
 
 	/**
@@ -211,16 +341,28 @@ final class SitePack extends Pack {
 	 */
 	public function roleVerbs(): array {
 		return array(
-			'read'       => array( 'site/read' ),
-			'create'     => array( 'site/create-draft' ),
-			'update'     => array( 'site/update-draft' ),
-			'publish'    => array( 'site/update-live', 'site/publish' ),
-			'preview'    => array( 'site/preview' ),
-			'patterns'   => array( 'site/list-patterns' ),
-			'read-nav'   => array( 'site/read-navigation' ),
-			'update-nav' => array( 'site/update-navigation' ),
-			'read-front' => array( 'site/read-front-page' ),
-			'set-front'  => array( 'site/set-front-page' ),
+			'read'         => array( 'site/read' ),
+			'create'       => array( 'site/create-draft' ),
+			'update'       => array( 'site/update-draft' ),
+			'publish'      => array( 'site/update-live', 'site/publish' ),
+			'preview'      => array( 'site/preview' ),
+			'patterns'     => array( 'site/list-patterns' ),
+			'read-nav'     => array( 'site/read-navigation' ),
+			'update-nav'   => array( 'site/update-navigation' ),
+			'read-front'   => array( 'site/read-front-page' ),
+			'set-front'    => array( 'site/set-front-page' ),
+			'search'       => array( 'site/media-search' ),
+			'missing-alt'  => array( 'site/list-missing-alt' ),
+			'upload'       => array( 'site/media-upload' ),
+			'generate'     => array( 'site/media-generate' ),
+			'alt-text'     => array( 'site/generate-alt-text' ),
+			'featured'     => array( 'site/set-featured-image' ),
+			'alt'          => array( 'site/update-alt' ),
+			'read-media'   => array( 'site/read-media' ),
+			'stock-search' => array( 'site/media-stock-search' ),
+			'stock-import' => array( 'site/media-stock-import' ),
+			'read-style'   => array( 'site/read-style' ),
+			'set-style'    => array( 'site/set-style' ),
 		);
 	}
 
@@ -230,7 +372,8 @@ final class SitePack extends Pack {
 	 * {@see \Specflux\SenroFlux\Run\Budget::defaults()}). Never derived from
 	 * the plan — sized for a full skeleton run (clarify + several pages +
 	 * navigation + front page), not from measured runs the way the shipped
-	 * table is.
+	 * table is. Tokens went 1000000 -> 1200000 after space-bunny live runs
+	 * (2026-09-28 bunny3/bunny4) spent 894k and 905k.
 	 *
 	 * @return array<string,int>
 	 */
@@ -238,10 +381,13 @@ final class SitePack extends Pack {
 		return array(
 			Budget::MAX_STEPS      => 200,
 			Budget::MAX_TOOL_CALLS => 120,
-			Budget::MAX_TOKENS     => 1000000,
+			Budget::MAX_TOKENS     => 1200000,
 			Budget::MAX_QUESTIONS  => 8,
 			Budget::MAX_PLANS      => 3,
-			Budget::IMAGES         => 0,
+			// 0.3 quality feature 4: was 0 (site had no image-generating
+			// verb); matches the shipped default {@see Budget::defaults()}
+			// now that a site run can generate/upload images too.
+			Budget::IMAGES         => 6,
 		);
 	}
 
@@ -250,7 +396,8 @@ final class SitePack extends Pack {
 	 *
 	 * @return list<Skill>
 	 */
-	public function skills(): array {
+	public function skills( bool $images_available = true ): array {
+		unset( $images_available );
 		$vocabulary = new Vocabulary();
 
 		return array(
@@ -265,7 +412,7 @@ final class SitePack extends Pack {
 			new Skill(
 				'site/copy-rules',
 				'Copy rules',
-				$this->copyRulesBody( $vocabulary->all() ),
+				$this->copyRulesBody( $vocabulary->curated() ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -274,6 +421,14 @@ final class SitePack extends Pack {
 				'site/structure-rules',
 				'Structure rules',
 				$this->structureRulesBody(),
+				false,
+				SkillSource::Pack,
+				'1'
+			),
+			new Skill(
+				'site/media-rules',
+				'Media rules',
+				$this->mediaRulesBody(),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -300,46 +455,64 @@ final class SitePack extends Pack {
 		return implode(
 			"\n",
 			array(
-				'Compose pages ONLY from the pattern vocabulary: hero, text-section, feature-grid, pricing-table, faq, testimonials, cta, page-links and intro. Put the hero first. Use at most one cta and at most one page-links. A page is 2–8 patterns. No pattern more than twice except text-section. No core/image anywhere. No colour attributes. Set spacing and typography only through the standard preset slugs. Re-read every object after writing.',
-				'A pattern is NOT a block: it is a core/group you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote.',
-				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				'Give a block ONLY the attributes its shape names below. An attribute the shape does not name — an extra align, an extra layout — changes the pattern\'s identity and the write is refused as unknown_pattern. In particular only hero, cta and page-links give their buttons block `{"layout":{"type":"flex"}}`; a buttons block anywhere else carries no layout at all. Exception: a top-level group\'s `style.spacing.padding` is optional decoration, accepted whichever way you write it — call site/list-patterns for each pattern\'s exact sample markup and copy it (with or without that one attribute); every OTHER attribute in the sample is load-bearing.',
+				'Write each page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme builds the design. Hero first. Give each image slot its own image, except services (all or none). Write `markup` only if no layout fits, or for homepage page-links or intro.',
+				'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
+				'Tell a visitor, per service, who it is for and what happens; what the first visit is; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between. A Contact page states every contact detail given.',
+				'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
+				'Markup patterns: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta, page-links, intro. At most one cta, page-links. A page is 2–8 sections, none twice except text-section. Images belong only in a layout\'s slot, cover-hero or media-text. No colour except cover-hero\'s overlayColor. Spacing/typography: standard preset slugs only. Re-read every object after writing.',
+				'A pattern is NOT a block: it is a core/group (or core/cover, core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Allowed blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
+				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. Close everything you open; markup that fails a parse-and-reserialise round trip is refused as invalid_markup.',
+				'Give a block ONLY the attributes its shape names below; any other is refused as unknown_pattern. Only hero, cover-hero, cta and page-links give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call site/list-patterns.',
 				'Shapes (">" = child, "(n–m)" = how many of that child):',
 				'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
-				'text-section: group > heading level 2, paragraph (1–4)',
+				'cover-hero: cover align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
+				'text-section: group > heading level 2, paragraph (2–4)',
+				'media-text: media-text > heading level 2, paragraph (1–3), buttons > button (0–1)',
 				'feature-grid: group > heading level 2, columns > column (2–3) each > heading level 3, paragraph',
 				'pricing-table: group > heading level 2, columns > column (1–3) each > heading level 3, paragraph, list (3–6 items), buttons > button',
 				'faq: group > heading level 2, details (2–8) each > paragraph',
 				'testimonials: group > heading level 2, quote (1–3)',
 				'cta: group align=full > heading level 2, paragraph align=center, buttons layout=flex > button (1)',
-				'page-links: group align=full > heading level 2, columns > column (2–6) each > heading level 3, paragraph, buttons > button (a card grid linking to the site\'s other skeleton pages; appears at most once per page)',
+				'page-links: group align=full > heading level 2, columns > column (2–6) each > heading level 3, paragraph, buttons > button (links to other skeleton pages; at most once per page)',
 				'intro: group > heading level 2, paragraph, buttons > button',
-				'When you propose a plan, spell each step\'s verbs exactly as one of: site/read, site/list-patterns, site/preview, site/create-draft, site/update-draft, site/update-live, site/publish, site/read-navigation, site/update-navigation, site/read-front-page, site/set-front-page. Any other word is refused as unknown_verb.',
+				// 0.3 quality fix (instruction ceiling): see the matching note
+				// in PagesPack::layoutRulesBody() — the full verb list now
+				// travels on the propose-plan tool's own declaration instead.
+				'Spell each plan step\'s verbs exactly as the propose-plan tool lists them; any other word is refused as unknown_verb.',
 			)
 		);
 	}
 
 	/**
-	 * The `site/copy-rules` body — RENDERED from the vocabulary's
-	 * `constraints.stated` lines (the nine patterns), same single-source
-	 * discipline the pages/posts packs use.
+	 * The `site/copy-rules` body: a pointer to `site/list-patterns` for each
+	 * pattern's copy limits ({@see Pack::copyRulesLines()}), plus the global
+	 * copy limits.
 	 *
 	 * @param list<array<string,mixed>> $vocabulary {@see Vocabulary::all()}.
 	 */
 	public function copyRulesBody( array $vocabulary ): string {
-		$lines = array();
-		foreach ( $vocabulary as $pattern ) {
-			$stated = $pattern['constraints']['stated'] ?? array();
-			foreach ( $stated as $line ) {
-				$lines[] = $line;
-			}
-		}
+		$lines = self::copyRulesLines( $vocabulary, 'site/list-patterns' );
 
-		$lines[] = 'Card bodies are at most 18 words.';
+		$lines[] = 'Say plainly what the client gets and what happens; no hedges like "may help" or "can be discussed" unless the brief itself hedges.';
+		$lines[] = 'Card bodies are at most 40 words.';
 		$lines[] = 'Buttons are verb-first (for example "Get started").';
-		$lines[] = 'Give prices as "$—/month (price TBC)" unless the user supplied a price.';
+		$lines[] = 'Use a pricing pattern only when the user gave the prices; never write a placeholder price.';
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * The `site/media-rules` body (0.3 quality feature 4, mirrors
+	 * PagesPack::mediaRulesBody()).
+	 */
+	private function mediaRulesBody(): string {
+		return implode(
+			"\n",
+			array(
+				'An image lives only in a layout\'s image slot, each slot a different image, with its alt text in image.alt. Search before generating.',
+				'Generated images cost money; when out, use stock-image-search then stock-image-import, else no_image_reason. Re-read media after changing it.',
+			)
+		);
 	}
 
 	/**
@@ -349,13 +522,13 @@ final class SitePack extends Pack {
 		return implode(
 			"\n",
 			array(
-				'At clarify, read the existing pages, the site navigation and the front-page settings before asking anything else.',
-				'Once clarify is done, your very next call is `senroflux/propose-plan` — never a plain-text reply describing what you intend to do. The plan must list every page you will create, every adopted object, and the publish and navigation steps that follow.',
-				'Your plan must list every EXISTING object it will touch — title, id and status — beside any new ones. Match an existing page by slug or title and ADOPT it as-is; never create a second page for something that already exists.',
-				'Rewrite an adopted page only when the human asked for a rewrite at clarify; a plain rewrite step still goes through the update/publish verbs. Publish an adopted draft only when the plan names it "publish existing draft".',
-				'If the navigation reports kind "page_list", say in plain words that publishing pages already changes the header automatically; only call update-navigation when the goal needs a specific order or a specific subset of pages.',
-				'Nothing existing is deleted. A leftover default-install object you do not need is left alone and named in your final summary as left for the human to remove.',
-				'Write the navigation update AFTER every page in the plan has been published, never before — a link to a page that is not yet published is refused.',
+				'At clarify, also read the site navigation and the front-page settings.',
+				'After clarify, your next call is `senroflux/propose-plan`. It lists every page you will create, every adopted object (title, id, status) and the publish and navigation steps. Match an existing page by slug or title and ADOPT it; never create a second page for it.',
+				'Rewrite an adopted page only when the human asked for a rewrite. Publish an adopted draft only when the plan names it "publish existing draft".',
+				'If navigation kind is "page_list", call update-navigation to list the real pages when stock_sample_page is not null; otherwise page_list is fine.',
+				'Delete nothing. Name leftover default-install objects in your summary for the human to remove.',
+				'Update the navigation only after every planned page is published; a link to an unpublished page is refused.',
+				'Only call set-style when asked for a different look; read-style first, even if read earlier this run.',
 			)
 		);
 	}

@@ -17,6 +17,7 @@ use Specflux\SenroFlux\Model\ModelGatewayInterface;
 use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Site\FrontPage;
 use Specflux\SenroFlux\Packs\Site\Navigation;
+use Specflux\SenroFlux\Packs\Site\Style;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Report;
@@ -294,6 +295,8 @@ final class Plugin {
 		// registers the shared `senroflux-site` ability category.
 		\Specflux\SenroFlux\Packs\Site\Navigation::boot();
 		\Specflux\SenroFlux\Packs\Site\FrontPage::boot();
+		// 0.3 quality feature 5: the style-variation abilities.
+		\Specflux\SenroFlux\Packs\Site\Style::boot();
 		// 0.3 S4: the pages pack's vocabulary/validator plug into the shared
 		// content registrar under its own slug — `list-patterns` and the write
 		// abilities resolve THIS pair only while a 'pages' run is ticking (see
@@ -388,11 +391,18 @@ final class Plugin {
 	 * @param list<string>|null $skills_disable Non-required skill ids to drop (S8).
 	 * @param int|null          $follow_up_of   0.3 S20: a source run id to seed this run
 	 *                                          from. Forces $pack to the source's pack.
+	 * @param string|null       $model_provider Pinned model provider id. Null
+	 *                                          (with $model_id also null) means automatic
+	 *                                          selection. A follow-up run with both null
+	 *                                          inherits the source run's pinned model.
+	 * @param string|null       $model_id       Pinned model id; must be given
+	 *                                          together with $model_provider or not at all.
 	 * @return array<string,mixed>|WP_Error RunState or senroflux_ungoverned /
 	 *                                      senroflux_bad_request / pack_unknown /
 	 *                                      pack_unbound / skills_too_large /
 	 *                                      follow_up_not_found / follow_up_not_finished /
-	 *                                      follow_up_unsupported / follow_up_forbidden.
+	 *                                      follow_up_unsupported / follow_up_forbidden /
+	 *                                      senroflux_model_unavailable.
 	 */
 	public function start(
 		string $consumer,
@@ -401,7 +411,9 @@ final class Plugin {
 		array $budget = array(),
 		?string $pack = null,
 		?array $skills_disable = null,
-		?int $follow_up_of = null
+		?int $follow_up_of = null,
+		?string $model_provider = null,
+		?string $model_id = null
 	): array|WP_Error {
 		if ( ! $this->ready() ) {
 			return $this->ungoverned_error();
@@ -416,6 +428,7 @@ final class Plugin {
 
 		$user_id      = (int) get_current_user_id();
 		$caller_allow = $allow; // Captured BEFORE the pack derives it (S9).
+		$model_chosen = null !== $model_provider || null !== $model_id;
 
 		// 0.3 S20: a follow-up run. Resolved BEFORE pack resolution — the
 		// source's pack REPLACES whatever $pack the caller passed, fail
@@ -441,6 +454,33 @@ final class Plugin {
 			}
 
 			$pack = $source->pack; // Forced (S20), regardless of what the caller asked for.
+
+			// A follow-up with no explicit model choice inherits the
+			// source run's pinned model (also possibly automatic); an explicit
+			// choice from the caller always overrides.
+			if ( ! $model_chosen ) {
+				$model_provider = $source->modelProvider;
+				$model_id       = $source->modelId;
+			}
+		}
+
+		// A candidate pair must be given as BOTH fields or NEITHER —
+		// half a pair can never be silently completed or dropped. Checked
+		// before any DB write, like every other start() refusal.
+		if ( ( null === $model_provider ) !== ( null === $model_id ) ) {
+			return new WP_Error(
+				'senroflux_bad_request',
+				__( 'Provide both a model provider and a model id, or leave both empty for automatic.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+		// Only an explicit choice is validated: an inherited pin whose model has
+		// since gone away is still just a preference, and falls back to automatic.
+		if ( $model_chosen && null !== $model_provider && null !== $model_id ) {
+			$model_valid = \Specflux\SenroFlux\Model\ModelChoice::validate( $model_provider, $model_id );
+			if ( is_wp_error( $model_valid ) ) {
+				return $model_valid;
+			}
 		}
 
 		// 0.3 S11: start() re-decides on the server through the SAME evaluator
@@ -547,7 +587,9 @@ final class Plugin {
 			$content_locale,
 			$gate_mode,
 			$withheld_roles,
-			$follow_up_of
+			$follow_up_of,
+			$model_provider,
+			$model_id
 		);
 
 		// S9: when a pack drove the allow-list, record that a caller-supplied
@@ -648,12 +690,17 @@ final class Plugin {
 		// the same way — its own OBJECT_ID, so it never collides with
 		// Navigation's marker on the same run.
 		\Specflux\SenroFlux\Packs\Site\FrontPage::useRunContext( $run_id, $this->runner()->store() );
+		// 0.3 quality feature 5: the style registrar's own stale-write
+		// compare, scoped the same way — its own OBJECT_ID.
+		\Specflux\SenroFlux\Packs\Site\Style::useRunContext( $run_id, $this->runner()->store() );
 		// S19: the commerce polyfills' own stale-write compare (coupon-enable
 		// only — see the class docblock), scoped the same way.
 		\Specflux\SenroFlux\Packs\Commerce\Abilities::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
-			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
+			$result = $this->runner()->tick( $run_id, $expected_step_count, $resume );
+
+			return $result;
 		} finally {
 			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
@@ -661,6 +708,7 @@ final class Plugin {
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\Navigation::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\FrontPage::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Site\Style::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Commerce\Abilities::forgetRunContext();
 		}
 	}
@@ -824,6 +872,14 @@ final class Plugin {
 				'withheld_roles'      => $run->withheldRoles,
 				// 0.3 S20: the source run id when this run is a follow-up.
 				'follow_up_of'        => $run->followUpOf,
+				// Pinned at start(), rendered once by the run header.
+				// Null means automatic selection.
+				'model'               => null !== $run->modelProvider && null !== $run->modelId
+					? array(
+						'provider' => $run->modelProvider,
+						'id'       => $run->modelId,
+					)
+					: null,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
 				// 0.2 S12: the harness-built report (result_json), surfaced on
@@ -999,6 +1055,10 @@ final class Plugin {
 					return FrontPage::reportLookup();
 				}
 
+				if ( Style::OBJECT_ID === $object_id ) {
+					return Style::reportLookup();
+				}
+
 				return ( Report::wpPostLookup() )( $object_id );
 			},
 			// S9: a run started with a pack is fenced/annotated by the PACK's
@@ -1099,6 +1159,14 @@ final class Plugin {
 				$value = get_option( 'senroflux_legacy_run_watermark', false );
 
 				return is_numeric( $value ) ? (int) $value : null;
+			},
+			// The read counterpart of the write-id resolver above: a
+			// singleton read takes no id argument, so only the pack can say
+			// which object it read.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb, array $args ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->objectIdForRead( $verb, $args ) : null;
 			}
 		);
 

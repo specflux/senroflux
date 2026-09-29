@@ -17,13 +17,18 @@ use Specflux\SenroFlux\Run\Clock;
 use Specflux\SenroFlux\Run\Runner;
 use Specflux\SenroFlux\Run\StepKind;
 use Specflux\SenroFlux\Run\WpdbRunStore;
+use Specflux\SenroFlux\Tools\HarnessTools;
+use Specflux\SenroFlux\Tools\PlanTools;
+use Specflux\SenroFlux\Tools\SuggestBriefTool;
 use Specflux\SenroFlux\Tools\ToolExecutor;
+use Specflux\SenroFlux\Tools\VerbTier;
 use SenroFlux_Test_Fake_Ability;
 use WP_Error;
 use WordPress\AiClient\Messages\DTO\MessagePart;
 use WordPress\AiClient\Messages\DTO\ModelMessage;
 use WordPress\AiClient\Messages\DTO\UserMessage;
 use WordPress\AiClient\Tools\DTO\FunctionCall;
+use WordPress\AiClient\Tools\DTO\FunctionResponse;
 use wpdb;
 
 final class RunnerTest extends TestCase {
@@ -136,6 +141,40 @@ final class RunnerTest extends TestCase {
 
 		delete_transient( 'senroflux_lock_' . $run_id );
 		unset( $GLOBALS['senroflux_test_transients'][ 'senroflux_lock_' . $run_id ] );
+	}
+
+	/**
+	 * Live site run (2026-09-28): a tick ran for over 400 seconds, the 30-second
+	 * lock expired, and a second tick for the same run was accepted. Two loops
+	 * then wrote to one run: a duplicate page, and a parked call that never got
+	 * a result, so the model provider refused the next turn ("No tool output
+	 * found for function call"). The lock must stay held for the whole tick.
+	 */
+	public function test_the_tick_lock_is_held_for_every_model_call(): void {
+		$run_id = $this->createRun();
+		$key    = 'senroflux_lock_' . $run_id;
+		$seen   = array();
+
+		$this->gateway->script[] = self::callTurn( 'wpab__nope__missing', array() );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->onCall   = static function ( int $call ) use ( $key, &$seen ): void {
+			$seen[ $call ] = array(
+				'held' => false !== get_transient( $key ),
+				'ttl'  => $GLOBALS['senroflux_test_transient_ttls'][ $key ] ?? 0,
+			);
+			// Simulate the transient expiring while the model is thinking.
+			delete_transient( $key );
+		};
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertCount( 2, $seen );
+		foreach ( $seen as $call => $lock ) {
+			$this->assertTrue( $lock['held'], "the lock must be held during model call $call" );
+			$this->assertGreaterThanOrEqual( 300, $lock['ttl'], "the lock must outlast one model call and one tool call (call $call)" );
+		}
+		$this->assertFalse( get_transient( $key ), 'the lock is released when the tick ends' );
 	}
 
 	public function test_terminal_run_returns_state_without_model_calls(): void {
@@ -350,6 +389,389 @@ final class RunnerTest extends TestCase {
 		$this->assertSame( 'failed', $result['run']['status'] );
 		$this->assertSame( 'budget_exceeded', $result['run']['error']['code'] ?? '' );
 		$this->assertCount( 0, $this->gateway->calls );
+	}
+
+	/**
+	 * Live evidence (2026-09-28 fix1 scenario-1-1, seq 26/27): space-bunny
+	 * called `senroflux__senroflux__propose-plan` — a doubled `senroflux__`
+	 * namespace prefix — and the harness answered with the mangled ability
+	 * name as a cryptic `unknown_tool` error, wasting a turn. The doubled
+	 * call must resolve to the SAME harness tool as the correctly-named
+	 * call: it parks a plan exactly like `senroflux__propose-plan` would.
+	 */
+	public function test_a_doubled_senroflux_prefix_still_parks_the_plan(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn(
+			'senroflux__senroflux__propose-plan',
+			array(
+				'goal'        => 'Clear the cache',
+				'steps'       => array(
+					array(
+						'text'  => 'Spend it',
+						'verbs' => array( 'agsafe-smoke/spend' ),
+					),
+				),
+				'assumptions' => array(),
+			)
+		);
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'], 'the doubled prefix must resolve to the propose-plan harness tool, not fall through to unknown_tool' );
+		$this->assertSame( 'parked', $result['new_steps'][2]['status'] ?? null );
+		$this->assertSame( PlanTools::toolName(), $result['new_steps'][2]['tool_name'] ?? null, 'the recorded step must carry the canonical tool name' );
+	}
+
+	/**
+	 * A function name that is neither a real harness tool nor a doubled
+	 * form of one (a hallucinated/mistyped name) must get a helpful error —
+	 * naming the failure and listing the real available functions — instead
+	 * of the old behaviour of echoing the mangled name back verbatim.
+	 */
+	public function test_a_genuinely_unknown_senroflux_function_gets_a_helpful_error(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn( 'senroflux__do-a-barrel-roll', array() );
+		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'] );
+		$this->assertSame( 'error', $result['new_steps'][2]['status'] ?? null );
+
+		$response = $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response'] ?? array();
+		$this->assertSame( 'unknown_function', $response['error'] ?? null );
+		$this->assertIsString( $response['message'] ?? null );
+		$this->assertStringContainsString( 'senroflux__do-a-barrel-roll', $response['message'] );
+		$this->assertStringNotContainsString( 'senroflux/do-a-barrel-roll', $response['message'], 'must not echo a mangled ability-name round-trip' );
+		$this->assertStringContainsString( PlanTools::functionName(), $response['message'], 'must list the real available functions' );
+		$this->assertStringContainsString( HarnessTools::functionName(), $response['message'] );
+		$this->assertStringContainsString( SuggestBriefTool::functionName(), $response['message'] );
+	}
+
+	/**
+	 * Live evidence (2026-09-28 bunny1/bunny4): a run publishes its pages, then
+	 * runs out of `max_tokens` while re-reading them to verify. The writes are
+	 * real; the run must not report `failed`. "Writes finished" is read from
+	 * data the Runner already keeps: an accepted plan whose every write-tier
+	 * verb has a successful tool_result, and the most recent write among those
+	 * did not fail unresolved.
+	 */
+	public function test_budget_exceeded_after_writes_finished_completes_with_unverified_note(): void {
+		add_filter(
+			'senroflux_verb_map',
+			static fn ( array $map ): array => $map + array( 'agsafe-smoke/write' => VerbTier::TIER_1 ),
+			20,
+			1
+		);
+
+		$run_id = $this->store->createRun(
+			1,
+			'test-consumer',
+			'Publish the page',
+			array( 'agsafe-smoke/*' ),
+			array_merge( Budget::defaults(), array( 'max_tokens' => 100 ) )
+		);
+		$this->store->appendStep(
+			$run_id,
+			StepKind::User,
+			( new UserMessage( array( new MessagePart( 'Publish the page' ) ) ) )->toArray()
+		);
+
+		// An accepted plan naming exactly one write verb.
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'G',
+				'steps'       => array(
+					array(
+						'text'  => 'Write it',
+						'verbs' => array( 'agsafe-smoke/write' ),
+						'tier'  => 1,
+					),
+				),
+				'assumptions' => array(),
+			),
+			PlanTools::toolName(),
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		// The write itself succeeded.
+		$write_message              = ( new UserMessage(
+			array( new MessagePart( new FunctionResponse( 'call_w', 'agsafe_smoke_write', array( 'ok' => true ) ) ) )
+		) )->toArray();
+		$write_message['plan_verb'] = 'agsafe-smoke/write';
+		$this->store->appendStep( $run_id, StepKind::ToolResult, $write_message, 'wpab__agsafe-smoke__write', null, 'ok' );
+
+		// Tokens already exceed the (tiny) budget: the NEXT tick trips it.
+		$this->store->updateRun(
+			$run_id,
+			array(
+				'tokens_in'  => 90,
+				'tokens_out' => 20,
+			)
+		);
+
+		$run    = $this->store->getRun( $run_id );
+		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'], 'writes were finished: a budget hit during verification must not fail the run' );
+		$this->assertCount( 0, $this->gateway->calls );
+		$this->assertNull( $result['run']['error'] ?? null );
+
+		$note = $result['ui']['report']['unverified'] ?? '';
+		$this->assertIsString( $note );
+		$this->assertStringContainsString( 'budget_exceeded', $note );
+		$this->assertStringContainsString( 'max_tokens', $note );
+	}
+
+	/**
+	 * Same shape as above, but the plan's write verb never produced a
+	 * successful tool_result: today's failed/budget_exceeded behaviour must
+	 * be unchanged.
+	 */
+	public function test_budget_exceeded_with_an_undone_plan_write_step_still_fails(): void {
+		add_filter(
+			'senroflux_verb_map',
+			static fn ( array $map ): array => $map + array( 'agsafe-smoke/write' => VerbTier::TIER_1 ),
+			20,
+			1
+		);
+
+		$run_id = $this->store->createRun(
+			1,
+			'test-consumer',
+			'Publish the page',
+			array( 'agsafe-smoke/*' ),
+			array_merge( Budget::defaults(), array( 'max_tokens' => 100 ) )
+		);
+		$this->store->appendStep(
+			$run_id,
+			StepKind::User,
+			( new UserMessage( array( new MessagePart( 'Publish the page' ) ) ) )->toArray()
+		);
+
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'G',
+				'steps'       => array(
+					array(
+						'text'  => 'Write it',
+						'verbs' => array( 'agsafe-smoke/write' ),
+						'tier'  => 1,
+					),
+				),
+				'assumptions' => array(),
+			),
+			PlanTools::toolName(),
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		// No tool_result for the write verb was ever recorded: the write never happened.
+		$this->store->updateRun(
+			$run_id,
+			array(
+				'tokens_in'  => 90,
+				'tokens_out' => 20,
+			)
+		);
+
+		$run    = $this->store->getRun( $run_id );
+		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'failed', $result['run']['status'] );
+		$this->assertSame( 'budget_exceeded', $result['run']['error']['code'] ?? '' );
+		$this->assertSame( 'max_tokens', $result['run']['error']['which'] ?? '' );
+	}
+
+	/**
+	 * Live run (2026-09-28 fix1 scenario-3-1): a 4-step plan — create draft;
+	 * search/import media and set alt text; set the featured image; read,
+	 * update, and publish — ran to completion but died at max_steps because
+	 * the old writesFinished() required EVERY plan-named write verb to have
+	 * an ok result. Two things never happened exactly as named: `update-alt`
+	 * (the pack tells models to name every verb that might apply, so plans
+	 * routinely name unused verbs) and `publish` (the successful tool_result
+	 * is tagged `update-live`, not `publish` — an aliasing quirk). Both must
+	 * be tolerated: each non-final write step only needs ONE of its named
+	 * verbs to succeed, and the final write step accepts any tier >= 1 write
+	 * after the prior step's write, not only its own named verbs.
+	 */
+	public function test_budget_exceeded_after_multi_step_plan_with_unused_and_aliased_write_verbs_completes(): void {
+		add_filter(
+			'senroflux_verb_map',
+			static fn ( array $map ): array => $map + array(
+				'create-draft'       => VerbTier::TIER_1,
+				'media-search'       => VerbTier::TIER_0,
+				'media-stock-search' => VerbTier::TIER_0,
+				'media-stock-import' => VerbTier::TIER_1,
+				'update-alt'         => VerbTier::TIER_1,
+				'read-media'         => VerbTier::TIER_0,
+				'set-featured-image' => VerbTier::TIER_1,
+				'read'               => VerbTier::TIER_0,
+				'update-draft'       => VerbTier::TIER_1,
+				'publish'            => VerbTier::TIER_1,
+				'update-live'        => VerbTier::TIER_1,
+			),
+			20,
+			1
+		);
+
+		$run_id = $this->store->createRun(
+			1,
+			'test-consumer',
+			'Publish the page with media',
+			array( 'agsafe-smoke/*' ),
+			array_merge( Budget::defaults(), array( 'max_tokens' => 100 ) )
+		);
+		$this->store->appendStep(
+			$run_id,
+			StepKind::User,
+			( new UserMessage( array( new MessagePart( 'Publish the page with media' ) ) ) )->toArray()
+		);
+
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'G',
+				'steps'       => array(
+					array(
+						'text'  => 'Create the draft',
+						'verbs' => array( 'create-draft' ),
+					),
+					array(
+						'text'  => 'Add media',
+						'verbs' => array( 'media-search', 'media-stock-search', 'media-stock-import', 'update-alt', 'read-media' ),
+					),
+					array(
+						'text'  => 'Set the featured image',
+						'verbs' => array( 'set-featured-image' ),
+					),
+					array(
+						'text'  => 'Publish',
+						'verbs' => array( 'read', 'update-draft', 'publish' ),
+					),
+				),
+				'assumptions' => array(),
+			),
+			PlanTools::toolName(),
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		foreach ( array( 'create-draft', 'media-stock-import', 'set-featured-image', 'update-draft', 'update-live' ) as $i => $verb ) {
+			$message              = ( new UserMessage(
+				array( new MessagePart( new FunctionResponse( 'call_' . $i, 'wpab__agsafe-smoke__' . $verb, array( 'ok' => true ) ) ) )
+			) )->toArray();
+			$message['plan_verb'] = $verb;
+			$this->store->appendStep( $run_id, StepKind::ToolResult, $message, 'wpab__agsafe-smoke__' . $verb, null, 'ok' );
+		}
+
+		$this->store->updateRun(
+			$run_id,
+			array(
+				'tokens_in'  => 90,
+				'tokens_out' => 20,
+			)
+		);
+
+		$run    = $this->store->getRun( $run_id );
+		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'], 'writes were finished despite an unused plan-named verb and a publish->update-live alias' );
+		$this->assertNull( $result['run']['error'] ?? null );
+	}
+
+	/**
+	 * A 3-page plan (create page A, create page B, create page C) died before
+	 * its LAST write step ever attempted a write: only A and B were created.
+	 * All three steps name the same verb, so this also proves writesFinished()
+	 * cannot simply ask "does verb X have any ok result anywhere" — it must
+	 * track each plan step's write against a distinct, unconsumed attempt.
+	 */
+	public function test_budget_exceeded_with_a_died_before_last_page_write_still_fails(): void {
+		add_filter(
+			'senroflux_verb_map',
+			static fn ( array $map ): array => $map + array( 'pages/create' => VerbTier::TIER_1 ),
+			20,
+			1
+		);
+
+		$run_id = $this->store->createRun(
+			1,
+			'test-consumer',
+			'Create three pages',
+			array( 'agsafe-smoke/*' ),
+			array_merge( Budget::defaults(), array( 'max_tokens' => 100 ) )
+		);
+		$this->store->appendStep(
+			$run_id,
+			StepKind::User,
+			( new UserMessage( array( new MessagePart( 'Create three pages' ) ) ) )->toArray()
+		);
+
+		$plan_seq = $this->store->appendStep(
+			$run_id,
+			StepKind::Plan,
+			array(
+				'goal'        => 'G',
+				'steps'       => array(
+					array(
+						'text'  => 'Create page A',
+						'verbs' => array( 'pages/create' ),
+					),
+					array(
+						'text'  => 'Create page B',
+						'verbs' => array( 'pages/create' ),
+					),
+					array(
+						'text'  => 'Create page C',
+						'verbs' => array( 'pages/create' ),
+					),
+				),
+				'assumptions' => array(),
+			),
+			PlanTools::toolName(),
+			null,
+			'parked'
+		);
+		$this->store->updateRun( $run_id, array( 'accepted_plan_step_id' => $plan_seq ) );
+
+		foreach ( array( 'A', 'B' ) as $i => $page ) {
+			$message              = ( new UserMessage(
+				array( new MessagePart( new FunctionResponse( 'call_' . $page, 'wpab__agsafe-smoke__create', array( 'ok' => true ) ) ) )
+			) )->toArray();
+			$message['plan_verb'] = 'pages/create';
+			$this->store->appendStep( $run_id, StepKind::ToolResult, $message, 'wpab__agsafe-smoke__create', null, 'ok' );
+		}
+
+		$this->store->updateRun(
+			$run_id,
+			array(
+				'tokens_in'  => 90,
+				'tokens_out' => 20,
+			)
+		);
+
+		$run    = $this->store->getRun( $run_id );
+		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'failed', $result['run']['status'], 'page C was never written: the run died before its last write step' );
+		$this->assertSame( 'budget_exceeded', $result['run']['error']['code'] ?? '' );
 	}
 
 	public function test_no_elapsed_gap_sentence_on_a_runs_first_tick(): void {

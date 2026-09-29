@@ -29,6 +29,20 @@ function setScript( steps ) {
 	wpCli( [ 'option', 'delete', 'senroflux_e2e_calls' ] );
 }
 
+/** Generic `wp option update <name> <value>`. */
+function setOption( name, value ) {
+	wpCli( [ 'option', 'update', name, value ] );
+}
+
+/** Generic `wp option delete <name>` (a no-op if it was never set). */
+function deleteOption( name ) {
+	try {
+		wpCli( [ 'option', 'delete', name ] );
+	} catch {
+		// Already absent — fine.
+	}
+}
+
 /** Wipe every run/step row and the e2e-only options so each spec starts clean. */
 function resetRuns() {
 	wpCli( [ 'db', 'query', 'TRUNCATE TABLE wp_senroflux_runs' ] );
@@ -72,6 +86,8 @@ module.exports = {
 	wpCli,
 	setScript,
 	resetRuns,
+	setOption,
+	deleteOption,
 	activateAgentSafety,
 	deactivateAgentSafety,
 	activatePlugin,

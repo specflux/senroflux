@@ -141,11 +141,38 @@ final class Vocabulary implements ContentVocabulary {
 	 * so unlike the pages/site packs there is no optional-attribute rule to
 	 * document here.
 	 *
-	 * @return array<string,mixed> { patterns: list<array<string,mixed>> }
+	 * Token cost, same shape as the pages/site packs': with `$names`
+	 * empty, returns a compact INDEX (name, title, description only). With
+	 * `$names` given, returns full entries (today's shape, including
+	 * `markup` where a pattern has any) for exactly those names, in
+	 * vocabulary order; an unrecognised name is reported in `not_found`
+	 * rather than failing the call.
+	 *
+	 * @param list<string> $names Pattern names to return full entries for.
+	 * @return array<string,mixed> { patterns: list<array<string,mixed>>, not_found?: list<string> }
 	 */
-	public function listPayload(): array {
+	public function listPayload( array $names = array() ): array {
+		if ( empty( $names ) ) {
+			$patterns = array();
+			foreach ( $this->all() as $pattern ) {
+				$patterns[] = array(
+					'name'        => $pattern['name'],
+					'title'       => $pattern['title'],
+					'description' => $pattern['description'],
+				);
+			}
+
+			return array( 'patterns' => $patterns );
+		}
+
+		$wanted   = array_flip( $names );
 		$patterns = array();
 		foreach ( $this->all() as $pattern ) {
+			if ( ! isset( $wanted[ $pattern['name'] ] ) ) {
+				continue;
+			}
+			unset( $wanted[ $pattern['name'] ] );
+
 			$entry = array(
 				'name'        => $pattern['name'],
 				'title'       => $pattern['title'],
@@ -158,7 +185,13 @@ final class Vocabulary implements ContentVocabulary {
 			$patterns[] = $entry;
 		}
 
-		return array( 'patterns' => $patterns );
+		$payload = array( 'patterns' => $patterns );
+
+		if ( ! empty( $wanted ) ) {
+			$payload['not_found'] = array_keys( $wanted );
+		}
+
+		return $payload;
 	}
 
 	/**

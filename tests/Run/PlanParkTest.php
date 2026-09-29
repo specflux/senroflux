@@ -303,7 +303,7 @@ final class PlanParkTest extends TestCase {
 		$this->gateway->script[] = self::planTurn(
 			'call_p',
 			array(
-				'goal'  => str_repeat( 'x', 201 ),
+				'goal'  => str_repeat( 'x', 251 ),
 				'steps' => array(
 					array(
 						'text'  => 'Read',
@@ -328,7 +328,59 @@ final class PlanParkTest extends TestCase {
 		$responded = $error_step['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_p', $responded['id'] ?? null );
 		$this->assertSame( PlanTools::FUNCTION_NAME, $responded['name'] ?? null );
-		$this->assertSame( array( 'error' => PlanTools::ERROR_INVALID_PLAN ), $responded['response'] ?? null );
+		$this->assertSame( PlanTools::ERROR_INVALID_PLAN, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid propose-plan call: ', $responded['response']['message'] ?? '' );
+		// 0.3 quality fix: the refusal must state the actual length AND the
+		// limit so the model can tell how far over it is (live runs looped
+		// retrying "Still too long..." without this).
+		$this->assertStringContainsString( '"goal" is 251 characters; the limit is 200.', $responded['response']['message'] ?? '' );
+	}
+
+	public function test_invalid_payload_step_text_over_200_states_step_number_length_and_limit(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'G',
+				'steps' => array(
+					array(
+						'text'  => 'Read',
+						'verbs' => array( 'agsafe-smoke/read' ),
+					),
+					array(
+						'text'  => str_repeat( 'x', 260 ),
+						'verbs' => array( 'agsafe-smoke/read' ),
+					),
+				),
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Ok.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
+		$this->assertSame( PlanTools::ERROR_INVALID_PLAN, $responded['response']['error'] ?? null );
+		// The over-length step is the SECOND step (1-based == 2), 260 chars,
+		// against a 200-char limit.
+		$this->assertStringContainsString(
+			'step 2 "text" is 260 characters; the limit is 200.',
+			$responded['response']['message'] ?? ''
+		);
+	}
+
+	public function test_propose_plan_declaration_schema_caps_goal_and_step_text_length(): void {
+		$declaration = PlanTools::proposePlanDeclaration();
+		$schema      = $declaration instanceof FunctionDeclaration
+			? $declaration->getParameters()
+			: $declaration['inputSchema'];
+		$schema      = (array) $schema;
+
+		$this->assertSame( PlanTools::MAX_GOAL_CHARS, $schema['properties']['goal']['maxLength'] ?? null );
+		$this->assertSame(
+			PlanTools::MAX_STEP_TEXT_CHARS,
+			$schema['properties']['steps']['items']['properties']['text']['maxLength'] ?? null
+		);
 	}
 
 	public function test_invalid_payload_too_many_steps_is_invalid_plan(): void {
@@ -353,7 +405,8 @@ final class PlanParkTest extends TestCase {
 
 		$this->assertIsArray( $result );
 		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
-		$this->assertSame( array( 'error' => PlanTools::ERROR_INVALID_PLAN ), $responded['response'] ?? null );
+		$this->assertSame( PlanTools::ERROR_INVALID_PLAN, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid propose-plan call: ', $responded['response']['message'] ?? '' );
 	}
 
 	public function test_invalid_payload_empty_verbs_is_invalid_plan(): void {
@@ -376,7 +429,9 @@ final class PlanParkTest extends TestCase {
 
 		$this->assertIsArray( $result );
 		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
-		$this->assertSame( array( 'error' => PlanTools::ERROR_INVALID_PLAN ), $responded['response'] ?? null );
+		$this->assertSame( PlanTools::ERROR_INVALID_PLAN, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid propose-plan call: ', $responded['response']['message'] ?? '' );
+		$this->assertStringContainsString( 'every step needs at least one verb', $responded['response']['message'] ?? '' );
 	}
 
 	public function test_invalid_payload_counts_as_a_tool_call_for_the_budget(): void {
@@ -391,7 +446,7 @@ final class PlanParkTest extends TestCase {
 					'call_p',
 					PlanTools::FUNCTION_NAME,
 					array(
-						'goal'  => str_repeat( 'x', 201 ),
+						'goal'  => str_repeat( 'x', 251 ),
 						'steps' => array(
 							array(
 								'text'  => 'Read',
@@ -587,7 +642,18 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame( 'wpab__agsafe-smoke__write', $write['tool_name'] );
 		$write_response = $write['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_w', $write_response['id'] ?? null );
-		$this->assertSame( array( 'error' => 'not_in_plan' ), $write_response['response'] ?? null );
+		// 0.3 quality fix: `not_in_plan` now names the missing verb (and a
+		// short actionable message) so a model can add exactly that verb to
+		// its next plan instead of guessing — `error` itself is unchanged, so
+		// the fence's own not-counted/re-plan detection stays untouched.
+		$this->assertSame(
+			array(
+				'error'   => 'not_in_plan',
+				'verb'    => 'agsafe-smoke/write',
+				'message' => 'Refused: not_in_plan. Add the verb "agsafe-smoke/write" to a plan step (propose a new plan if the accepted one cannot cover it) before retrying this call.',
+			),
+			$write_response['response'] ?? null
+		);
 
 		$read = $result['new_steps'][3];
 		$this->assertSame( 'ok', $read['status'] );
@@ -826,6 +892,16 @@ final class PlanParkTest extends TestCase {
 		);
 	}
 
+	private function createPagesRunWithBudget( array $budget_overrides ): int {
+		return $this->store->createRun(
+			1,
+			'test-consumer',
+			'Design a pricing page',
+			array( 'senroflux/*' ),
+			array_merge( Budget::defaults(), $budget_overrides )
+		);
+	}
+
 	private function createPagesRun(): int {
 		return $this->store->createRun(
 			1,
@@ -946,10 +1022,80 @@ final class PlanParkTest extends TestCase {
 		$publish  = $result['new_steps'][2];
 		$response = $publish['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'error', $publish['status'] );
-		$this->assertSame( array( 'error' => 'not_in_plan' ), $response['response'] ?? null );
+		// 0.3 quality fix: names the missing verb (`pages/publish`, distinct
+		// from the accepted plan's `pages/update-draft`) — see the sibling
+		// smoke-pack assertion above for the full shape this now carries.
+		$this->assertSame( 'not_in_plan', $response['response']['error'] ?? null );
+		$this->assertSame( 'pages/publish', $response['response']['verb'] ?? null );
 
 		$draft = $result['new_steps'][3];
 		$this->assertSame( 'ok', $draft['status'] );
+	}
+
+	/**
+	 * Live run 2026-09-28: a plan listed pages/media-generate, the image
+	 * budget was spent, and the stock-photo fallback was refused not_in_plan.
+	 *
+	 * @dataProvider stockImportPlans
+	 *
+	 * @param list<string> $plan_verbs The accepted plan's verbs.
+	 * @param string       $expected   The import's step status.
+	 */
+	public function test_a_plan_that_may_generate_an_image_may_import_a_stock_one( array $plan_verbs, string $expected ): void {
+		$this->seedPagesAbilities();
+		$GLOBALS['senroflux_test_abilities']['senroflux/stock-image-import'] = new SenroFlux_Test_Fake_Ability(
+			'senroflux/stock-image-import',
+			permission_result: true,
+			execute_result: array( 'ok' => true )
+		);
+		$run_id = $this->createPagesRun();
+		$runner = $this->packRunner();
+
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Add an image',
+				'steps' => array(
+					array(
+						'text'  => 'Get an image',
+						'verbs' => $plan_verbs,
+					),
+				),
+			)
+		);
+		$runner->tick( $run_id, 0, null );
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Importing.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_i',
+					'wpab__senroflux__stock-image-import',
+					array(
+						'id'  => '0241be49-4a09-47a4-97d4-3cbcd8f4149b',
+						'alt' => 'A clinic',
+					)
+				)
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$before = $this->store->getRun( $run_id )->stepCount;
+		$result = $runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( $expected, $result['new_steps'][2]['status'] );
+	}
+
+	/**
+	 * @return array<string, array{list<string>, string}>
+	 */
+	public static function stockImportPlans(): array {
+		return array(
+			'generate covers the stock fallback' => array( array( 'pages/media-search', 'pages/media-generate' ), 'ok' ),
+			'stock import named outright'        => array( array( 'pages/media-stock-import' ), 'ok' ),
+			'a plan with no image verb'          => array( array( 'pages/update-draft' ), 'error' ),
+		);
 	}
 
 	/**
@@ -1150,6 +1296,218 @@ final class PlanParkTest extends TestCase {
 		// edit is irreversible.
 		$this->assertSame( 1, $steps[0]['tier'] ?? null, 'pages/update-draft is tier 1 in the pack map' );
 		$this->assertSame( 2, $steps[1]['tier'] ?? null, 'the highest tier among a step\'s verbs wins' );
+	}
+
+	// ------------------------------------------------------------------
+	// (m) 0.3 quality fix 1: a plan creating a page must also name a way to
+	// get an image, caught at PLAN time (live run: page_needs_image then
+	// not_in_plan, twice, burning the whole max_plans budget).
+	// ------------------------------------------------------------------
+
+	public function test_a_plan_that_creates_a_page_with_no_media_verbs_is_refused(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Create the page',
+						'verbs' => array( 'pages/create-draft' ),
+					),
+				),
+			)
+		);
+		$this->gateway->script[] = self::planTurn( 'call_p2', self::validPagesPlanArgsWithImage() );
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'page_needs_image', $this->planErrorCode( $result ) );
+		$message = $this->planErrorMessage( $result );
+		$this->assertIsString( $message );
+		$this->assertStringContainsString( 'pages/media-search', $message );
+		$this->assertStringContainsString( 'pages/media-generate', $message );
+
+		// Not counted against max_plans: the retry that DOES name the media
+		// verbs parks normally, as the FIRST plan step.
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+		$this->assertCount( 1, $this->planSteps( $run_id ), 'the refused proposal left no Plan step behind' );
+	}
+
+	public function test_a_plan_that_creates_a_page_with_search_and_generate_is_accepted(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn( 'call_p', self::validPagesPlanArgsWithImage() );
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+		$this->assertCount( 1, $this->planSteps( $run_id ) );
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 quality fix: images budget 0 withholds media-generate from the
+	// run's known verbs, its plan-time nudges, and the tool declaration.
+	// ------------------------------------------------------------------
+
+	public function test_propose_plan_declaration_omits_media_generate_when_images_budget_is_zero(): void {
+		$declaration = PlanTools::proposePlanDeclaration( array( 'pages/media-search', 'pages/media-stock-import' ) );
+		$schema      = $declaration instanceof FunctionDeclaration ? $declaration->getParameters() : $declaration['inputSchema'];
+		$text_desc   = (string) ( $schema['properties']['steps']['items']['properties']['text']['description'] ?? '' );
+
+		$this->assertStringNotContainsStringIgnoringCase( 'media-generate', $text_desc );
+		$this->assertStringNotContainsStringIgnoringCase( 'generate-image', $text_desc );
+	}
+
+	public function test_propose_plan_declaration_mentions_media_generate_when_available(): void {
+		$declaration = PlanTools::proposePlanDeclaration( array( 'pages/media-search', 'pages/media-generate' ) );
+		$schema      = $declaration instanceof FunctionDeclaration ? $declaration->getParameters() : $declaration['inputSchema'];
+		$text_desc   = (string) ( $schema['properties']['steps']['items']['properties']['text']['description'] ?? '' );
+
+		$this->assertStringContainsString( 'media-generate', $text_desc );
+	}
+
+	public function test_a_page_plan_naming_media_generate_is_unknown_verb_when_images_budget_is_zero(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRunWithBudget( array( Budget::IMAGES => 0 ) );
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Create the page and add an image',
+						'verbs' => array( 'pages/create-draft', 'pages/media-search', 'pages/media-generate' ),
+					),
+				),
+			)
+		);
+		$this->gateway->script[] = self::textTurn( 'Ok.' );
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'unknown_verb', $this->planErrorCode( $result ), 'a media-generate verb is not "known" once the images budget is 0' );
+	}
+
+	public function test_a_page_plan_with_search_and_stock_import_is_accepted_when_images_budget_is_zero(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRunWithBudget( array( Budget::IMAGES => 0 ) );
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Create the page and add a stock image',
+						'verbs' => array( 'pages/create-draft', 'pages/media-search', 'pages/media-stock-import' ),
+					),
+				),
+			)
+		);
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'], 'media-stock-import must still satisfy the image-getting check at budget 0' );
+	}
+
+	public function test_a_plan_that_creates_a_page_with_search_and_upload_is_also_accepted(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Create the page and add an uploaded image',
+						'verbs' => array( 'pages/create-draft', 'pages/media-search', 'pages/media-upload' ),
+					),
+				),
+			)
+		);
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+	}
+
+	/** A plan that never creates a page is unaffected (no page-create verb at all). */
+	public function test_a_plan_with_no_page_create_verb_is_unaffected_by_the_image_check(): void {
+		$this->seedPagesAbilities();
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Edit the draft',
+				'steps' => array(
+					array(
+						'text'  => 'Edit it',
+						'verbs' => array( 'pages/update-draft' ),
+					),
+				),
+			)
+		);
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+	}
+
+	/** `senroflux_require_page_image` off disables the plan-time check too. */
+	public function test_the_page_image_filter_off_disables_the_plan_time_check(): void {
+		$this->seedPagesAbilities();
+		add_filter( 'senroflux_require_page_image', static fn () => false );
+		$run_id                  = $this->createPagesRun();
+		$this->gateway->script[] = self::planTurn(
+			'call_p',
+			array(
+				'goal'  => 'Draft the pricing page',
+				'steps' => array(
+					array(
+						'text'  => 'Create the page',
+						'verbs' => array( 'pages/create-draft' ),
+					),
+				),
+			)
+		);
+
+		$result = $this->packRunner()->tick( $run_id, 0, null );
+		remove_all_filters( 'senroflux_require_page_image' );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+	}
+
+	/** @return array<string,mixed> */
+	private static function validPagesPlanArgsWithImage(): array {
+		return array(
+			'goal'  => 'Draft the pricing page',
+			'steps' => array(
+				array(
+					'text'  => 'Create the page and add a searched or generated image',
+					'verbs' => array( 'pages/create-draft', 'pages/media-search', 'pages/media-generate' ),
+				),
+			),
+		);
+	}
+
+	/** The first tool_result error message among a tick's new steps. */
+	private function planErrorMessage( array $result ): ?string {
+		foreach ( $result['new_steps'] as $step ) {
+			$message = $step['message']['parts'][0]['functionResponse']['response']['message'] ?? null;
+			if ( is_string( $message ) ) {
+				return $message;
+			}
+		}
+
+		return null;
 	}
 
 	public function test_a_run_without_a_pack_keeps_ability_names_as_verbs(): void {

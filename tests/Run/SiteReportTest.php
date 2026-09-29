@@ -31,6 +31,7 @@ use Specflux\SenroFlux\Run\WpdbRunStore;
 use Specflux\SenroFlux\Tools\ToolExecutor;
 use Specflux\SenroFlux\Tools\VerbTier;
 use WordPress\AiClient\Messages\DTO\MessagePart;
+use WordPress\AiClient\Messages\Enums\MessagePartChannelEnum;
 use WordPress\AiClient\Messages\DTO\ModelMessage;
 use WordPress\AiClient\Messages\DTO\UserMessage;
 use WordPress\AiClient\Tools\DTO\FunctionCall;
@@ -105,7 +106,9 @@ final class SiteReportTest extends TestCase {
 			null,
 			null,
 			fn ( $run, string $verb ) => $this->pack->objectIdPrefix( $verb ),
-			fn ( $run, string $verb, array $args, array $output ) => $this->pack->objectIdForWrite( $verb, $args, $output )
+			fn ( $run, string $verb, array $args, array $output ) => $this->pack->objectIdForWrite( $verb, $args, $output ),
+			null,
+			fn ( $run, string $verb, array $args ) => $this->pack->objectIdForRead( $verb, $args )
 		);
 	}
 
@@ -257,5 +260,116 @@ final class SiteReportTest extends TestCase {
 		$this->assertNotSame( 'unknown', $row['object_type'] ?? null, 'defect 2: the row must resolve, not fall back to unknown' );
 		$this->assertSame( 'navigation', $row['object_type'] ?? null );
 		$this->assertNotSame( '', $row['title'] ?? '' );
+	}
+
+	// ------------------------------------------------------------------
+	// A no-argument re-read verifies the singleton its write opened.
+	// ------------------------------------------------------------------
+
+	public function test_re_reading_the_navigation_after_writing_it_verifies_it_without_a_nudge(): void {
+		$nav_id = $this->insertNav( '<!-- wp:navigation-link {"label":"Old","url":"https://example.test/old"} /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$run_id = $this->createRun( array( 'site/update-navigation' ) );
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Reading, then updating the navigation.' ),
+			new MessagePart( new FunctionCall( 'call_read', 'wpab__senroflux__read-navigation', array() ) ),
+			new MessagePart(
+				new FunctionCall(
+					'call_update',
+					'wpab__senroflux__update-navigation',
+					array(
+						'items' => array(
+							array(
+								'label' => 'New',
+								'url'   => 'https://example.test/new',
+								'order' => 0,
+							),
+						),
+					)
+				)
+			)
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Checking the result.' ),
+			new MessagePart( new FunctionCall( 'call_reread', 'wpab__senroflux__read-navigation', array() ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame(
+			'completed',
+			$result['run']['status'] ?? null,
+			'a re-read after the write must count as verification — no verify nudge'
+		);
+
+		$changes = $result['ui']['report']['changes'] ?? array();
+		$this->assertCount( 1, $changes );
+		$this->assertTrue( $changes[0]['verified'] ?? null );
+	}
+
+	// ------------------------------------------------------------------
+	// Resent history: old reasoning and old long arguments are trimmed.
+	// ------------------------------------------------------------------
+
+	public function test_the_resent_history_drops_old_reasoning_and_shortens_old_long_arguments(): void {
+		$nav_id = $this->insertNav( '<!-- wp:navigation-link {"label":"Old","url":"https://example.test/old"} /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$run_id    = $this->createRun( array( 'site/update-navigation' ) );
+		$long_url  = 'https://example.test/' . str_repeat( 'a', 600 );
+		$thought   = static fn ( string $sig ): MessagePart => new MessagePart( '', MessagePartChannelEnum::thought(), $sig );
+		$read_call = static fn ( string $id ): MessagePart => new MessagePart( new FunctionCall( $id, 'wpab__senroflux__read-navigation', array() ) );
+
+		$this->gateway->script[] = self::turn(
+			$thought( 'sig-1' ),
+			$read_call( 'call_read' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_update',
+					'wpab__senroflux__update-navigation',
+					array(
+						'items' => array(
+							array(
+								'label' => 'New',
+								'url'   => $long_url,
+								'order' => 0,
+							),
+						),
+					)
+				)
+			)
+		);
+		$this->gateway->script[] = self::turn( $thought( 'sig-2' ), $read_call( 'call_reread' ) );
+		$this->gateway->script[] = self::turn( $thought( 'sig-3' ), $read_call( 'call_reread_2' ) );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertCount( 4, $this->gateway->histories );
+		$models = array_values(
+			array_filter(
+				array_map( static fn ( $message ): array => $message->toArray(), $this->gateway->histories[3] ),
+				static fn ( array $message ): bool => 'model' === ( $message['role'] ?? '' )
+			)
+		);
+		$this->assertCount( 3, $models );
+
+		$signatures = static fn ( array $message ): array => array_values( array_filter( array_map( static fn ( array $part ) => $part['thoughtSignature'] ?? null, $message['parts'] ) ) );
+		$this->assertSame( array(), $signatures( $models[0] ), 'an old turn\'s reasoning is not resent' );
+		$this->assertSame( array(), $signatures( $models[1] ) );
+		$this->assertSame( array( 'sig-3' ), $signatures( $models[2] ), 'the latest turn keeps its reasoning' );
+
+		$first_json = (string) wp_json_encode( $models[0] );
+		$this->assertStringNotContainsString( str_repeat( 'a', 600 ), $first_json, 'a long argument three turns back is shortened' );
+		$this->assertStringContainsString( 'characters left out of the history', $first_json );
+		$this->assertStringContainsString( 'call_update', $first_json, 'the call itself, and its id, stay in the history' );
+
+		$stored = (string) wp_json_encode( array_map( static fn ( $step ) => $step->messageArray, $this->store->getSteps( $run_id ) ) );
+		$this->assertStringContainsString( 'sig-1', $stored, 'the stored steps are untouched' );
+		$this->assertStringContainsString( str_repeat( 'a', 600 ), $stored );
 	}
 }

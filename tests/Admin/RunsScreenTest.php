@@ -15,6 +15,7 @@ use Specflux\SenroFlux\Admin\RunsScreen;
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Approval\ApprovalBridge;
 use Specflux\SenroFlux\Http\ConsumerPolicy;
+use Specflux\SenroFlux\Model\ModelChoice;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Runner;
@@ -35,6 +36,7 @@ final class RunsScreenTest extends TestCase {
 		$GLOBALS['senroflux_test_current_user_id'] = 1;
 		$GLOBALS['senroflux_test_actions']         = array();
 		$GLOBALS['senroflux_test_filters']         = array();
+		$GLOBALS['senroflux_test_localized']       = array();
 		unset( $GLOBALS['senroflux_test_redirect'] );
 		unset( $_POST );
 		remove_all_filters( 'senroflux_runs_capability' );
@@ -92,7 +94,7 @@ final class RunsScreenTest extends TestCase {
 			}
 
 			/** @param list<string>|null $skills_disable Ignored by the double. */
-			public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): true|WP_Error {
+			public function preflight( int $user_id, string $consumer = '', string $goal = '', ?array $skills_disable = null ): bool|WP_Error {
 				unset( $user_id, $consumer, $goal, $skills_disable );
 
 				return true === $this->preflightResult ? true : $this->preflightResult;
@@ -152,6 +154,37 @@ final class RunsScreenTest extends TestCase {
 		$this->assertStringContainsString( '<div id="senroflux-runs-root">', $html );
 		$this->assertStringContainsString( '<noscript>', $html );
 		$this->assertStringNotContainsString( 'name="goal"', $html, '0.2\'s server-rendered new-run form is retired' );
+	}
+
+	/**
+	 * The model picker's choices are the screen's job to hand the React
+	 * app, not the picker's own to fetch — `assets()` must localize whatever
+	 * {@see ModelChoice::availableChoices()} reports right now under
+	 * `modelChoices`, verbatim, so a config-driven test never has to fake the
+	 * AI Client registry itself.
+	 */
+	public function test_assets_localizes_the_model_choices(): void {
+		$fixture = array(
+			'openai' => array(
+				'name'   => 'OpenAI',
+				'models' => array(
+					array(
+						'id'   => 'gpt-5',
+						'name' => 'GPT-5',
+					),
+				),
+			),
+		);
+		ModelChoice::setAvailableChoicesProbe( $fixture );
+
+		try {
+			( new RunsScreen() )->assets( 'toplevel_page_senroflux-runs' );
+		} finally {
+			ModelChoice::setAvailableChoicesProbe( null );
+		}
+
+		$this->assertArrayHasKey( 'senrofluxRunsConfig', $GLOBALS['senroflux_test_localized'] );
+		$this->assertSame( $fixture, $GLOBALS['senroflux_test_localized']['senrofluxRunsConfig']['modelChoices'] );
 	}
 
 	// ------------------------------------------------------------------
@@ -384,13 +417,24 @@ final class RunsScreenTest extends TestCase {
 		$this->assertArrayNotHasKey( 'senroflux-admin', $screen->registerAdminConsumer( array() ) );
 	}
 
-	public function test_the_admin_consumer_carries_the_pack_allow_list_and_the_default_ceiling(): void {
+	public function test_the_admin_consumer_carries_the_pack_allow_list_and_no_budget_cap(): void {
 		$this->registerFakePack( true );
 
 		$entry = ( new RunsScreen() )->registerAdminConsumer( array() )['senroflux-admin'];
 
 		$this->assertSame( array( 'senroflux/read-content' ), $entry['allow'] );
-		$this->assertSame( Budget::defaults(), $entry['budget'] );
+		$this->assertArrayNotHasKey( 'budget', $entry );
+	}
+
+	public function test_a_packs_own_default_budget_is_the_runs_screen_ceiling(): void {
+		$this->registerFakePack( true );
+		add_filter( ConsumerPolicy::FILTER, array( new RunsScreen(), 'registerAdminConsumer' ) );
+
+		$policy = ConsumerPolicy::resolve( 'senroflux-admin', array(), array( Budget::MAX_TOKENS => 1000000 ) );
+		remove_all_filters( ConsumerPolicy::FILTER );
+
+		$this->assertIsArray( $policy );
+		$this->assertSame( 1000000, $policy['budget'][ Budget::MAX_TOKENS ] );
 	}
 
 	public function test_handle_new_run_is_refused_when_the_admin_consumer_is_not_registered(): void {
@@ -445,6 +489,112 @@ final class RunsScreenTest extends TestCase {
 		);
 		$this->assertEmpty(
 			array_filter( $examples, static fn ( string $e ): bool => str_contains( $e, 'widgets' ) )
+		);
+	}
+
+	/**
+	 * Runs-pack fix: `senrofluxRunsConfig.packs` (what the message box's pack
+	 * picker offers) is exactly the same preflight-passing set `exampleGoals()`
+	 * already names — a pack the viewer's preflight refuses must never be
+	 * offered as something they can start a run with.
+	 */
+	public function test_runnable_packs_only_name_packs_whose_preflight_passes(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+		$this->registerFakePack(
+			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
+			'widgets'
+		);
+
+		$screen = new class() extends RunsScreen {
+			/** @return list<array{name:string,label:string}> */
+			public function exposeRunnablePacks(): array {
+				return $this->runnablePacks();
+			}
+		};
+
+		$this->assertSame(
+			array(
+				array(
+					'name'  => 'pages',
+					'label' => 'pages',
+				),
+			),
+			$screen->exposeRunnablePacks()
+		);
+	}
+
+	/**
+	 * Runs-pack fix: `senrofluxRunsConfig.unavailablePacks` names every pack
+	 * whose preflight refuses this viewer, carrying that WP_Error's own
+	 * message as `reason` — so a viewer who can run nothing still learns why.
+	 */
+	public function test_unavailable_packs_names_every_failing_pack_with_its_preflight_reason(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack( true );
+		$this->registerFakePack(
+			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
+			'widgets'
+		);
+
+		$screen = new class() extends RunsScreen {
+			/** @return list<array{name:string,reason:string}> */
+			public function exposeUnavailablePacks(): array {
+				return $this->unavailablePacks();
+			}
+		};
+
+		$this->assertSame(
+			array(
+				array(
+					'name'   => 'widgets',
+					'reason' => 'Bind `user:1` to the widgets pack.',
+				),
+			),
+			$screen->exposeUnavailablePacks()
+		);
+	}
+
+	/** The zero-runnable case: every registered pack shows up as unavailable, none as runnable. */
+	public function test_unavailable_packs_names_every_pack_when_none_are_runnable(): void {
+		Plugin::set_dependency_probe( true );
+		$this->seedRunnerGraph();
+		$this->registerFakePack(
+			new WP_Error( 'skills_too_large', 'The run\'s skills exceed the instruction ceiling.', array( 'status' => 400 ) ),
+			'pages'
+		);
+		$this->registerFakePack(
+			new WP_Error( 'pack_unbound', 'Bind `user:1` to the widgets pack.', array( 'status' => 400 ) ),
+			'widgets'
+		);
+
+		$screen = new class() extends RunsScreen {
+			/** @return list<array{name:string,label:string}> */
+			public function exposeRunnablePacks(): array {
+				return $this->runnablePacks();
+			}
+
+			/** @return list<array{name:string,reason:string}> */
+			public function exposeUnavailablePacks(): array {
+				return $this->unavailablePacks();
+			}
+		};
+
+		$this->assertSame( array(), $screen->exposeRunnablePacks() );
+		$this->assertSame(
+			array(
+				array(
+					'name'   => 'pages',
+					'reason' => 'The run\'s skills exceed the instruction ceiling.',
+				),
+				array(
+					'name'   => 'widgets',
+					'reason' => 'Bind `user:1` to the widgets pack.',
+				),
+			),
+			$screen->exposeUnavailablePacks()
 		);
 	}
 
@@ -801,7 +951,7 @@ final class RunsScreenTest extends TestCase {
 			new WpdbRunStore( $db ),
 			new ToolExecutor(),
 			new class() implements \Specflux\SenroFlux\Model\ModelGatewayInterface {
-				public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): \Specflux\SenroFlux\Model\ModelTurn|\WP_Error {
+				public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools, ?array $model_preference = null ): \Specflux\SenroFlux\Model\ModelTurn|\WP_Error {
 					return new WP_Error( 'unused', 'no model calls on this screen' );
 				}
 			},

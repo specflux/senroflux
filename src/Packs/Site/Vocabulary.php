@@ -89,7 +89,7 @@ HTML
 				),
 				'stated' => array(
 					'Card title: the linked page\'s own title, at most 6 words.',
-					'Card body: one sentence on what that page covers, at most 18 words.',
+					'Card body: what that page covers, up to 40 words.',
 					'Card button: verb-first, at most 4 words, links to exactly one skeleton page.',
 					'A page-links section appears at most once per page.',
 				),

@@ -51,6 +51,14 @@ final class PlanTools {
 	public const MAX_STEP_TEXT_CHARS = 200;
 	public const MAX_ASSUMPTIONS     = 10;
 
+	/**
+	 * The character caps above are what the model is told (schema maxLength,
+	 * refusals); enforcement sits this far above them. A model cannot count
+	 * characters, and live runs resubmitted near misses (207, 203, 203 against
+	 * 200) for a full turn each.
+	 */
+	public const LENGTH_TOLERANCE_PERCENT = 25;
+
 	/** S7 invalid-payload code (a tool_result error, never an HTTP error). */
 	public const ERROR_INVALID_PLAN = 'invalid_plan';
 
@@ -69,6 +77,59 @@ final class PlanTools {
 	 * this code and still counts as a tool call.
 	 */
 	public const ERROR_PLANS_EXHAUSTED = 'plans_exhausted';
+
+	/**
+	 * 0.3 quality fix (live run 2026-09-27, scenario-2-1): a plan that creates a
+	 * page but names no way to get an image ran the SAME failure loop
+	 * `ERROR_UNKNOWN_VERB` exists to prevent — the page write was refused
+	 * `page_needs_image` (see {@see \Specflux\SenroFlux\Packs\Content\Abilities::executeCreatePost()}),
+	 * the follow-up `generate-image` call was then refused `not_in_plan`
+	 * (its verb was never in the accepted plan), and the run burned its
+	 * max_plans re-planning around a mistake the FENCE could see up front.
+	 * Deliberately reuses the ability-layer's own `page_needs_image` code —
+	 * one vocabulary for "this page write has no image", whichever layer
+	 * catches it first.
+	 */
+	public const ERROR_PAGE_NEEDS_IMAGE = 'page_needs_image';
+
+	/**
+	 * PACK VERBS, not ability ids (see {@see \Specflux\SenroFlux\Packs\Pack}'s
+	 * isolation rule — this class may not depend on src/Packs, so the handful
+	 * of verb strings the image check needs are duplicated here as bare
+	 * strings, sourced from PagesPack::verbMap()/SitePack::verbMap()).
+	 *
+	 * Posts pack's own `posts/create-draft` is deliberately absent: a POST's
+	 * image rule is enforced on its own terms elsewhere (see the "never
+	 * enforced on a post" note in `executeCreatePost()`) and was never part of
+	 * this defect.
+	 */
+	private const PAGE_CREATE_VERBS  = array( 'pages/create-draft', 'site/create-draft' );
+	private const MEDIA_SEARCH_VERBS = array( 'pages/media-search', 'site/media-search' );
+	/**
+	 * Either an AI-generated image or an uploaded one counts as "a way to get
+	 * an image" — requiring generate specifically would refuse an otherwise
+	 * complete plan that searches, comes up empty, and uploads instead.
+	 */
+	private const MEDIA_ACQUIRE_VERBS = array( 'pages/media-generate', 'site/media-generate', 'pages/media-upload', 'site/media-upload', 'pages/media-stock-import', 'site/media-stock-import' );
+
+	/**
+	 * The verbs an accepted plan covers: its own, plus `<pack>/media-stock-import`
+	 * wherever it lists `<pack>/media-generate` — the stock photo is what a
+	 * run falls back to once the image budget is spent, so a plan that may
+	 * generate an image may import one instead.
+	 *
+	 * @param list<string> $verbs The plan's own verbs.
+	 * @return list<string>
+	 */
+	public static function coveredVerbs( array $verbs ): array {
+		foreach ( $verbs as $verb ) {
+			if ( str_ends_with( $verb, '/media-generate' ) ) {
+				$verbs[] = substr( $verb, 0, -strlen( 'media-generate' ) ) . 'media-stock-import';
+			}
+		}
+
+		return array_values( array_unique( $verbs ) );
+	}
 
 	/**
 	 * The function name exposed to the model (no `wpab__` prefix).
@@ -92,15 +153,28 @@ final class PlanTools {
 	 * returns an empty map then — the Runner passes whatever it yields into the
 	 * registry handed to the model.
 	 *
-	 * @param int $remaining_plans Live count of remaining plans.
+	 * @param int                $remaining_plans Live count of remaining plans.
+	 * @param list<string>|null  $known_verbs     0.3 quality fix (instruction
+	 *                                            ceiling): the run's OWN verb
+	 *                                            list, spelled out in the
+	 *                                            declaration itself instead of
+	 *                                            a pack skill — the same list
+	 *                                            {@see \Specflux\SenroFlux\Run\Runner::knownVerbs()}
+	 *                                            already resolves for
+	 *                                            `validateProposePlan()`'s
+	 *                                            `unknown_verb` check, so this
+	 *                                            can never drift from what the
+	 *                                            fence actually accepts. Null
+	 *                                            omits the list (a direct-allow
+	 *                                            run with no pack).
 	 * @return array<string, FunctionDeclaration|array<string,mixed>>
 	 */
-	public static function declarations( int $remaining_plans ): array {
+	public static function declarations( int $remaining_plans, ?array $known_verbs = null ): array {
 		if ( $remaining_plans <= 0 ) {
 			return array();
 		}
 
-		return array( self::TOOL_NAME => self::proposePlanDeclaration() );
+		return array( self::TOOL_NAME => self::proposePlanDeclaration( $known_verbs ) );
 	}
 
 	/**
@@ -113,9 +187,36 @@ final class PlanTools {
 	 * present we build the real DTO; otherwise we hand back the array shape so
 	 * SDK-less contexts (tests) still see the same contract.
 	 *
+	 * @param list<string>|null $known_verbs 0.3 quality fix (instruction ceiling):
+	 *                                       see {@see declarations()}.
 	 * @return FunctionDeclaration|array<string,mixed>
 	 */
-	public static function proposePlanDeclaration(): FunctionDeclaration|array {
+	public static function proposePlanDeclaration( ?array $known_verbs = null ): FunctionDeclaration|array {
+		$verbs_description = __( 'The Agent Safety verbs this step uses.', 'senroflux' );
+		if ( null !== $known_verbs ) {
+			$verbs_description .= ' ' . sprintf(
+				/* translators: %s is a comma-separated list of verb names. */
+				__( 'Spell each one exactly as one of: %s. Any other word is refused as unknown_verb.', 'senroflux' ),
+				implode( ', ', $known_verbs )
+			);
+		}
+
+		// 0.3 quality fix (images budget 0): a media-generate verb is only
+		// ever "known" (see Runner::knownVerbs()) when the run's images
+		// budget is above zero, so its absence from a non-null list IS the
+		// budget-zero signal — the step description must not steer the model
+		// toward a verb the tool surface has already withheld, or it repeats
+		// the observed live-run loop (media-search -> generate-image refused
+		// budget_exhausted -> re-plan -> stock-image-search).
+		$media_generate_available = null === $known_verbs || array() !== array_filter(
+			$known_verbs,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-generate' )
+		);
+
+		$step_text_description = $media_generate_available
+			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
+			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' );
+
 		$schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
@@ -133,12 +234,26 @@ final class PlanTools {
 							'text'  => array(
 								'type'        => 'string',
 								'maxLength'   => self::MAX_STEP_TEXT_CHARS,
-								'description' => __( 'One ordered step of the plan.', 'senroflux' ),
+								// 0.3 quality fix 4 (page brief): a step that
+								// writes a page must set out the brief the
+								// write tools expect it to follow — see their
+								// own descriptions.
+								//
+								// 0.3 quality fix (live run: media verbs kept
+								// getting left off a step, forcing not_in_plan
+								// refusals on generate-image/update-alt, a
+								// re-plan to fix it, then a SECOND re-plan
+								// when the fix was incomplete — burning
+								// max_plans before the page budget did any
+								// real work). Naming every media verb the
+								// step needs, up front, is the one edit that
+								// avoids the whole retry loop.
+								'description' => $step_text_description,
 							),
 							'verbs' => array(
 								'type'        => 'array',
 								'items'       => array( 'type' => 'string' ),
-								'description' => __( 'The Agent Safety verbs this step uses.', 'senroflux' ),
+								'description' => $verbs_description,
 							),
 						),
 						'required'             => array( 'text', 'verbs' ),
@@ -223,11 +338,12 @@ final class PlanTools {
 		if ( ! is_string( $goal ) || '' === trim( $goal ) ) {
 			return $invalid( __( 'a non-empty "goal" is required.', 'senroflux' ) );
 		}
-		if ( mb_strlen( $goal ) > self::MAX_GOAL_CHARS ) {
+		if ( self::overCap( $goal, self::MAX_GOAL_CHARS ) ) {
 			return $invalid(
 				sprintf(
-					/* translators: %d is the character cap. */
-					__( '"goal" may be at most %d characters.', 'senroflux' ),
+					/* translators: %1$d is the actual character count, %2$d is the character cap. */
+					__( '"goal" is %1$d characters; the limit is %2$d. Shorten it and propose the plan again.', 'senroflux' ),
+					mb_strlen( $goal ),
 					self::MAX_GOAL_CHARS
 				)
 			);
@@ -240,7 +356,7 @@ final class PlanTools {
 		}
 
 		$normalized_steps = array();
-		foreach ( $steps as $step ) {
+		foreach ( $steps as $step_index => $step ) {
 			if ( ! is_array( $step ) ) {
 				return $invalid( __( 'every "steps" entry must be an object.', 'senroflux' ) );
 			}
@@ -249,11 +365,13 @@ final class PlanTools {
 			if ( ! is_string( $text ) || '' === trim( $text ) ) {
 				return $invalid( __( 'every step needs a non-empty "text".', 'senroflux' ) );
 			}
-			if ( mb_strlen( $text ) > self::MAX_STEP_TEXT_CHARS ) {
+			if ( self::overCap( $text, self::MAX_STEP_TEXT_CHARS ) ) {
 				return $invalid(
 					sprintf(
-						/* translators: %d is the character cap. */
-						__( 'a step "text" may be at most %d characters.', 'senroflux' ),
+						/* translators: %1$d is the 1-based step number, %2$d is the actual character count, %3$d is the character cap. */
+						__( 'step %1$d "text" is %2$d characters; the limit is %3$d. Shorten it and propose the plan again.', 'senroflux' ),
+						$step_index + 1,
+						mb_strlen( $text ),
 						self::MAX_STEP_TEXT_CHARS
 					)
 				);
@@ -349,11 +467,118 @@ final class PlanTools {
 			return $invalid( __( 'no questions remain, so the plan must state its assumptions.', 'senroflux' ) );
 		}
 
+		$image_error = self::missingImageStepError( $normalized_steps, $known_verbs );
+		if ( null !== $image_error ) {
+			return $image_error;
+		}
+
+		// S7 quality fix (2026-09-28): a pack-contributed plan-time check, kept
+		// out of this file the same way `missingImageStepError()`'s own
+		// PAGE_CREATE_VERBS duplicates pack verb strings rather than reaching
+		// into `src/Packs` (this class's own isolation rule, see the class
+		// docblock) — a hook, not a hardcoded pack name, so ANY pack may
+		// refuse a plan through it. Each registered callback is passed the
+		// PRIOR error (null the first time) and must pass an existing WP_Error
+		// through unmodified; {@see \Specflux\SenroFlux\Packs\Site\Navigation::filterPlanError()}
+		// is the site pack's own contribution (the stock-Sample-Page-left-in-nav
+		// check), a no-op for every other pack's plan.
+		$pack_error = apply_filters( 'senroflux_plan_error', null, $normalized_steps, $known_verbs, $run_id );
+		if ( $pack_error instanceof WP_Error ) {
+			return $pack_error;
+		}
+
 		return array(
 			'goal'        => $goal,
 			'steps'       => $normalized_steps,
 			'assumptions' => $normalized_assumptions,
 		);
+	}
+
+	/**
+	 * 0.3 quality fix (S7 plan-time image check): refuse a plan that creates a
+	 * page (a `PAGE_CREATE_VERBS` verb on any step) unless SOME step also lists
+	 * a media-search verb AND a media-generate/upload verb. Create-only: an
+	 * `update-post` step cannot be checked here — the plan names a VERB, never
+	 * the `content`/`no_image_reason` arguments the actual call will carry, so
+	 * whether that particular update needs an image is undecidable at plan
+	 * time (see {@see \Specflux\SenroFlux\Packs\Content\Abilities}'s own
+	 * per-call check for that half of the rule).
+	 *
+	 * `senroflux_require_page_image` off disables this too — same filter, same
+	 * meaning ("this site's runs don't need page images").
+	 *
+	 * @param list<array{text:string,verbs:list<string>,tier:int}> $steps       Normalized steps.
+	 * @param list<string>|null                                    $known_verbs The run's own verb vocabulary
+	 *                                                                          (narrows which verbs the
+	 *                                                                          message suggests); null lists
+	 *                                                                          every candidate verb.
+	 */
+	private static function missingImageStepError( array $steps, ?array $known_verbs ): ?WP_Error {
+		if ( ! apply_filters( 'senroflux_require_page_image', true ) ) {
+			return null;
+		}
+
+		$verbs        = array();
+		$creates_page = false;
+		foreach ( $steps as $step ) {
+			foreach ( $step['verbs'] as $verb ) {
+				$verbs[] = $verb;
+				if ( in_array( $verb, self::PAGE_CREATE_VERBS, true ) ) {
+					$creates_page = true;
+				}
+			}
+		}
+
+		if ( ! $creates_page ) {
+			return null;
+		}
+
+		$has_search  = array() !== array_intersect( self::MEDIA_SEARCH_VERBS, $verbs );
+		$has_acquire = array() !== array_intersect( self::MEDIA_ACQUIRE_VERBS, $verbs );
+		if ( $has_search && $has_acquire ) {
+			return null;
+		}
+
+		// Suggest only verbs this run can actually produce, so the fix the
+		// message names is never itself refused as unknown_verb.
+		$narrow = static fn ( array $candidates ): array => null !== $known_verbs
+			? array_values( array_intersect( $candidates, $known_verbs ) )
+			: $candidates;
+
+		$narrowed_acquire = $narrow( self::MEDIA_ACQUIRE_VERBS );
+
+		// 0.3 quality fix (images budget 0): when narrowing dropped every
+		// media-generate verb (the run's images budget is 0, see
+		// Runner::knownVerbs()), the message must not tell the model to add
+		// one anyway — that is the exact refused-then-re-plan loop this fix
+		// removes.
+		$has_generate_option = array() !== array_filter(
+			$narrowed_acquire,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-generate' )
+		);
+
+		$message = $has_generate_option
+			? sprintf(
+				/* translators: 1: media-search verb list, 2: media-generate/upload/stock-import verb list. */
+				__( 'This plan creates a page but no step lists a way to get an image. Add a media-search verb (%1$s) AND a media-generate, media-upload or media-stock-import verb (%2$s) to a step, spelled exactly as this pack\'s own verb list gives them, then propose the plan again.', 'senroflux' ),
+				implode( ', ', $narrow( self::MEDIA_SEARCH_VERBS ) ),
+				implode( ', ', $narrowed_acquire )
+			)
+			: sprintf(
+				/* translators: 1: media-search verb list, 2: media-upload/stock-import verb list. */
+				__( 'This plan creates a page but no step lists a way to get an image. Add a media-search verb (%1$s) AND a media-upload or media-stock-import verb (%2$s) to a step, spelled exactly as this pack\'s own verb list gives them, then propose the plan again.', 'senroflux' ),
+				implode( ', ', $narrow( self::MEDIA_SEARCH_VERBS ) ),
+				implode( ', ', $narrowed_acquire )
+			);
+
+		return new WP_Error( self::ERROR_PAGE_NEEDS_IMAGE, $message );
+	}
+
+	/**
+	 * Is `$text` past `$cap` plus {@see LENGTH_TOLERANCE_PERCENT}?
+	 */
+	public static function overCap( string $text, int $cap ): bool {
+		return mb_strlen( $text ) > intdiv( $cap * ( 100 + self::LENGTH_TOLERANCE_PERCENT ), 100 );
 	}
 
 	/**

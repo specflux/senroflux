@@ -232,4 +232,183 @@ final class NavigationTest extends TestCase {
 		$reread = $this->readAbility()->execute();
 		$this->assertSame( 'New link', $reread['items'][0]['label'] );
 	}
+
+	// ------------------------------------------------------------------
+	// S7 quality fix (2026-09-28): a site-pack plan that creates or
+	// publishes a page must not leave WordPress's stock "Sample Page"
+	// visible in the navigation. Live evidence (2026-09-28, scenario-1-1):
+	// a fresh Twenty Twenty-Five header resolves to a `core/page-list`
+	// fallback, which lists EVERY published page — including the stock
+	// Sample Page — and the model correctly left it alone per the pack's
+	// own (then-incomplete) guidance ("page_list already covers it").
+	// GOVERNED, via {@see Navigation::filterPlanError()} refusing the plan
+	// at propose-plan time — never a harness-side rewrite.
+	// ------------------------------------------------------------------
+
+	/**
+	 * @param list<string> $verbs One step's verbs.
+	 * @return list<array{text:string,verbs:list<string>,tier:int}>
+	 */
+	private function stepsWithVerbs( array $verbs ): array {
+		return array(
+			array(
+				'text'  => 'A plan step',
+				'verbs' => $verbs,
+				'tier'  => 0,
+			),
+		);
+	}
+
+	private const STOCK_SAMPLE_CONTENT = 'This is an example page. It\'s different from a blog post because it will stay in one place.';
+
+	/** Insert WordPress's own stock Sample Page, published. Returns its id. */
+	private function insertStockSamplePage(): int {
+		return wp_insert_post(
+			array(
+				'post_type'    => 'page',
+				'post_status'  => 'publish',
+				'post_title'   => 'Sample Page',
+				'post_name'    => 'sample-page',
+				'post_content' => self::STOCK_SAMPLE_CONTENT,
+			)
+		);
+	}
+
+	/** Insert an ordinary published page (never the sample page). */
+	private function insertRealPage( string $title ): int {
+		return wp_insert_post(
+			array(
+				'post_type'    => 'page',
+				'post_status'  => 'publish',
+				'post_title'   => $title,
+				'post_name'    => strtolower( str_replace( ' ', '-', $title ) ),
+				'post_content' => 'Real content for ' . $title . '.',
+			)
+		);
+	}
+
+	public function test_plan_check_refuses_a_page_creating_plan_when_page_list_would_show_the_sample_page(): void {
+		$this->insertStockSamplePage();
+		$this->insertRealPage( 'Home' );
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$error = Navigation::filterPlanError( null, $this->stepsWithVerbs( array( 'site/create-draft' ) ) );
+
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertSame( 'navigation_shows_sample_page', $error->get_error_code() );
+		$this->assertStringContainsString( 'Sample Page', $error->get_error_message() );
+		$this->assertStringContainsString( 'update-navigation', $error->get_error_message() );
+	}
+
+	public function test_plan_check_refuses_a_page_publishing_plan_when_an_explicit_link_shows_the_sample_page(): void {
+		$sample_id = $this->insertStockSamplePage();
+		$home_id   = $this->insertRealPage( 'Home' );
+
+		$nav_id = $this->insertNav(
+			'<!-- wp:navigation-link {"label":"Home","id":' . $home_id . ',"kind":"post-type","type":"page"} /-->'
+			. '<!-- wp:navigation-link {"label":"Sample Page","id":' . $sample_id . ',"kind":"post-type","type":"page"} /-->'
+		);
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$error = Navigation::filterPlanError( null, $this->stepsWithVerbs( array( 'site/publish' ) ) );
+
+		$this->assertInstanceOf( \WP_Error::class, $error );
+		$this->assertSame( 'navigation_shows_sample_page', $error->get_error_code() );
+	}
+
+	public function test_plan_check_accepts_a_plan_that_names_update_navigation(): void {
+		$this->insertStockSamplePage();
+		$this->insertRealPage( 'Home' );
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$steps = array_merge(
+			$this->stepsWithVerbs( array( 'site/create-draft' ) ),
+			$this->stepsWithVerbs( array( 'site/update-navigation' ) )
+		);
+
+		$this->assertNull( Navigation::filterPlanError( null, $steps ) );
+	}
+
+	public function test_plan_check_accepts_when_the_sample_page_was_removed_by_the_user(): void {
+		// No stock Sample Page exists at all (removed, or never installed).
+		$this->insertRealPage( 'Home' );
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$error = Navigation::filterPlanError( null, $this->stepsWithVerbs( array( 'site/create-draft' ) ) );
+
+		$this->assertNull( $error );
+	}
+
+	public function test_plan_check_accepts_when_a_page_actually_titled_sample_page_carries_real_content(): void {
+		// A user's OWN page happens to be named "Sample Page" but its
+		// content is not the WordPress stock text: never treated as it.
+		wp_insert_post(
+			array(
+				'post_type'    => 'page',
+				'post_status'  => 'publish',
+				'post_title'   => 'Sample Page',
+				'post_name'    => 'sample-page',
+				'post_content' => 'Our actual pricing samples live here.',
+			)
+		);
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$error = Navigation::filterPlanError( null, $this->stepsWithVerbs( array( 'site/create-draft' ) ) );
+
+		$this->assertNull( $error );
+	}
+
+	public function test_plan_check_leaves_non_site_pack_plans_unaffected(): void {
+		$this->insertStockSamplePage();
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		// 'pages/create-draft' is the PAGES pack's own verb, never the site
+		// pack's — this plan is not a site-pack plan and must be untouched.
+		$error = Navigation::filterPlanError( null, $this->stepsWithVerbs( array( 'pages/create-draft' ) ) );
+
+		$this->assertNull( $error );
+	}
+
+	public function test_plan_check_never_overrides_an_earlier_refusal(): void {
+		$this->insertStockSamplePage();
+
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$earlier_error = new \WP_Error( 'page_needs_image', 'Some earlier check already refused this plan.' );
+
+		$error = Navigation::filterPlanError( $earlier_error, $this->stepsWithVerbs( array( 'site/create-draft' ) ) );
+
+		$this->assertSame( $earlier_error, $error );
+	}
+
+	public function test_read_navigation_reports_the_stock_sample_page_id_as_a_hint(): void {
+		$sample_id = $this->insertStockSamplePage();
+		$nav_id    = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$result = $this->readAbility()->execute();
+
+		$this->assertSame( $sample_id, $result['stock_sample_page'] );
+	}
+
+	public function test_read_navigation_reports_null_stock_sample_page_when_there_is_none(): void {
+		$this->insertRealPage( 'Home' );
+		$nav_id = $this->insertNav( '<!-- wp:page-list /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+
+		$result = $this->readAbility()->execute();
+
+		$this->assertNull( $result['stock_sample_page'] );
+	}
 }

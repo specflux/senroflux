@@ -168,10 +168,10 @@ export default function App( { config } ) {
 	);
 
 	const handleStart = useCallback(
-		( goal ) => {
+		( goal, pack, model ) => {
 			setBusy( true );
 			setActionError( '' );
-			startRun( goal, ajaxConfig )
+			startRun( goal, ajaxConfig, pack, model )
 				.then( ( state ) => {
 					if ( ! aliveRef.current ) {
 						return;
@@ -300,6 +300,7 @@ export default function App( { config } ) {
 						steps={ runDetail.steps }
 						suggestions={ runDetail.suggestions }
 						canManageBrief={ Boolean( config.canManageSiteBrief ) }
+						modelChoices={ config.modelChoices || {} }
 						onResolvePark={ handleResolvePark }
 						onResolveSuggestion={ handleResolveSuggestion }
 						onCancel={ handleCancel }
@@ -323,7 +324,14 @@ export default function App( { config } ) {
 						onPickExample={ () => {} }
 					/>
 				) }
-				<MessageBox state={ boxState } onSend={ handleStart } initialText={ config.initialGoal || '' } />
+				<MessageBox
+					state={ boxState }
+					onSend={ handleStart }
+					initialText={ config.initialGoal || '' }
+					packs={ config.packs || [] }
+					unavailablePacks={ config.unavailablePacks || [] }
+					modelChoices={ config.modelChoices || {} }
+				/>
 			</main>
 		</div>
 	);
