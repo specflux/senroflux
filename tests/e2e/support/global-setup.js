@@ -63,7 +63,23 @@ async function loginAndSaveState( storageStatePath ) {
  *
  * @param {'built_in'|'agent_safety'} gateMode
  */
+/**
+ * S22: every leg runs with the newest WooCommerce RELEASE. `.wp-env.json`
+ * can't express that: `woocommerce.zip` is trunk (a beta), and
+ * `woocommerce.latest-stable.zip` installs under a directory named after the
+ * zip, not `woocommerce`. `wp plugin install` resolves wordpress.org's stable
+ * tag and installs under the right slug.
+ */
+function ensureWooCommerceInstalled() {
+	try {
+		wpCli( [ 'plugin', 'is-installed', 'woocommerce' ] );
+	} catch ( e ) {
+		wpCli( [ 'plugin', 'install', 'woocommerce' ] );
+	}
+}
+
 async function setupFor( gateMode, storageStatePath ) {
+	ensureWooCommerceInstalled();
 	for ( const slug of ALWAYS_ACTIVE_PLUGINS ) {
 		activatePlugin( slug );
 	}

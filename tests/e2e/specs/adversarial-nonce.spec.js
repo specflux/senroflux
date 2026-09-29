@@ -1,6 +1,6 @@
 // @ts-check
 const { test, expect } = require( '@playwright/test' );
-const { resetRuns, setScript, dbQuery, evalPhp } = require( '../support/wp-cli' );
+const { resetRuns, setScript, dbQuery } = require( '../support/wp-cli' );
 const { fullTour } = require( '../support/scenarios' );
 const {
 	gotoRuns,
@@ -109,32 +109,49 @@ test.describe( 'S22 adversarial: forged and replayed approval nonces', () => {
 		expect( after, 'a forged nonce must not move the run at all' ).toEqual( before );
 	} );
 
+	/**
+	 * The Runs screen resolves parks over admin-ajax `senroflux_tick` with the
+	 * `senroflux_run` nonce (window.senrofluxRunsConfig.nonce) and a `resume`
+	 * object — that's the real approval path, so both cases below attack it.
+	 * The nonce must come from the browser's own session: WordPress binds
+	 * nonces to the user's session token, so one minted over WP-CLI is never
+	 * valid for this session.
+	 */
+	function tickForm( runId, stepCount, nonce ) {
+		return {
+			action: 'senroflux_tick',
+			nonce,
+			run_id: runId,
+			step_count: String( stepCount ),
+			resume: JSON.stringify( { action: 'approve' } ),
+		};
+	}
+
+	test( 'a forged ajax nonce is refused and the run stays parked', async ( { page } ) => {
+		const { runId, stepCount } = await parkAtApproval( page );
+		const before = runSnapshot( runId );
+
+		const response = await page.request.post( '/wp-admin/admin-ajax.php', {
+			form: tickForm( runId, stepCount, 'deadbeef00' ),
+		} );
+
+		// check_ajax_referer() dies with "-1" and HTTP 403 on a bad nonce.
+		expect( response.status() ).toBe( 403 );
+		expect( ( await response.text() ).trim() ).toBe( '-1' );
+		expect( runSnapshot( runId ), 'a forged nonce must not move the run at all' ).toEqual( before );
+	} );
+
 	test( 'a replayed decision request (stale step_count) does not execute twice', async ( { page } ) => {
 		const { runId, stepCount } = await parkAtApproval( page );
 
-		const nonce = evalPhp( `echo wp_create_nonce( 'senroflux_approval_' . ${ Number( runId ) } );` );
-		expect( nonce ).toMatch( /^[a-f0-9]+$/ );
+		const nonce = await page.evaluate( () => window.senrofluxRunsConfig && window.senrofluxRunsConfig.nonce );
+		expect( nonce, 'the Runs screen must expose its session nonce' ).toMatch( /^[a-f0-9]+$/ );
+		const form = tickForm( runId, stepCount, nonce );
 
-		const decisionBody = {
-			action: 'senroflux_approval_decision',
-			run_id: runId,
-			step_count: String( stepCount ),
-			senroflux_approval_action: 'approve',
-			_wpnonce: nonce,
-		};
-
-		// First submission: the genuine decision. Expect a redirect (never a
-		// 403/die) and the run to have actually advanced.
-		const first = await page.request.post( '/wp-admin/admin-post.php', {
-			form: decisionBody,
-			maxRedirects: 0,
-		} );
-		expect( [ 301, 302, 303 ] ).toContain( first.status() );
-		const firstLocation = first.headers().location || '';
-		expect( firstLocation ).toContain( 'page=senroflux-runs' );
-		expect( firstLocation, 'the genuine decision must not itself carry an error code' ).not.toContain(
-			'senroflux_run_error'
-		);
+		// First submission: the genuine decision.
+		const first = await page.request.post( '/wp-admin/admin-ajax.php', { form } );
+		expect( first.status() ).toBe( 200 );
+		expect( ( await first.json() ).success, 'the genuine decision must succeed' ).toBe( true );
 
 		const afterFirst = runSnapshot( runId );
 		expect( afterFirst.status, 'the run must have left awaiting_approval' ).not.toBe( 'awaiting_approval' );
@@ -142,23 +159,16 @@ test.describe( 'S22 adversarial: forged and replayed approval nonces', () => {
 			stepCount
 		);
 
-		// Second submission: the EXACT same request — same nonce (still
-		// cryptographically valid), same now-stale step_count. This is the
-		// replay: the run has moved on, so the tick call must reject it as a
-		// conflict rather than resuming (and possibly re-executing) the same
-		// approval again.
-		const replay = await page.request.post( '/wp-admin/admin-post.php', {
-			form: decisionBody,
-			maxRedirects: 0,
-		} );
-		expect( [ 301, 302, 303 ] ).toContain( replay.status() );
-		const replayLocation = replay.headers().location || '';
-		expect( replayLocation, 'a replay must be refused as a conflict, not resumed' ).toContain(
-			'senroflux_run_error=senroflux_conflict'
-		);
+		// Second submission: the EXACT same request. The nonce is still valid
+		// (WordPress nonces aren't single-use), so the refusal must come from
+		// the runner's stale step_count guard.
+		const replay = await page.request.post( '/wp-admin/admin-ajax.php', { form } );
+		expect( replay.status() ).toBe( 409 );
+		const replayBody = await replay.json();
+		expect( replayBody.success ).toBe( false );
+		expect( replayBody.data.code, 'a replay must be refused as a conflict, not resumed' ).toBe( 'senroflux_conflict' );
 
-		const afterReplay = runSnapshot( runId );
-		expect( afterReplay, 'the replay must not change run state at all — no double execution' ).toEqual(
+		expect( runSnapshot( runId ), 'the replay must not change run state at all — no double execution' ).toEqual(
 			afterFirst
 		);
 	} );

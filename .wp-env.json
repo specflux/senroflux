@@ -11,9 +11,6 @@
 		"wp-content/mu-plugins/senroflux-e2e-fake-provider.php": "./tests/e2e/fake-provider/fake-provider.php",
 		"wp-content/mu-plugins/senroflux-e2e-pseudo-locale.php": "./tests/e2e/pseudo-locale/mu-senroflux-pseudo-locale.php"
 	},
-	"plugins": [
-		"https://downloads.wordpress.org/plugin/woocommerce.latest-stable.zip"
-	],
 	"config": {
 		"WP_DEBUG": true,
 		"WP_DEBUG_LOG": true,
