@@ -30,3 +30,5 @@ jest.config.js
 assets
 dist
 vendor
+# S22: the release build's own tooling — dev-only, never ships.
+bin

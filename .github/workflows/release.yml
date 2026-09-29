@@ -1,0 +1,107 @@
+name: Release
+
+# S22 release gating: a tag push v* — or a manual dispatch with a dry_run
+# input — re-runs every CI gate (via workflow_call of ci.yml) against a zip
+# built ONCE by bin/build-zip.sh, and refuses to build/attach a zip to a
+# release if any gate fails. Mirrors agent-safety's release.yml mechanics:
+# build zip -> re-run ci.yml against that exact zip -> release job gated on
+# both. Differences from agent-safety, both deliberate:
+#   - the GitHub Release this creates is a DRAFT (agent-safety's is not) —
+#     SenroFlux 1.0 wants a human look at release notes before they go
+#     public, not an auto-published release the moment a tag lands.
+#   - a sha256 checksum file is generated and attached alongside the zip.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run the full gate but never create a GitHub Release'
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build zip
+    outputs:
+      zip-name: ${{ steps.zip.outputs.name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert tag matches plugin header Version
+        # Only meaningful for a real tag push: a workflow_dispatch run has
+        # no tag to compare against (github.ref is whatever ref the owner
+        # dispatched on, not a version), so the assertion is skipped there.
+        # A dispatch's job is to prove the OTHER gates (suites, Plugin
+        # Check, e2e) on a planted failure; the tag/header match is
+        # re-proven for real at the actual tag push, which is the only
+        # event that can reach the release job below anyway.
+        if: github.event_name == 'push'
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          HEADER_VERSION=$(awk '/^[[:space:]]*\*[[:space:]]*Version:/ {print $NF; exit}' senroflux.php)
+          echo "tag=$TAG_VERSION header=$HEADER_VERSION"
+          if [ "$TAG_VERSION" != "$HEADER_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match plugin header Version $HEADER_VERSION — bump the header and re-tag."
+            exit 1
+          fi
+
+      - name: Build the zip (bin/build-zip.sh, the single allowlisted build)
+        run: bin/build-zip.sh
+
+      - name: Checksum the zip
+        id: zip
+        run: |
+          ZIP_PATH=$(find . -maxdepth 1 -name 'senroflux-*.zip' | head -1)
+          NAME=$(basename "$ZIP_PATH" .zip)
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$ZIP_PATH" > "${ZIP_PATH}.sha256"
+          else
+            shasum -a 256 "$ZIP_PATH" > "${ZIP_PATH}.sha256"
+          fi
+          echo "path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the zip + checksum artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.zip.outputs.name }}
+          path: |
+            ${{ steps.zip.outputs.path }}
+            ${{ steps.zip.outputs.path }}.sha256
+          if-no-files-found: error
+
+  ci:
+    needs: build
+    uses: ./.github/workflows/ci.yml
+    with:
+      zip-artifact: ${{ needs.build.outputs.zip-name }}
+
+  release:
+    needs: [build, ci]
+    # Belt-and-braces: this alone (event_name, not the dry_run input) is
+    # what keeps a workflow_dispatch from ever creating a Release, whatever
+    # dry_run is set to — only a tag push reaches this job's condition.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    name: Create GitHub Release (draft)
+    steps:
+      - name: Download the built zip + checksum
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.zip-name }}
+
+      - name: Create the GitHub release (draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: |
+            *.zip
+            *.zip.sha256
+          generate_release_notes: true

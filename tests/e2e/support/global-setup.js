@@ -17,8 +17,12 @@ const BASE_URL = process.env.SENROFLUX_E2E_BASE_URL || 'http://localhost:8895';
  * wp-env mounts these but leaves them inactive, so senroflux's activation
  * hook (which creates wp_senroflux_runs/steps) never runs and the first
  * spec dies deep inside an unrelated SQL error instead of at setup.
+ *
+ * S22: WooCommerce (`.wp-env.json`'s "plugins" entry, the newest wordpress.org
+ * release) is in this always-active list too — the hardening bar wants Woo
+ * on for every e2e leg, not a Woo-specific project/mode.
  */
-const ALWAYS_ACTIVE_PLUGINS = [ 'abilities-api', 'mcp-adapter', 'senroflux' ];
+const ALWAYS_ACTIVE_PLUGINS = [ 'abilities-api', 'mcp-adapter', 'woocommerce', 'senroflux' ];
 
 /** Fail setup itself, with a clear cause, instead of leaving it to a spec. */
 function assertEnvironmentReady() {

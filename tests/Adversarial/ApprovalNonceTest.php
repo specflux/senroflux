@@ -58,8 +58,11 @@ final class ApprovalNonceTest extends TestCase {
 			'no-ops that unconditionally return true in this suite\'s shared bootstrap ' .
 			'(tests/bootstrap.php, tests/stubs/http.php) — real nonce verification, ' .
 			'forged or genuine, is never actually performed under bare PHPUnit. ' .
-			'Requires either a real WordPress nonce implementation in the harness or ' .
-			'an integration-level test (e.g. wp-env) to exercise for real.'
+			'Closed at the integration level (S22) by ' .
+			'tests/e2e/specs/adversarial-nonce.spec.js ("a forged _wpnonce is refused ' .
+			'and the run stays parked"), against real WordPress on wp-env — still ' .
+			'incomplete here on purpose, since this harness has no seam through which ' .
+			'a real check_admin_referer() call could ever run.'
 		);
 	}
 
@@ -70,7 +73,13 @@ final class ApprovalNonceTest extends TestCase {
 			'bootstrap, so a nonce\'s one-time-use semantics (WordPress core\'s own ' .
 			'`_wp_nonce_tick` + option/user-meta bookkeeping) are not modelled at all ' .
 			'— there is nothing here that could distinguish a first use from a replay. ' .
-			'Requires an integration-level test (e.g. wp-env) against real WordPress.'
+			'Closed at the integration level (S22) by ' .
+			'tests/e2e/specs/adversarial-nonce.spec.js ("a replayed decision request ' .
+			'(stale step_count) does not execute twice") — that spec\'s replay case is ' .
+			'refused by Runner::tick()\'s step_count staleness check ' .
+			'(senroflux_conflict), not by nonce single-use semantics, since a WordPress ' .
+			'nonce stays valid for its whole ~24h window and is not one-time-use. Still ' .
+			'incomplete here for the same no-seam reason as the forged case.'
 		);
 	}
 }
