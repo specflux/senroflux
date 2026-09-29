@@ -136,7 +136,9 @@ final class SkillSet {
 		 * Filters the skill list a run will carry, allowing a consumer to add
 		 * skills (typically of source Consumer). Removing OR rewriting a
 		 * required harness skill is ignored below — they are undroppable and
-		 * re-stamped from the harness set.
+		 * re-stamped from the harness set. `@api` (S23): a third-party pack's
+		 * own skills come from {@see Pack::skills()}, not this filter — this
+		 * is the seam a CONSUMER (not a pack) uses to add skills of its own.
 		 *
 		 * @param list<Skill> $skills   The harness + pack skills so far.
 		 * @param Pack|null   $pack     The run's pack, or null for a direct-allow run.
@@ -211,6 +213,7 @@ final class SkillSet {
 	 * @return WP_Error|null Null when within ceiling, else skills_too_large.
 	 */
 	public static function ceilingError( array $skills ): ?WP_Error {
+		/** Filters the skills-body token ceiling. `@internal`. */
 		$max_tokens = (int) apply_filters( 'senroflux_skills_max_tokens', self::DEFAULT_MAX_TOKENS );
 
 		// S8 says CHARACTERS / 4, not bytes / 4: a body of accented or CJK text

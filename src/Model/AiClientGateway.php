@@ -108,7 +108,7 @@ final class AiClientGateway implements ModelGatewayInterface {
 		/**
 		 * Filters the per-request timeout (seconds) for a run's own model
 		 * turns. Does not affect other AI Client callers — set
-		 * `wp_ai_client_default_request_timeout` for that.
+		 * `wp_ai_client_default_request_timeout` for that. `@internal`.
 		 *
 		 * @param float $timeout Seconds. Default 120.0.
 		 */

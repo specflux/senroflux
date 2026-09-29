@@ -79,7 +79,7 @@ final class ScreenCapability {
 
 		// The hook name is spelled out (not `self::FILTER`) so static analysis
 		// and hook scanners can see it; the constant exists for callers/tests.
-		/** Filters the capability required for the Runs screen. */
+		/** Filters the capability required for the Runs screen. `@internal`. */
 		$capability = apply_filters( 'senroflux_runs_capability', $computed );
 
 		// Fail closed: a filter that returns something unusable must not turn

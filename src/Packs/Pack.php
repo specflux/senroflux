@@ -79,6 +79,9 @@ abstract class Pack {
 	private bool $resolved_once = false;
 
 	/**
+	 * `@api` (S23): a third-party pack's constructor calls this with its own
+	 * role map.
+	 *
 	 * @param array<string,string> $roles role => ability-id template.
 	 */
 	public function __construct( array $roles = array() ) {
@@ -86,13 +89,14 @@ abstract class Pack {
 	}
 
 	/**
-	 * The pack's short machine name, e.g. 'pages'.
+	 * The pack's short machine name, e.g. 'pages'. `@api` (S23).
 	 */
 	abstract public function name(): string;
 
 	/**
 	 * role => ability-id template. The template is the name segment WITHOUT the
 	 * namespace prefix; resolution decides 'core/<template>' vs 'senroflux/<template>'.
+	 * `@api` (S23).
 	 *
 	 * @return array<string,string>
 	 */
@@ -112,7 +116,9 @@ abstract class Pack {
 	 * list is the pack's own polyfill and is always accepted without a
 	 * compat check (it is authored to match the pack's own calls) — this is
 	 * the pre-S19 "otherwise senroflux/<template>" fallback, generalised.
-	 * Cached per request.
+	 * Cached per request. `@internal` (S23): a third-party pack reads its own
+	 * roles through `roles()`/the resolved allow-list through `allowList()`,
+	 * not this.
 	 *
 	 * @return array<string,string>
 	 */
@@ -286,6 +292,8 @@ abstract class Pack {
 	 * with its real per-role fields so a partial core ability is never adopted
 	 * silently (S9 step-aside "core present but incompatible").
 	 *
+	 * `@api` (S23).
+	 *
 	 * @param string $template Ability template, e.g. 'update-post'.
 	 * @return list<string>
 	 */
@@ -298,7 +306,8 @@ abstract class Pack {
 	/**
 	 * The run's ability allow-list: the RESOLVED ability ids (deduped, ordered).
 	 * This feeds `Run::$allow` (the existing direct path) when `start()` is
-	 * given a pack — S9.
+	 * given a pack — S9. `@internal` (S23): derived from `resolveAbilities()`;
+	 * a third-party pack has no reason to call or override it.
 	 *
 	 * @return list<string>
 	 */
@@ -316,6 +325,8 @@ abstract class Pack {
 	 * differently per call (the pages pack's update-post → draft / live /
 	 * publish) overrides this and declares the same split in {@see roleVerbs()}.
 	 *
+	 * `@api` (S23).
+	 *
 	 * @param string              $ability The concrete ability id the model called.
 	 * @param array<string,mixed> $input   The call input (drives an override's predicate).
 	 */
@@ -326,7 +337,8 @@ abstract class Pack {
 	}
 
 	/**
-	 * The ability name's final segment (namespace stripped).
+	 * The ability name's final segment (namespace stripped). `@internal`
+	 * (S23): an implementation helper, not part of the declared contract.
 	 *
 	 * @param string $ability Concrete ability id.
 	 */
@@ -343,6 +355,7 @@ abstract class Pack {
 	 * when a READ call targets that id — but which argument carries the id is
 	 * domain knowledge (`id`, `post_id`, `page_id`). The base answers S12's
 	 * default; a pack whose read ability names it differently overrides.
+	 * `@api` (S23).
 	 *
 	 * @param string $verb The pack verb.
 	 */
@@ -362,7 +375,7 @@ abstract class Pack {
 	 * it never parses the prefix back out; only the pack's own report lookup
 	 * (wired at the composition root) needs to recognise it. The base
 	 * declares none (backward compatible: every pre-existing pack keeps its
-	 * bare ids).
+	 * bare ids). `@api` (S23).
 	 *
 	 * @param string $verb The pack verb.
 	 */
@@ -381,6 +394,8 @@ abstract class Pack {
 	 * {@see objectIdKey()}'s output[key] extraction, S12's pre-existing
 	 * behaviour, for every pre-existing pack.
 	 *
+	 * `@api` (S23).
+	 *
 	 * @param string               $verb   The pack verb.
 	 * @param array<string,mixed>  $args   The call's args.
 	 * @param array<string,mixed>  $output The call's output.
@@ -395,6 +410,8 @@ abstract class Pack {
 	 * The read counterpart of {@see objectIdForWrite()}: the id a Tier-0 read
 	 * just read, for a read that takes no id argument (a singleton). Null
 	 * (the base) = the harness reads the id from the call's args.
+	 *
+	 * `@api` (S23).
 	 *
 	 * @param string              $verb The pack verb.
 	 * @param array<string,mixed> $args The call's args.
@@ -412,7 +429,7 @@ abstract class Pack {
 	 * — the base declares none, so a pack that never calls this out withholds
 	 * nothing (backward compatible with every pre-0.3 pack). No 0.3 pack
 	 * declares one yet; the posts pack (stage 5) is the first real caller,
-	 * naming `upload_files` for `media-upload`/`generate-image`.
+	 * naming `upload_files` for `media-upload`/`generate-image`. `@api` (S23).
 	 *
 	 * @return array<string,string>
 	 */
@@ -425,7 +442,7 @@ abstract class Pack {
 	 * (0.3 S6) — one line per withheld GROUP, in the pack's own words, so the
 	 * harness (which never learns what a role's ability actually does) stays
 	 * domain-agnostic. Null when the pack has nothing to say (the base
-	 * default, and a pack given an empty `$withheld`).
+	 * default, and a pack given an empty `$withheld`). `@api` (S23).
 	 *
 	 * @param list<string> $withheld The role names withheld from this run's start().
 	 */
@@ -439,7 +456,7 @@ abstract class Pack {
 	 * PACK verb => tier (S10). Abstract on purpose: an empty default would let a
 	 * pack ship with no map at all and rely on VerbTier's fail-closed tier 2 for
 	 * every call, which reads as governance but is really an unfenced accident.
-	 * Every pack states its own table.
+	 * Every pack states its own table. `@api` (S23).
 	 *
 	 * @return array<string,int>
 	 */
@@ -452,7 +469,7 @@ abstract class Pack {
 	 *
 	 * This is the pack DATA that drives Agent Safety governance: it is the only
 	 * place that knows one ability can span several pack verbs, so the bridge
-	 * below never has to hardcode a pack's shape.
+	 * below never has to hardcode a pack's shape. `@api` (S23).
 	 *
 	 * @return array<string,list<string>>
 	 */
@@ -470,6 +487,10 @@ abstract class Pack {
 	 * on `pages/publish` has to be issued against `senroflux/publish-post`.
 	 * Several pack verbs legitimately collapse onto one ability — the caller
 	 * aggregates their counts.
+	 *
+	 * `@internal` (S23): a pure function of `roleVerbs()`/`resolveAbilities()`,
+	 * both `@api`; a third-party pack never needs to call or override this
+	 * directly.
 	 *
 	 * @param string $pack_verb The pack verb (as it appears in a plan step).
 	 */
@@ -509,7 +530,8 @@ abstract class Pack {
 	 * second, weaker opinion on the same ability.
 	 *
 	 * A pack with no roles governs nothing — an empty contribution leaves the
-	 * gate exactly as inert as it is on a site with no integration.
+	 * gate exactly as inert as it is on a site with no integration. `@api`
+	 * (S23).
 	 *
 	 * @return list<string>
 	 */
@@ -539,7 +561,7 @@ abstract class Pack {
 	 * Keyed on the polyfill id, never on the resolved one, so this stays a pure
 	 * function of pack data: Agent Safety reads both filters on
 	 * `plugins_loaded` priority 0, long before abilities are registered on
-	 * `init`, so resolution is not knowable here.
+	 * `init`, so resolution is not knowable here. `@api` (S23).
 	 *
 	 * @return array<string,int>
 	 */
@@ -574,6 +596,7 @@ abstract class Pack {
 	 * was the first to override this with its own flat-and-high table, and
 	 * the pages pack (0.3 quality fix) now overrides it too, once its own
 	 * runs started doing image work the shipped table wasn't sized for.
+	 * `@api` (S19, S23).
 	 *
 	 * @return array<string,int>
 	 */
@@ -594,6 +617,9 @@ abstract class Pack {
 	 *                                pointing the model at a tool the run's
 	 *                                surface has already withheld (see
 	 *                                {@see \Specflux\SenroFlux\Tools\ToolRegistry::forRun()}).
+	 *
+	 * `@api` (S23).
+	 *
 	 * @return list<Skill>
 	 */
 	public function skills( bool $images_available = true ): array {
@@ -612,6 +638,9 @@ abstract class Pack {
 	 * 2000-token ceiling ({@see \Specflux\SenroFlux\Skills\SkillSet::ceilingError()}).
 	 * Theme-derived patterns are counted, not named, so the model knows they
 	 * exist without the skill growing with the theme. Skill bodies stay English (S15), so nothing here is translated.
+	 *
+	 * `@internal` (S23): a Pages-pack-family implementation helper, not part
+	 * of the declared third-party contract.
 	 *
 	 * @param list<array<string,mixed>> $vocabulary {@see \Specflux\SenroFlux\Packs\Pages\Vocabulary::all()}.
 	 * @param string                    $list_verb  This pack's list-patterns verb (e.g. `pages/list-patterns`).
@@ -648,7 +677,7 @@ abstract class Pack {
 	/**
 	 * The Agent Safety pack descriptor (allow/deny/approvalByTier) registered on
 	 * `agent_safety_pack_registry`; null when the pack contributes none. Stage 8
-	 * fills the pages pack's; the base contributes nothing.
+	 * fills the pages pack's; the base contributes nothing. `@api` (S23).
 	 */
 	public function agentSafetyPack(): ?object {
 		return null;
@@ -703,6 +732,10 @@ abstract class Pack {
 	 * @param int               $user_id        The user the run would be started for.
 	 * @param string            $consumer       Consumer identifier, when known.
 	 * @param string            $goal           The run's goal, when known.
+	 * `@internal` (S23): a thin caller over `setupChecks()` (`@api`); a
+	 * third-party pack states its rules through `setupChecks()` /
+	 * `agentSafetyBindingError()` and never needs to override this.
+	 *
 	 * @param list<string>|null $skills_disable Non-required skill ids the start would drop.
 	 * @return true|WP_Error
 	 */
@@ -745,6 +778,8 @@ abstract class Pack {
 	 * question; a user with neither, or with only one of the two, is refused.
 	 * `firstBlockingFailure()` returns whichever of the two checks fails
 	 * first, in the order below.
+	 *
+	 * `@api` (S23).
 	 *
 	 * @param int $user_id The user the run would be started for.
 	 * @return list<SetupCheck>
@@ -831,6 +866,7 @@ abstract class Pack {
 	 * is the whole test. Empty string means "nothing to check", which exists
 	 * only so pre-0.3 pack test fixtures keep compiling; every shipped pack
 	 * overrides this with its real run capability (e.g. `edit_pages`).
+	 * `@api` (S23).
 	 */
 	public function runCapability(): string {
 		return '';
@@ -838,7 +874,8 @@ abstract class Pack {
 
 	/**
 	 * Whether this pack refuses to start at all without Agent Safety (S3). No
-	 * 0.3 pack returns true; the hook exists for commerce at 0.5.
+	 * 0.3 pack returns true; the hook exists for commerce at 0.5. `@api`
+	 * (S3, S23).
 	 */
 	public function requiresAgentSafety(): bool {
 		return false;
@@ -853,9 +890,29 @@ abstract class Pack {
 	 * which made {@see preflight()} unable to fail for any pack but the pages
 	 * one — a governance check that cannot fail is not a check. A pack that has
 	 * no binding of its own must say so explicitly by returning a refusal.
+	 * `@api` (S23).
 	 *
 	 * @param int $user_id The user the run would be started for.
 	 * @return WP_Error|null null when bound, else `pack_unbound`.
 	 */
 	abstract protected function agentSafetyBindingError( int $user_id ): ?WP_Error;
+
+	/**
+	 * A content hash of this pack's guidance material outside its skills'
+	 * own bodies — e.g. layout/vocabulary rules text a skill only POINTS AT
+	 * (see {@see \Specflux\SenroFlux\Packs\Pages\PagesPack} and
+	 * `Api\LayoutVocabulary::rulesLines()`). SPEC-SENROFLUX-PRO.md §5 F4:
+	 * recorded in the run report next to the skills hash (S23) so a saved
+	 * report can be told apart from one built under guidance text that has
+	 * since changed, even though the SKILL bodies (already hashed) never
+	 * moved. Null (the base) means "nothing to hash" — no report field is
+	 * added — which keeps every pre-F4 pack's report byte-for-byte
+	 * unchanged. `@api` (S23).
+	 *
+	 * @return string|null A stable hash (e.g. `hash( 'sha256', ... )`), or
+	 *                      null when this pack has no separately-hashed guidance.
+	 */
+	public function guidesHash(): ?string {
+		return null;
+	}
 }

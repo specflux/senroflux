@@ -110,21 +110,75 @@ accepts `allow`: the tool surface for HTTP-started runs comes entirely from the
 
 ## Filters
 
-| Filter | Purpose |
-|---|---|
-| `senroflux_default_budget` | Default per-run ceilings: `max_steps` 60, `max_tool_calls` 30, `max_tokens` 250000, `max_questions` 5, `max_plans` 3. A consumer may only lower them. |
-| `senroflux_http_consumers` | Registers consumers that may start runs over admin-ajax/REST: `[ 'my-plugin' => [ 'allow' => [...], 'budget' => [...] ] ]`. The request never supplies `allow`; its `budget` can only lower the registered ceiling. Unregistered consumers get 403. |
-| `senroflux_run_skills` | `(list<Skill> $skills, ?Pack $pack, string $consumer, string $goal)` - add, remove or reorder the skills rendered into a run's system instruction. Required skills cannot be dropped. |
-| `senroflux_system_instruction` | Post-process the fully rendered system-instruction string before it is sent to the model. |
-| `senroflux_skills_max_tokens` | Ceiling (rough token estimate) on the rendered skills block; exceeding it fails `start()`/preflight with `skills_too_large`. |
-| `senroflux_tool_result_max_bytes` | Payload cap handed back to the model per tool result (default 32 KB). |
-| `senroflux_verb_map` | `(array $map, int $run_id)` - contributes to Agent Safety's verb classification for a run's calls. |
-| `senroflux_can_tick` | `(bool $can, Run $run)` - who may advance a run (defaults to owner-only). |
-| `senroflux_runs_capability` | Capability required to view/use the Runs screen (default `manage_options`). |
-| `senroflux_enable_preapproval` | Off by default. When `true` (and Agent Safety exposes a grants API), a plan may be accepted with pre-approval, minting Agent Safety grants for its Tier-2 verbs. |
-| `senroflux_packs` | Registers packs beyond the bundled pages pack. |
-| `senroflux_model_gateway` | Swap the model seam (testing/hosting edge cases). |
-| `senroflux_language_name` | `(array $names)` - display names used when telling the model the conversation/content locale. |
+`@api`? marks the three filters declared part of the stable extension surface (S23) — see
+[Extension API](#extension-api) below. Every other filter, including `senroflux_can_tick` and
+`senroflux_http_consumers`, may change shape without a `SENROFLUX_API_VERSION` bump.
+
+| Filter | `@api`? | Purpose |
+|---|---|---|
+| `senroflux_default_budget` | Yes | Default per-run ceilings: `max_steps` 60, `max_tool_calls` 30, `max_tokens` 250000, `max_questions` 5, `max_plans` 3. A consumer may only lower them. |
+| `senroflux_http_consumers` | No (Consumer rules) | Registers consumers that may start runs over admin-ajax/REST: `[ 'my-plugin' => [ 'allow' => [...], 'budget' => [...] ] ]`. The request never supplies `allow`; its `budget` can only lower the registered ceiling. Unregistered consumers get 403. |
+| `senroflux_run_skills` | Yes | `(list<Skill> $skills, ?Pack $pack, string $consumer, string $goal)` - add, remove or reorder the skills rendered into a run's system instruction. Required skills cannot be dropped. |
+| `senroflux_system_instruction` | No | Post-process the fully rendered system-instruction string before it is sent to the model. |
+| `senroflux_skills_max_tokens` | No | Ceiling (rough token estimate) on the rendered skills block; exceeding it fails `start()`/preflight with `skills_too_large`. |
+| `senroflux_tool_result_max_bytes` | No | Payload cap handed back to the model per tool result (default 32 KB). |
+| `senroflux_verb_map` | No | `(array $map, int $run_id)` - contributes to Agent Safety's verb classification for a run's calls. |
+| `senroflux_can_tick` | No (Consumer rules) | `(bool $can, Run $run)` - who may advance a run (defaults to owner-only). |
+| `senroflux_runs_capability` | No | Capability required to view/use the Runs screen (default `manage_options`). |
+| `senroflux_enable_preapproval` | No | Off by default. When `true` (and Agent Safety exposes a grants API), a plan may be accepted with pre-approval, minting Agent Safety grants for its Tier-2 verbs. |
+| `senroflux_packs` | Yes | Registers packs beyond the bundled pages pack. |
+| `senroflux_model_gateway` | No | Swap the model seam (testing/hosting edge cases). |
+| `senroflux_language_name` | No | `(array $names)` - display names used when telling the model the conversation/content locale. |
+
+## Extension API
+
+`SENROFLUX_API_VERSION` (currently `0.3.0`, defined in `senroflux.php`) versions the DECLARED
+extension surface below, independently of the plugin's own `Version:` header. **Semver
+promise:** a removal or signature change to anything on this list needs a major bump; an
+addition needs a minor bump. This applies starting at `0.3.0`, below the plugin's own 1.0 —
+tightening the gate (making something stricter) is never itself a break.
+`tests/Api/PublicSurfaceTest.php` enforces this by reflection against the committed
+`tests/Api/public-surface.json`; regenerate it after a deliberate, version-bumped change with:
+
+```sh
+SENROFLUX_UPDATE_SURFACE=1 vendor/bin/phpunit --filter PublicSurfaceTest
+```
+
+**The `@api` list:**
+
+- **`Specflux\SenroFlux\Packs\Pack`** (abstract) — the base class for a capability pack. Every
+  method tagged `@api` in its own docblock is part of the surface: `name()`, `roles()`,
+  `abilityNamespaces()`, `inputProperties()`, `verbFor()`, `objectIdKey()`, `objectIdPrefix()`,
+  `objectIdForWrite()`, `objectIdForRead()`, `roleCapabilities()`, `withheldRoleNotice()`,
+  `verbMap()`, `roleVerbs()`, `ungrantableVerbs()`, `governedNamespaces()`,
+  `agentSafetyVerbMap()`, `defaultBudget()`, `skills()`, `agentSafetyPack()`, `validateCall()`,
+  `setupChecks()`, `runCapability()`, `requiresAgentSafety()`, `agentSafetyBindingError()`,
+  `guidesHash()`. Everything else on `Pack` (`resolveAbilities()`, `allowList()`,
+  `gateVerbFor()`, `preflight()`, `baseName()`, `copyRulesLines()`) is `@internal` — derived
+  implementation detail a pack has no reason to call or override.
+- **`Specflux\SenroFlux\Api\LayoutVocabulary`** (final) — a thin `@api` facade over the
+  (`@internal`) pages-pack layout renderer: `names()`, `sectionSchema()`, `validate()`,
+  `imageUrls()`, `rulesLines()`. See its own docblock for `sectionSchema()`'s documented
+  approximation and why `validate()` renders and discards rather than duplicating rules.
+- **`Specflux\SenroFlux\Skills\Skill`**, **`SkillSource`**, **`Specflux\SenroFlux\Setup\SetupCheck`**
+  — the value types a pack constructs and returns from `skills()`/`setupChecks()`.
+- The filters `senroflux_packs`, `senroflux_run_skills`, `senroflux_default_budget` (see the
+  Filters table above).
+
+**REST is the public `@api` consumer surface** (`Specflux\SenroFlux\Http\Rest`, routes listed
+above under "PHP API" and documented per-route in `Rest`'s own class docblock: params,
+response shape). **admin-ajax (`Specflux\SenroFlux\Http\Ajax`) is `@internal`** — the bundled
+Runs screen's own private transport, not guaranteed to stay a superset or subset of the REST
+routes.
+
+**Deprecation policy:** a break goes through `_deprecated_hook()` / `_deprecated_function()`
+for at least one minor release before being removed at the next major. No deprecations exist
+yet.
+
+A fixture third-party pack built from only the symbols above lives in
+`tests/Api/Fixtures/FixturePack.php`; `tests/Api/FixturePackTest.php` proves it registers,
+resolves its roles and gets its verbs tiered, and that it references no non-`@api` SenroFlux
+symbol.
 
 The bundled pages pack also registers itself with **Agent Safety**, via
 `agent_safety_pack_registry`, `agent_safety_governed_namespaces` (adds its `senroflux/`

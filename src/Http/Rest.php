@@ -18,13 +18,52 @@ use Specflux\SenroFlux\Plugin;
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Routes under senroflux/v1:
- *   POST /runs                          {consumer, goal, pack?, budget?, follow_up_of?, model_provider?, model_id?}  (allow-list via senroflux_http_consumers)
- *   POST /runs/{id}/tick                {step_count, approval_action?}
- *   POST /runs/{id}/cancel
- *   GET  /runs                          {limit?} (0.3 S10; scoped to the runs the viewer may see)
- *   GET  /runs/{id}
- *   POST /runs/{id}/suggestions/{n}     {action, text?} (0.3 S20; manage_options + a REST nonce)
+ * `@api` (S23): the public `@api` CONSUMER surface — the contract a
+ * registered {@see ConsumerPolicy} consumer (e.g. application passwords)
+ * integrates against. `Ajax` is the Runs screen's own PRIVATE transport
+ * (`@internal`) and is not required to be a superset of this; the two are
+ * independent implementations of the same underlying `Plugin`/`Runner`
+ * operations, not one wrapping the other.
+ *
+ * Every route requires a logged-in user (`is_user_logged_in()` +
+ * `current_user_can()` in its `permission_callback`) and returns a
+ * `\WP_REST_Response` built by {@see respond()}: on success, the raw
+ * RunState array `senroflux()`'s corresponding `Plugin` method returns
+ * (status 200); on a `WP_Error`, `{code: string, message: string}` at the
+ * error's own `status` data key (default 400).
+ *
+ * Routes under `senroflux/v1`:
+ *
+ * - `POST /runs` — {@see routeStart()}. Params: `consumer` (string,
+ *   required — must be registered via `senroflux_http_consumers`, itself
+ *   NOT `@api`, see its own docblock), `goal` (string, required), `pack`
+ *   (string, optional — a registered {@see \Specflux\SenroFlux\Packs\Pack}
+ *   name), `budget` (object, optional — may only LOWER a consumer's
+ *   registered ceiling), `follow_up_of` (int, optional — a prior run id),
+ *   `model_provider`/`model_id` (string, optional — both omitted means
+ *   automatic selection). Response: the new run's RunState
+ *   (`{run, steps, ui}`, see {@see \Specflux\SenroFlux\Plugin::get()} for
+ *   the `run`/step shape).
+ * - `POST /runs/{run_id}/tick` — {@see routeTick()}. Params: `run_id`
+ *   (int, from the URL), `step_count` (int, required — the caller's
+ *   last-known `run.step_count`, else `senroflux_conflict`), `resume`
+ *   (object, optional — a park resolution shaped for the run's current
+ *   park kind; the removed 0.1 `approval_action` field is refused
+ *   `senroflux_bad_request` rather than silently ignored). Response:
+ *   RunState.
+ * - `POST /runs/{run_id}/cancel` — {@see routeCancel()}. No params beyond
+ *   `run_id`. Response: RunState.
+ * - `GET /runs` — {@see routeList()} (0.3 S10). Params: `limit` (int,
+ *   optional, default 50, clamped 1..100 — rows CONSIDERED before
+ *   viewer-scoping, so a response may be shorter). Response:
+ *   `{runs: list<array<string,mixed>>}`, one lightweight summary per row
+ *   (see {@see \Specflux\SenroFlux\Plugin::listRecent()}).
+ * - `GET /runs/{run_id}` — {@see routeGet()}. Response: RunState.
+ * - `POST /runs/{run_id}/suggestions/{seq}` — {@see routeSuggestionDecision()}
+ *   (0.3 S20; requires `manage_options`, re-checked in the handler). Params:
+ *   `run_id`/`seq` (int, from the URL), `action` (string, required),
+ *   `text` (string, optional — a rewrite; omitted keeps the suggestion's
+ *   original text). Response: RunState.
  */
 final class Rest {
 

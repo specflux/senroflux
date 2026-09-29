@@ -19,6 +19,14 @@ use WP_Error;
 defined( 'ABSPATH' ) || exit;
 
 /**
+ * `@internal` (S23): the Runs screen's own PRIVATE transport, never the
+ * declared consumer contract — {@see Rest} is the `@api` surface a
+ * third-party consumer integrates against. This class exists only because
+ * the bundled React Runs screen (`assets/src/runs/`) talks admin-ajax, not
+ * REST; its four actions are not guaranteed to stay a superset (or subset)
+ * of `Rest`'s routes and may change shape without a SENROFLUX_API_VERSION
+ * bump.
+ *
  * Four actions mirroring the PHP API: start, tick, cancel, get. Nonce
  * `senroflux_run`, capability `read`, plus per-run ownership enforced in the
  * Runner itself (the tick protocol re-checks it). Start is additionally
@@ -47,6 +55,8 @@ final class Ajax {
 	 * call is refused fail-closed and the run can never progress — refused
 	 * outright (400) rather than started to deadlock. Other consumers may
 	 * still start pack-less (a direct-allow run), unchanged.
+	 *
+	 * `@internal` (S23) — see the class docblock.
 	 */
 	public function handleStart(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
@@ -131,6 +141,8 @@ final class Ajax {
 	 * caller holds that capability. Without it, polling a DELEGATED run 403'd
 	 * while submitting the form on the same page succeeded. A caller who does
 	 * not hold the capability gets the plain owner-only tick, unchanged.
+	 *
+	 * `@internal` (S23) — see the class docblock.
 	 */
 	public function handleTick(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
@@ -195,7 +207,7 @@ final class Ajax {
 		return senroflux()->tick( $run_id, $step_count, $resume );
 	}
 
-	/** POST run_id. */
+	/** POST run_id. `@internal` (S23) — see the class docblock. */
 	public function handleCancel(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -209,7 +221,7 @@ final class Ajax {
 		$this->respond( senroflux()->cancel( absint( $_POST['run_id'] ?? 0 ) ) );
 	}
 
-	/** POST run_id. */
+	/** POST run_id. `@internal` (S23) — see the class docblock. */
 	public function handleGet(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 

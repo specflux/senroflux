@@ -402,38 +402,11 @@ final class PagesPack extends Pack {
 	 * This is content, never translated (S15 — skill bodies stay English).
 	 */
 	private function layoutRulesBody(): string {
-		return implode(
-			"\n",
-			array(
-				'Write a page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme design is built for you. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Write `markup` only when no layout fits.',
-				'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
-				'Give a visitor what they need to decide: for each service, who it is for and what happens; what happens at the first visit; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between.',
-				'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
-				'Markup patterns, if none fits: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only. Re-read every object after writing.',
-				'A pattern is NOT a block: it is a core/group (or core/cover, or core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
-				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. In an faq, the question is the <summary> element inside the core/details block and the answer is a core/paragraph block inside it.',
-				'To publish a page you already created, call the update ability with the id and status only; omit content entirely (omitted content means unchanged). Never resend unchanged content.',
-				'Close everything you open: every `<!-- wp:x -->` needs its matching `<!-- /wp:x -->`, and every wrapper element a block opens (a group\'s <div>, a details, a list) must be closed before that block ends. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				// 0.3 quality fix (instruction ceiling): the full verb list used
-				// to live here (~170 tokens); it now travels on the
-				// propose-plan tool's own declaration instead (see
-				// PlanTools::proposePlanDeclaration()), built per run from the
-				// SAME verb set this pack's runProposePlan() check uses, so it
-				// cannot drift from what is actually accepted.
-				'When you propose a plan, spell each step\'s verbs exactly as the propose-plan tool\'s own verb list gives them. Creating the page as a draft is pages/create-draft; making a draft live is pages/publish. Any other word is refused as unknown_verb.',
-				'Give a block ONLY the attributes its shape names below; any other (an extra align or layout) is refused as unknown_pattern. Only hero, cover-hero and cta give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call pages/list-patterns with the pattern names.',
-				'Shapes (">" = child, "(n–m)" = how many of that child):',
-				'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
-				'cover-hero: cover align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
-				'text-section: group > heading level 2, paragraph (2–4)',
-				'media-text: media-text > heading level 2, paragraph (1–3), buttons > button (0–1)',
-				'feature-grid: group > heading level 2, columns > column (2–3) each > heading level 3, paragraph',
-				'pricing-table: group > heading level 2, columns > column (1–3) each > heading level 3, paragraph, list (3–6 items), buttons > button',
-				'faq: group > heading level 2, details (2–8) each > paragraph',
-				'testimonials: group > heading level 2, quote (1–3)',
-				'cta: group align=full > heading level 2, paragraph align=center, buttons layout=flex > button (1)',
-			)
-		);
+		// S23 (F3): the lines themselves moved to Layouts::rulesLines() so
+		// Api\LayoutVocabulary can expose them to a third party without
+		// depending on this pack; this stays the single call site that
+		// joins them into a skill body.
+		return implode( "\n", Layouts::rulesLines() );
 	}
 
 	/**

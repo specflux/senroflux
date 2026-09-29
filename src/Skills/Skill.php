@@ -16,6 +16,9 @@ defined( 'ABSPATH' ) || exit;
  * An instruction the harness, a pack, or a consumer contributes to a run. The
  * body is plain text (no templating) and is rendered verbatim — skills are
  * content, never translated.
+ *
+ * `@api` (S23): the value type a third-party pack's `Pack::skills()`
+ * constructs and returns.
  */
 final class Skill {
 

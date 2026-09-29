@@ -89,6 +89,7 @@ final class VerbTier {
 	public static function mapForRun( ?int $run_id = null ): array {
 		/**
 		 * Filters the verb => tier map for one run.
+		 * `@internal`.
 		 *
 		 * @param array<string,int> $verb_map Default empty map.
 		 * @param int|null          $run_id   The run id, when known (stage 6).

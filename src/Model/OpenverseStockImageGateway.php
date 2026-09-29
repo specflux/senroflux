@@ -49,6 +49,7 @@ final class OpenverseStockImageGateway implements StockImageGatewayInterface {
 
 		/**
 		 * Filters the Openverse source slugs `stock-image-search` queries.
+		 * `@internal`.
 		 *
 		 * @param list<string> $sources Default source slugs.
 		 */

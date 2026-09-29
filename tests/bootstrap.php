@@ -67,6 +67,11 @@ if ( ! defined( 'SENROFLUX_PATH' ) ) {
 if ( ! defined( 'SENROFLUX_URL' ) ) {
 	define( 'SENROFLUX_URL', 'http://example.test/wp-content/plugins/senroflux/' );
 }
+// S23: senroflux.php (never loaded under bare PHPUnit) defines this; tests
+// that read it (PublicSurfaceTest) need the same value.
+if ( ! defined( 'SENROFLUX_API_VERSION' ) ) {
+	define( 'SENROFLUX_API_VERSION', '0.3.0' );
+}
 if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
 	define( 'MINUTE_IN_SECONDS', 60 );
 }
@@ -420,11 +425,13 @@ if ( ! function_exists( 'wp_json_encode' ) ) {
 	/**
 	 * JSON shim.
 	 *
-	 * @param mixed $data Data.
+	 * @param mixed $data  Data.
+	 * @param int   $flags json_encode() flags (S23: PublicSurfaceTest writes
+	 *                     a pretty-printed snapshot).
 	 * @return string|false
 	 */
-	function wp_json_encode( $data ) {
-		return json_encode( $data );
+	function wp_json_encode( $data, $flags = 0 ) {
+		return json_encode( $data, $flags );
 	}
 }
 
