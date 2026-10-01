@@ -105,9 +105,9 @@ final class Layouts {
 	 *
 	 *   - `hero`: `hero-light`, the hero with one trailing image and a plain
 	 *     cover; its eyebrow and second button are optional fields.
-	 *   - `text-with-image`: `hero-text-image-and-logos`, a centred heading and
-	 *     paragraph over one wide rounded photo; its eyebrow, buttons and the
-	 *     cover's empty caption paragraph are dropped.
+	 *   - `text-with-image`: `image-and-numbered-features`, a wide photo beside
+	 *     numbered rows; the first row's heading and plain paragraph take the
+	 *     fields, the number and the other rows are dropped.
 	 *   - `services`: `features-with-emojis`, four cards (an emoji, a title, a
 	 *     text) in a grid under no heading; the emoji is dropped, the cards are
 	 *     trimmed to the item count and the layout's heading is inserted.
@@ -123,7 +123,7 @@ final class Layouts {
 	 */
 	private const OLLIE = array(
 		'hero'            => array( 'pattern' => 'ollie/hero-light' ),
-		'text-with-image' => array( 'pattern' => 'ollie/image-and-text-card' ),
+		'text-with-image' => array( 'pattern' => 'ollie/image-and-numbered-features' ),
 		'services'        => array( 'pattern' => 'ollie/features-with-emojis' ),
 		'faq'             => array( 'pattern' => 'ollie/faq' ),
 		'cta'             => array( 'pattern' => 'ollie/text-call-to-action-buttons' ),

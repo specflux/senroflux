@@ -1142,7 +1142,10 @@ class Validator implements ContentValidator {
 				if ( null !== $rest ) {
 					$stub = array(
 						'blockName'    => 'core/heading',
-						'attrs'        => array( 'level' => $level ),
+						'attrs'        => 'center' === ( $first['attrs']['textAlign'] ?? null ) ? array(
+							'level'     => $level,
+							'textAlign' => 'center',
+						) : array( 'level' => $level ),
 						'innerBlocks'  => array(),
 						'innerHTML'    => '',
 						'innerContent' => array(),

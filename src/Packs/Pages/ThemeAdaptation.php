@@ -805,9 +805,11 @@ final class ThemeAdaptation {
 	 * @return array<string,mixed>
 	 */
 	private static function emptyHeading( bool $page_title ): array {
+		// Centred, so it sits over a wide card grid instead of indented from it
+		// (a heading cannot be aligned wide; the constrained group narrows it).
 		$markup = $page_title
 			? '<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center"></h1><!-- /wp:heading -->'
-			: '<!-- wp:heading --><h2 class="wp-block-heading"></h2><!-- /wp:heading -->';
+			: '<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center"></h2><!-- /wp:heading -->';
 
 		$blocks = parse_blocks( $markup );
 

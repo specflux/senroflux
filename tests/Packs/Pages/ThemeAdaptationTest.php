@@ -28,7 +28,7 @@ final class ThemeAdaptationTest extends TestCase {
 	/** Spectra One's palette slugs plus the core defaults it leaves on. */
 	private const SPECTRA_PALETTE = array( 'primary', 'secondary', 'heading', 'body', 'background', 'tertiary', 'quaternary', 'surface', 'foreground', 'outline', 'neutral', 'transparent', 'white', 'black' );
 
-	private const OLLIE_FILES = array( 'hero-light', 'text-call-to-action-buttons', 'features-with-emojis', 'faq', 'card-image-and-text', 'numbers-stacked' );
+	private const OLLIE_FILES = array( 'hero-light', 'text-call-to-action-buttons', 'features-with-emojis', 'faq', 'image-and-numbered-features', 'numbers-stacked' );
 
 	private const SPECTRA_FILES = array( 'hero-banner-2', 'split-image-right', 'faq-2', 'call-to-action-2', 'feature-6', 'text' );
 
@@ -315,7 +315,7 @@ final class ThemeAdaptationTest extends TestCase {
 		$this->assertSame(
 			array(
 				'senroflux/ollie/hero-light',
-				'senroflux/ollie/image-and-text-card',
+				'senroflux/ollie/image-and-numbered-features',
 				'senroflux/ollie/features-with-emojis',
 				'senroflux/ollie/faq',
 				'senroflux/ollie/text-call-to-action-buttons',
@@ -327,6 +327,34 @@ final class ThemeAdaptationTest extends TestCase {
 			$this->assertStringNotContainsString( $sample, $page );
 		}
 		$this->assertPageClean( $page );
+	}
+
+	public function test_every_ollie_layouts_body_copy_lands_in_a_plain_paragraph(): void {
+		self::ollie();
+		foreach ( array( 0, 3, 2, 4, 5 ) as $which ) {
+			$section = self::section( $which );
+			$body    = (string) ( $section['text'] ?? ( $section['items'][0]['text'] ?? $section['items'][0]['answer'] ) );
+			$built   = self::render( $section );
+
+			$at = strpos( $built, '>' . $body . '<' );
+			$this->assertNotFalse( $at, $section['layout'] . ': the body copy is on the page' );
+			$opening = substr( $built, (int) strrpos( substr( $built, 0, (int) $at ), '<!-- wp:' ) );
+			$opening = (string) strstr( $opening, '-->', true );
+			$this->assertStringStartsWith( '<!-- wp:paragraph', $opening, $section['layout'] . ': body copy is a paragraph block' );
+			foreach ( array( 'fontSize', 'fontWeight', 'typography' ) as $styled ) {
+				$this->assertStringNotContainsString( $styled, $opening, $section['layout'] . ': the paragraph carries no title styling' );
+			}
+		}
+	}
+
+	public function test_an_inserted_heading_is_centred_over_the_content_it_heads(): void {
+		self::ollie();
+		$built = self::render( self::section( 2, false ) );
+
+		$heading = parse_blocks( $built )[0]['innerBlocks'][0];
+		$this->assertSame( 'core/heading', $heading['blockName'] );
+		$this->assertSame( 'center', $heading['attrs']['textAlign'] ?? null );
+		$this->assertClean( $built );
 	}
 
 	public function test_a_section_the_pattern_cannot_fit_falls_back_to_the_curated_section(): void {
