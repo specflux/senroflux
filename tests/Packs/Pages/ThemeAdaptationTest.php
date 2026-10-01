@@ -40,8 +40,9 @@ final class ThemeAdaptationTest extends TestCase {
 
 	protected function tearDown(): void {
 		ThemePatterns::resetCache();
-		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'], $GLOBALS['senroflux_test_template_dir'], $GLOBALS['senroflux_test_stylesheet'], $GLOBALS['senroflux_test_template'], $GLOBALS['senroflux_test_global_settings'] );
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'], $GLOBALS['senroflux_test_template_dir'], $GLOBALS['senroflux_test_stylesheet'], $GLOBALS['senroflux_test_template'], $GLOBALS['senroflux_test_global_settings'], $GLOBALS['senroflux_test_options'] );
 		remove_all_filters( 'senroflux_layout_profiles' );
+		remove_all_filters( 'senroflux_theme_patterns' );
 	}
 
 	/**
@@ -368,6 +369,154 @@ final class ThemeAdaptationTest extends TestCase {
 		$built = self::render( self::section( 0 ) );
 
 		$this->assertSame( 'senroflux/cover-hero', self::patternName( $built ) );
+	}
+
+	// --- D2: the site switch and the filter -----------------------------
+
+	/** The curated pattern each of the six outline sections falls back to. */
+	private const CURATED = array( 'senroflux/cover-hero', 'senroflux/text-section', 'senroflux/feature-grid', 'senroflux/media-text', 'senroflux/faq', 'senroflux/cta' );
+
+	/**
+	 * @return list<string> The pattern each outline section renders as.
+	 */
+	private static function renderedNames(): array {
+		$vocabulary = new Vocabulary();
+		$names      = array();
+		foreach ( array( 0, 1, 2, 3, 4, 5 ) as $which ) {
+			$names[] = self::patternName( self::render( self::section( $which ), $vocabulary ) );
+		}
+
+		return $names;
+	}
+
+	public function test_the_switch_defaults_to_on(): void {
+		self::ollie();
+
+		$this->assertNotEmpty( ThemePatterns::eligible() );
+		$this->assertTrue( ThemePatterns::enabled() );
+	}
+
+	public function test_switched_off_a_theme_with_a_profile_takes_the_curated_fallback_for_every_layout(): void {
+		self::ollie();
+		$this->assertNotSame( self::CURATED, self::renderedNames(), 'precondition: Ollie builds theme sections while the switch is on' );
+
+		update_option( ThemePatterns::OPTION, false );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( self::CURATED, self::renderedNames() );
+	}
+
+	public function test_switched_off_a_theme_with_no_profile_takes_the_curated_fallback_for_every_layout(): void {
+		self::spectra();
+		$this->assertNotSame( self::CURATED, self::renderedNames(), 'precondition: Spectra One is auto-mapped while the switch is on' );
+
+		update_option( ThemePatterns::OPTION, false );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( self::CURATED, self::renderedNames() );
+	}
+
+	public function test_switched_off_an_explicit_pattern_section_finds_no_theme_pattern(): void {
+		self::ollie();
+		$this->assertNotNull( ( new Vocabulary() )->resolveThemePattern( 'ollie/faq' ), 'precondition: the pattern resolves while the switch is on' );
+
+		update_option( ThemePatterns::OPTION, false );
+		ThemePatterns::resetCache();
+
+		$this->assertNull( ( new Vocabulary() )->resolveThemePattern( 'ollie/faq' ) );
+	}
+
+	public function test_the_option_is_read_as_a_bool_whatever_it_was_stored_as(): void {
+		self::ollie();
+		foreach ( array( '0', 0, '', false ) as $stored ) {
+			update_option( ThemePatterns::OPTION, $stored );
+			ThemePatterns::resetCache();
+			$this->assertSame( array(), ThemePatterns::eligible(), wp_json_encode( $stored ) );
+		}
+		foreach ( array( '1', 1, true ) as $stored ) {
+			update_option( ThemePatterns::OPTION, $stored );
+			ThemePatterns::resetCache();
+			$this->assertNotEmpty( ThemePatterns::eligible(), wp_json_encode( $stored ) );
+		}
+	}
+
+	public function test_the_filter_can_remove_a_pattern(): void {
+		self::ollie();
+		$all = array_column( ThemePatterns::eligible(), 'name' );
+		$this->assertContains( 'ollie/faq', $all );
+
+		add_filter(
+			'senroflux_theme_patterns',
+			static fn ( array $patterns ): array => array_values( array_filter( $patterns, static fn ( array $p ): bool => 'ollie/faq' !== $p['name'] ) )
+		);
+		ThemePatterns::resetCache();
+
+		$this->assertSame( array_values( array_diff( $all, array( 'ollie/faq' ) ) ), array_column( ThemePatterns::eligible(), 'name' ) );
+		$this->assertSame( 'senroflux/faq', self::patternName( self::render( self::section( 4 ) ) ), 'the profile names a removed pattern, so the layout takes its curated fallback' );
+	}
+
+	public function test_the_filter_cannot_add_a_pattern_or_change_one(): void {
+		self::ollie();
+		$before = ThemePatterns::eligible();
+
+		add_filter(
+			'senroflux_theme_patterns',
+			static function ( array $patterns ): array {
+				$patterns[]            = array_replace( $patterns[0], array( 'name' => 'plugin/injected' ) );
+				$patterns[1]['markup'] = '<!-- wp:paragraph --><p>tampered</p><!-- /wp:paragraph -->';
+
+				return $patterns;
+			}
+		);
+		ThemePatterns::resetCache();
+
+		$this->assertSame( $before, ThemePatterns::eligible() );
+	}
+
+	public function test_a_filter_that_returns_a_non_array_is_ignored(): void {
+		self::ollie();
+		$before = ThemePatterns::eligible();
+
+		add_filter( 'senroflux_theme_patterns', static fn (): string => 'nothing' );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( $before, ThemePatterns::eligible() );
+		$this->assertSame( 0, ThemePatterns::skippedCount() );
+	}
+
+	public function test_the_filter_does_not_bring_patterns_back_when_the_switch_is_off(): void {
+		self::ollie();
+		update_option( ThemePatterns::OPTION, false );
+		add_filter( 'senroflux_theme_patterns', static fn (): array => array( array( 'name' => 'ollie/faq' ) ) );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+	}
+
+	public function test_the_skipped_count_includes_what_the_filter_removed(): void {
+		self::ollie();
+		$skipped  = ThemePatterns::skippedCount();
+		$eligible = count( ThemePatterns::eligible() );
+
+		add_filter( 'senroflux_theme_patterns', static fn ( array $patterns ): array => array_slice( $patterns, 2 ) );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( $eligible - 2, count( ThemePatterns::eligible() ) );
+		$this->assertSame( $skipped + 2, ThemePatterns::skippedCount() );
+	}
+
+	public function test_the_skipped_count_includes_what_the_switch_removed(): void {
+		self::ollie();
+		$skipped  = ThemePatterns::skippedCount();
+		$eligible = count( ThemePatterns::eligible() );
+		$this->assertGreaterThan( 0, $eligible );
+
+		update_option( ThemePatterns::OPTION, false );
+		ThemePatterns::resetCache();
+
+		$this->assertSame( $skipped + $eligible, ThemePatterns::skippedCount() );
 	}
 
 	// --- A theme with no profile maps automatically ----------------------

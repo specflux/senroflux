@@ -70,6 +70,9 @@ defined( 'ABSPATH' ) || exit;
  */
 final class ThemePatterns {
 
+	/** D2: the site switch (bool, default true). Off, no theme pattern is used anywhere. */
+	public const OPTION = 'senroflux_use_theme_patterns';
+
 	/**
 	 * Elements whose content is a text slot; `a` doubles as a `url` slot on
 	 * its `href`.
@@ -120,7 +123,33 @@ final class ThemePatterns {
 	}
 
 	/**
-	 * The count of this theme's own patterns that were NOT eligible (S21).
+	 * The option's sanitiser: any "off" spelling (`false`, `0`, `''`, `'0'`,
+	 * `'false'`, `'off'`, `'no'`) is false, anything else true.
+	 */
+	public static function sanitizeOption( mixed $value ): bool {
+		if ( is_string( $value ) ) {
+			return ! in_array( strtolower( trim( $value ) ), array( '', '0', 'false', 'off', 'no' ), true );
+		}
+
+		return (bool) $value;
+	}
+
+	/**
+	 * D2: whether the site uses its theme's patterns at all. On unless the
+	 * `senroflux_use_theme_patterns` option is stored as off.
+	 */
+	public static function enabled(): bool {
+		if ( ! function_exists( 'get_option' ) ) {
+			return true;
+		}
+
+		return self::sanitizeOption( get_option( self::OPTION, true ) );
+	}
+
+	/**
+	 * The count of this theme's own patterns that were NOT eligible (S21),
+	 * plus the eligible ones the site switch or the `senroflux_theme_patterns`
+	 * filter removed (D2).
 	 */
 	public static function skippedCount(): int {
 		return self::compute()['skipped'];
@@ -160,12 +189,60 @@ final class ThemePatterns {
 			}
 		}
 
+		$kept     = self::restrict( $eligible );
+		$skipped += count( $eligible ) - count( $kept );
+
 		self::$memo = array(
-			'eligible' => $eligible,
+			'eligible' => $kept,
 			'skipped'  => $skipped,
 		);
 
 		return self::$memo;
+	}
+
+	/**
+	 * D2, applied last: the site switch, then the `senroflux_theme_patterns`
+	 * filter. Both can only remove — whatever the filter hands back that was
+	 * not in `$eligible` is dropped, and an entry that did come from it is
+	 * kept as it was, so the filter can neither add nor alter a pattern.
+	 *
+	 * @param list<array<string,mixed>> $eligible The eligible list.
+	 * @return list<array<string,mixed>>
+	 */
+	private static function restrict( array $eligible ): array {
+		if ( ! self::enabled() ) {
+			return array();
+		}
+		if ( ! function_exists( 'apply_filters' ) ) {
+			return $eligible;
+		}
+
+		/**
+		 * Filters the theme patterns SenroFlux may use, after its own
+		 * eligibility checks and the site switch. Return the list without the
+		 * patterns to drop; it can only remove: an entry not in the eligible
+		 * list is ignored, and a return that is not an array is ignored.
+		 *
+		 * @param list<array<string,mixed>> $eligible Eligible patterns, each with `name` (the registered slug, e.g. `ollie/faq`), `title` and `markup`.
+		 */
+		$filtered = apply_filters( 'senroflux_theme_patterns', $eligible );
+		if ( ! is_array( $filtered ) ) {
+			return $eligible;
+		}
+
+		$names = array();
+		foreach ( $filtered as $entry ) {
+			if ( is_array( $entry ) && isset( $entry['name'] ) ) {
+				$names[ (string) $entry['name'] ] = true;
+			}
+		}
+
+		return array_values(
+			array_filter(
+				$eligible,
+				static fn ( array $entry ): bool => isset( $names[ (string) $entry['name'] ] )
+			)
+		);
 	}
 
 	/**

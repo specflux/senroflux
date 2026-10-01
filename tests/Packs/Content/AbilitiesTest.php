@@ -31,6 +31,8 @@ use PHPUnit\Framework\TestCase;
 use Specflux\SenroFlux\Packs\Content\Abilities;
 use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Run\StepKind;
+use Specflux\SenroFlux\Packs\Pages\Layouts;
+use Specflux\SenroFlux\Packs\Pages\PagesPack;
 use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
@@ -99,6 +101,9 @@ final class AbilitiesTest extends TestCase {
 		Abilities::forgetRunPack();
 		Abilities::resetSources();
 		Media::forgetRunContext();
+		remove_all_filters( 'senroflux_theme_patterns' );
+		remove_all_filters( 'senroflux_layout_use_when' );
+		unset( $GLOBALS['senroflux_test_options'][ ThemePatterns::OPTION ] );
 	}
 
 	/**
@@ -2033,6 +2038,73 @@ final class AbilitiesTest extends TestCase {
 
 		$this->assertSame( 1, $result['theme_patterns_skipped'] );
 		$this->assertCount( 9, $result['patterns'], 'the ineligible theme pattern never joins the list' );
+	}
+
+	public function test_list_patterns_counts_what_the_switch_and_the_filter_removed_as_skipped(): void {
+		LayoutsTest::registerThemeFixtures();
+		$this->grant( 'edit_pages' );
+		$skipped  = ThemePatterns::skippedCount();
+		$eligible = count( ThemePatterns::eligible() );
+		$this->assertGreaterThan( 3, $eligible );
+
+		add_filter( 'senroflux_theme_patterns', static fn ( array $patterns ): array => array_slice( $patterns, 3 ) );
+		ThemePatterns::resetCache();
+		$result = $this->ability( 'senroflux/list-patterns' )->execute( array() );
+		$this->assertSame( $skipped + 3, $result['theme_patterns_skipped'], 'the filter removed 3' );
+
+		remove_all_filters( 'senroflux_theme_patterns' );
+		update_option( ThemePatterns::OPTION, false );
+		ThemePatterns::resetCache();
+		$result = $this->ability( 'senroflux/list-patterns' )->execute( array() );
+		$this->assertSame( $skipped + $eligible, $result['theme_patterns_skipped'], 'the switch removed every eligible pattern' );
+	}
+
+	/**
+	 * D6: the one `use_when` sentence per layout is rendered into the
+	 * `sections` schema and the pages skill from the same source, so changing
+	 * the source changes both.
+	 */
+	public function test_use_when_reaches_the_sections_schema_and_the_pages_skill_from_one_source(): void {
+		$layouts = Layouts::names();
+		$source  = Layouts::useWhen();
+		$this->assertEqualsCanonicalizing( $layouts, array_keys( $source ), 'every layout has exactly one sentence' );
+
+		$read = function (): array {
+			Abilities::reset();
+			Abilities::registerCategory();
+			Abilities::register();
+			$schema = $this->ability( 'senroflux/create-post' )->get_input_schema();
+			$page   = null;
+			foreach ( $schema['oneOf'] as $branch ) {
+				if ( array( 'page' ) === ( $branch['properties']['post_type']['enum'] ?? array() ) ) {
+					$page = $branch;
+				}
+			}
+			$this->assertNotNull( $page );
+
+			return array(
+				$page['properties']['sections']['items']['properties']['layout']['description'],
+				implode( "\n", array_map( static fn ( $skill ) => $skill->body, ( new PagesPack() )->skills() ) ),
+			);
+		};
+
+		list( $description, $skill ) = $read();
+		foreach ( $source as $layout => $sentence ) {
+			$this->assertStringContainsString( $sentence, $description, $layout );
+			$this->assertStringContainsString( $sentence, $skill, $layout );
+		}
+
+		add_filter(
+			'senroflux_layout_use_when',
+			static fn ( array $when ): array => array_replace( $when, array( 'faq' => 'a changed sentence for the test' ) )
+		);
+		list( $description, $skill ) = $read();
+		remove_all_filters( 'senroflux_layout_use_when' );
+
+		$this->assertStringContainsString( 'a changed sentence for the test', $description );
+		$this->assertStringContainsString( 'a changed sentence for the test', $skill );
+		$this->assertStringNotContainsString( $source['faq'], $description );
+		$this->assertStringNotContainsString( $source['faq'], $skill );
 	}
 
 	public function test_sections_builds_a_page_from_layouts(): void {

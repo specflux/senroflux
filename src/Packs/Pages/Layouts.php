@@ -209,6 +209,50 @@ final class Layouts {
 	private const TEXT_PARAGRAPHS = array( 2, 4 );
 
 	/**
+	 * D6: one "use when" sentence per layout, in layout order. The single
+	 * source the `sections` schema description and the pages skill both render
+	 * ({@see useWhenText()}). Content, never translated (S15).
+	 *
+	 * @return array<string,string> Layout name => sentence.
+	 */
+	public static function useWhen(): array {
+		$when = array(
+			'hero'            => 'the opening and one next step',
+			'text'            => 'explanation that needs paragraphs',
+			'text-with-image' => 'one idea a photo helps show',
+			'services'        => 'three offerings compared side by side',
+			'faq'             => 'questions visitors ask before booking',
+			'cta'             => 'the one closing action',
+		);
+		if ( function_exists( 'apply_filters' ) ) {
+			/**
+			 * The one "use when" sentence per layout, shown to the model in the
+			 * `sections` schema and the pages skill. `@internal`.
+			 *
+			 * @param array<string,string> $when Layout name => sentence.
+			 */
+			$filtered = apply_filters( 'senroflux_layout_use_when', $when );
+			if ( is_array( $filtered ) ) {
+				$when = array_replace( $when, array_intersect_key( array_map( 'strval', $filtered ), $when ) );
+			}
+		}
+
+		return $when;
+	}
+
+	/**
+	 * The {@see useWhen()} sentences as one line, `layout: sentence; ...`.
+	 */
+	public static function useWhenText(): string {
+		$parts = array();
+		foreach ( self::useWhen() as $layout => $sentence ) {
+			$parts[] = $layout . ': ' . $sentence;
+		}
+
+		return implode( '; ', $parts );
+	}
+
+	/**
 	 * The model-facing layout rules text (S11), as a list of lines — the
 	 * source `PagesPack::skills()` joins into the `pages/layout-rules` skill
 	 * body. Moved here (S23, F3) so `Api\LayoutVocabulary::rulesLines()` can
@@ -219,14 +263,14 @@ final class Layouts {
 	 */
 	public static function rulesLines(): array {
 		return array(
-			'Write a page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme design is built for you. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Optional `tone` (default, contrast, accent) bands a section: max 2, never adjacent. Write `markup` only when no layout fits.',
+			'Write a page as `sections` items, each naming a `layout` with its fields; the theme design is built for you. Use when, ' . self::useWhenText() . '. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Optional `tone` (default, contrast, accent) bands a section: max 2, never adjacent. Write `markup` only when no layout fits.',
 			'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
 			'Give a visitor what they need to decide: for each service, who it is for and what happens; what happens at the first visit; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between.',
 			'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
-			'Markup patterns, if none fits: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only.',
+			'Markup patterns are the shapes below. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only.',
 			'A pattern is NOT a block: it is a core/group (or core/cover, or core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
 			'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. In an faq, the question is the <summary> element inside the core/details block and the answer is a core/paragraph block inside it.',
-			'To publish a page you already created, call the update ability with the id and status only; omit content entirely (omitted content means unchanged). Never resend unchanged content.',
+			'To publish a page you already created, call the update ability with the id and status only; omit content entirely. Never resend unchanged content.',
 			'Close everything you open: every `<!-- wp:x -->` needs its matching `<!-- /wp:x -->`, and every wrapper element a block opens (a group\'s <div>, a details, a list) must be closed before that block ends. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
 			// 0.3 quality fix (instruction ceiling): the full verb list used
 			// to live here (~170 tokens); it now travels on the

@@ -179,3 +179,22 @@ if ( ! function_exists( 'esc_textarea' ) ) {
 		return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' );
 	}
 }
+
+if ( ! function_exists( 'checked' ) ) {
+	/** WP's `checked()` helper: the attribute string, echoed unless `$display` is false. */
+	function checked( mixed $checked, mixed $current = true, bool $display = true ): string {
+		$result = (string) $checked === (string) $current ? " checked='checked'" : '';
+		if ( $display ) {
+			echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- test shim of core's own helper.
+		}
+
+		return $result;
+	}
+}
+
+if ( ! function_exists( 'register_setting' ) ) {
+	/** Test knob: records each registration under its option name. */
+	function register_setting( string $group, string $option, array $args = array() ): void {
+		$GLOBALS['senroflux_test_registered_settings'][ $option ] = array( 'group' => $group ) + $args;
+	}
+}
