@@ -26,6 +26,31 @@ if ( ! function_exists( 'get_stylesheet_directory' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_Theme', false ) ) {
+	/**
+	 * Test-only stand-in: `$GLOBALS['senroflux_test_declared_patterns']` is the
+	 * list of `{slug: ...}` entries `WP_Theme::get_block_patterns()` returns
+	 * (empty unless a test sets it).
+	 */
+	class WP_Theme {
+
+		/** @return list<array<string,mixed>> */
+		public function get_block_patterns(): array {
+			return $GLOBALS['senroflux_test_declared_patterns'] ?? array();
+		}
+
+		public function parent(): false {
+			return false;
+		}
+	}
+}
+
+if ( ! function_exists( 'wp_get_theme' ) ) {
+	function wp_get_theme(): WP_Theme {
+		return new WP_Theme();
+	}
+}
+
 if ( ! function_exists( 'get_template_directory' ) ) {
 	function get_template_directory(): string {
 		return $GLOBALS['senroflux_test_template_dir'] ?? ( $GLOBALS['senroflux_test_stylesheet_dir'] ?? '/theme' );
@@ -100,9 +125,9 @@ if ( ! function_exists( 'wp_get_global_settings' ) ) {
 	 * D3a.
 	 *
 	 * @param list<string> $path Setting path, e.g. `array( 'color', 'palette' )`.
-	 * @return array<string,mixed>
+	 * @return mixed A list, an origin-keyed map of lists, or a flag.
 	 */
-	function wp_get_global_settings( array $path = array() ): array {
+	function wp_get_global_settings( array $path = array() ): mixed {
 		$settings = $GLOBALS['senroflux_test_global_settings'] ?? array(
 			'color' => array(
 				'palette'   => array(
@@ -124,7 +149,7 @@ if ( ! function_exists( 'wp_get_global_settings' ) ) {
 			$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : array();
 		}
 
-		return is_array( $value ) ? $value : array();
+		return $value;
 	}
 }
 

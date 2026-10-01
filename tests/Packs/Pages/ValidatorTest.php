@@ -23,6 +23,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Packs\Pages;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Packs\Content\ImageAlt;
 use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
@@ -369,6 +370,19 @@ final class ValidatorTest extends TestCase {
 		$content = $blanked . "\n\n" . $this->markup( 'text-section' );
 
 		$this->assertSame( 'missing_alt', $this->errorCode( $this->validator->validate( $content ) ) );
+	}
+
+	public function test_alt_not_required_on_a_colour_only_cover_but_required_on_a_featured_image_cover(): void {
+		$plain                                 = array(
+			'blockName' => 'core/cover',
+			'attrs'     => array( 'overlayColor' => 'base' ),
+			'innerHTML' => '<div class="wp-block-cover"><span class="wp-block-cover__background"></span></div>',
+		);
+		$featured                              = $plain;
+		$featured['attrs']['useFeaturedImage'] = true;
+
+		$this->assertFalse( ImageAlt::missing( $plain ) );
+		$this->assertTrue( ImageAlt::missing( $featured ) );
 	}
 
 	public function test_missing_alt_refused_for_media_text_with_no_alt(): void {

@@ -448,14 +448,18 @@ final class LayoutsTest extends TestCase {
 		$this->assertStringContainsString( 'hero, text-with-image, services, faq, cta, text', $built->get_error_message() );
 	}
 
-	public function test_a_layout_whose_pattern_the_theme_lacks_says_to_write_markup(): void {
+	/**
+	 * D1 step 3 (S5): a known layout whose pattern the theme lacks is built from
+	 * the curated pattern, never refused.
+	 */
+	public function test_a_layout_whose_pattern_the_theme_lacks_falls_back_to_the_curated_section(): void {
 		$GLOBALS['senroflux_test_theme_patterns'] = array();
 		ThemePatterns::resetCache();
 
 		$built = Layouts::render( self::outline()[0], 0, new Vocabulary() );
 
-		$this->assertInstanceOf( WP_Error::class, $built );
-		$this->assertSame( 'layout_unavailable', $built->get_error_code() );
+		$this->assertIsString( $built, $built instanceof WP_Error ? $built->get_error_message() : '' );
+		$this->assertSame( 'senroflux/cover-hero', parse_blocks( $built )[0]['attrs']['metadata']['name'] ?? '' );
 	}
 
 	public function test_text_escapes_copy_and_counts_its_paragraphs(): void {
@@ -503,14 +507,14 @@ final class LayoutsTest extends TestCase {
 		$this->assertStringContainsString( 'Fake hero heading', $built );
 	}
 
-	public function test_a_theme_with_no_profile_gets_layout_unavailable(): void {
+	public function test_a_theme_with_no_profile_gets_the_curated_fallback(): void {
 		self::contributeFakeProfile();
 		$GLOBALS['senroflux_test_stylesheet'] = 'unprofiled-theme';
 
 		$built = Layouts::render( self::outline()[0], 0, new Vocabulary() );
 
-		$this->assertInstanceOf( WP_Error::class, $built );
-		$this->assertSame( 'layout_unavailable', $built->get_error_code() );
+		$this->assertIsString( $built, $built instanceof WP_Error ? $built->get_error_message() : '' );
+		$this->assertSame( 'senroflux/cover-hero', parse_blocks( $built )[0]['attrs']['metadata']['name'] ?? '' );
 		$this->assertSame( array( 'hero', 'text-with-image', 'services', 'faq', 'cta', 'text' ), Layouts::names() );
 	}
 
@@ -531,8 +535,9 @@ final class LayoutsTest extends TestCase {
 
 		$built = Layouts::render( self::outline()[4], 4, new Vocabulary() );
 
-		$this->assertInstanceOf( WP_Error::class, $built );
-		$this->assertSame( 'layout_unavailable', $built->get_error_code() );
+		// The fake profile has no `faq`, and the parent's `text-faqs` is not borrowed: the curated faq is built.
+		$this->assertIsString( $built, $built instanceof WP_Error ? $built->get_error_message() : '' );
+		$this->assertSame( 'senroflux/faq', parse_blocks( $built )[0]['attrs']['metadata']['name'] ?? '' );
 	}
 
 	private static function contributeFakeProfile(): void {

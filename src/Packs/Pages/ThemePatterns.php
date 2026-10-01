@@ -176,7 +176,8 @@ final class ThemePatterns {
 		$stylesheet_dir = self::normalizeDir( (string) get_stylesheet_directory() );
 		$template_dir   = self::normalizeDir( (string) get_template_directory() );
 
-		$owned = array();
+		$declared = self::declaredNames();
+		$owned    = array();
 		foreach ( (array) $registry->get_all_registered() as $entry ) {
 			if ( ! is_array( $entry ) ) {
 				continue;
@@ -190,9 +191,13 @@ final class ThemePatterns {
 			}
 			$file_path = isset( $entry['filePath'] ) ? (string) $entry['filePath'] : '';
 			if ( '' === $file_path ) {
-				continue;
-			}
-			if ( ! str_starts_with( $file_path, $stylesheet_dir ) && ! str_starts_with( $file_path, $template_dir ) ) {
+				// Core drops `filePath` once a pattern's content has been read (a
+				// theme or plugin that lists patterns early does it), so a theme's
+				// own pattern is then recognised by the slug its file declares.
+				if ( ! isset( $declared[ $name ] ) ) {
+					continue;
+				}
+			} elseif ( ! str_starts_with( $file_path, $stylesheet_dir ) && ! str_starts_with( $file_path, $template_dir ) ) {
 				continue;
 			}
 
@@ -200,6 +205,36 @@ final class ThemePatterns {
 		}
 
 		return $owned;
+	}
+
+	/**
+	 * The pattern slugs the active theme's (and its parent's) own pattern
+	 * files declare, as `slug => true`.
+	 *
+	 * @return array<string,true>
+	 */
+	private static function declaredNames(): array {
+		if ( ! function_exists( 'wp_get_theme' ) ) {
+			return array();
+		}
+
+		$theme  = wp_get_theme();
+		$themes = array( $theme );
+		$parent = $theme->parent();
+		if ( $parent instanceof \WP_Theme ) {
+			$themes[] = $parent;
+		}
+
+		$names = array();
+		foreach ( $themes as $candidate ) {
+			foreach ( (array) $candidate->get_block_patterns() as $data ) {
+				if ( is_array( $data ) && isset( $data['slug'] ) ) {
+					$names[ (string) $data['slug'] ] = true;
+				}
+			}
+		}
+
+		return $names;
 	}
 
 	private static function normalizeDir( string $dir ): string {
@@ -304,7 +339,7 @@ final class ThemePatterns {
 
 	/**
 	 * The active theme's palette, `wp_get_global_settings( array( 'color',
-	 * 'palette' ) )`, all merged origins (D3a). Memoised alongside
+	 * 'palette' ) )`, every origin the theme leaves switched on (D3a). Memoised alongside
 	 * {@see $memo}, cleared by {@see resetCache()}.
 	 *
 	 * @var list<string>|null
@@ -342,21 +377,9 @@ final class ThemePatterns {
 	 * @return list<string>
 	 */
 	private static function presetSlugs( string $key ): array {
-		if ( ! function_exists( 'wp_get_global_settings' ) ) {
-			return array();
-		}
+		$entries = PresetAdapter::presets( 'color', $key, 'palette' === $key ? 'defaultPalette' : 'defaultGradients' );
 
-		$entries = (array) wp_get_global_settings( array( 'color', $key ) );
-
-		return array_values(
-			array_filter(
-				array_map(
-					static fn ( $entry ): string => is_array( $entry ) ? (string) ( $entry['slug'] ?? '' ) : '',
-					$entries
-				),
-				static fn ( string $slug ): bool => '' !== $slug
-			)
-		);
+		return array_values( array_unique( array_map( 'strval', array_column( $entries['all'] ?? array(), 'slug' ) ) ) );
 	}
 
 	/**
@@ -486,8 +509,11 @@ final class ThemePatterns {
 			// harmless, but max_cta) a good page that also uses a real,
 			// single-purpose CTA pattern. Requiring an exact one-category match
 			// keeps the rule meaningful for genuinely dedicated theme patterns.
-			'is_hero'       => array( 'banner' ) === $categories,
-			'is_cta'        => array( 'call-to-action' ) === $categories,
+			// S5: a pattern the active layout profile builds the hero or the
+			// cta from counts for that role whatever its categories say (Ollie
+			// files them under `ollie/hero` and `ollie/call-to-action`).
+			'is_hero'       => array( 'banner' ) === $categories || 'hero' === Layouts::roleOf( $name ),
+			'is_cta'        => array( 'call-to-action' ) === $categories || 'cta' === Layouts::roleOf( $name ),
 			'text_slots'    => $slots,
 		);
 	}

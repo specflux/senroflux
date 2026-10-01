@@ -1048,9 +1048,14 @@ class Validator implements ContentValidator {
 
 			/** @var list<string> $repeatable */
 			$repeatable = $pattern['repeatable'] ?? array();
-			$candidate  = empty( $pattern['theme_derived'] ) ? $block : $this->h1AsH2( $block );
-			if ( $this->matchesShape( $candidate, $expected, $repeatable ) ) {
-				return (string) $pattern['slug'];
+			// A theme hero's h2 may be written as the page's H1, so a theme
+			// pattern is also tried with its h1s read as h2s. A pattern that
+			// ships an h1 itself (Ollie's heroes) matches as written.
+			$candidates = empty( $pattern['theme_derived'] ) ? array( $block ) : array( $block, $this->h1AsH2( $block ) );
+			foreach ( $candidates as $candidate ) {
+				if ( $this->matchesShape( $candidate, $expected, $repeatable ) ) {
+					return (string) $pattern['slug'];
+				}
 			}
 		}
 

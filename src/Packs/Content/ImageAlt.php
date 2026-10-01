@@ -62,10 +62,18 @@ final class ImageAlt {
 	public static function missing( array $block ): bool {
 		$name = (string) ( $block['blockName'] ?? '' );
 
-		if ( isset( self::ALT_ATTRIBUTE[ $name ] ) || in_array( $name, self::ALT_FROM_HTML_ONLY, true ) ) {
-			$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
-			$key   = self::ALT_ATTRIBUTE[ $name ] ?? null;
-			$alt   = null !== $key && isset( $attrs[ $key ] ) && is_string( $attrs[ $key ] ) ? trim( $attrs[ $key ] ) : '';
+		$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+
+		// A cover that is only a colour overlay (a theme hero such as Ollie's
+		// `hero-light`) carries no image, so it has no alt text to require.
+		$plain_cover = 'core/cover' === $name
+			&& empty( $attrs['useFeaturedImage'] )
+			&& '' === ( is_string( $attrs['url'] ?? null ) ? trim( $attrs['url'] ) : '' )
+			&& 1 !== preg_match( '/<img\b/i', (string) ( $block['innerHTML'] ?? '' ) );
+
+		if ( ! $plain_cover && ( isset( self::ALT_ATTRIBUTE[ $name ] ) || in_array( $name, self::ALT_FROM_HTML_ONLY, true ) ) ) {
+			$key = self::ALT_ATTRIBUTE[ $name ] ?? null;
+			$alt = null !== $key && isset( $attrs[ $key ] ) && is_string( $attrs[ $key ] ) ? trim( $attrs[ $key ] ) : '';
 
 			// A model composing its own markup (the posts pack) writes `alt`
 			// as a JSON comment attribute; a theme pattern's own `<img>` (the

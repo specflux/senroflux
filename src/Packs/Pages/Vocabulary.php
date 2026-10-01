@@ -159,7 +159,7 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * @return list<array<string,mixed>>
 	 */
 	public function themeDerived(): array {
-		return array_map( array( self::class, 'withServicesImageOptional' ), ThemePatterns::eligible() );
+		return array_map( array( self::class, 'withProfileRepeatables' ), ThemePatterns::eligible() );
 	}
 
 	/**
@@ -170,19 +170,22 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * industry. The Validator's structural match ({@see Validator::matchesShape()})
 	 * must accept both shapes, so THIS ONE theme pattern's `core/image`
 	 * becomes a 0..n repeatable child instead of the fixed one the theme
-	 * ships. Every other theme pattern (the hero, text-with-image) keeps
-	 * requiring its image exactly as the theme shipped it.
+	 * ships. A profile's optional fields (S5: Ollie's hero eyebrow and second
+	 * button) get the same treatment for their block. Every other theme
+	 * pattern (the hero, text-with-image) keeps requiring its blocks exactly
+	 * as the theme shipped them.
 	 *
 	 * @param array<string,mixed> $pattern One theme-derived vocabulary entry.
 	 * @return array<string,mixed>
 	 */
-	private static function withServicesImageOptional( array $pattern ): array {
-		if ( ( $pattern['name'] ?? null ) !== ( Layouts::profile()['services']['pattern'] ?? null ) ) {
+	private static function withProfileRepeatables( array $pattern ): array {
+		$blocks = Layouts::repeatableBlocks( (string) ( $pattern['name'] ?? '' ) );
+		if ( array() === $blocks ) {
 			return $pattern;
 		}
 
 		$pattern['repeatable'] = array_values(
-			array_unique( array_merge( $pattern['repeatable'] ?? array(), array( 'core/image' ) ) )
+			array_unique( array_merge( $pattern['repeatable'] ?? array(), $blocks ) )
 		);
 
 		return $pattern;

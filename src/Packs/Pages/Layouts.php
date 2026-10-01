@@ -29,13 +29,17 @@ final class Layouts {
 	 * The Twenty Twenty-Five layout profile: layout name => the theme pattern
 	 * it builds and its slot map: one field
 	 * path per slot of the pattern, in document order. `image` fields are
-	 * `{url, alt}` objects; `button` fields are `{label, url}` objects and
-	 * take two slots (the link text, then its destination).
+	 * `{url, alt}` objects; `button` and `button2` fields are `{label, url}`
+	 * objects and take two slots (the link text, then its destination).
 	 *
 	 * `limits` raises a body-text slot's word limit above the theme sample's
 	 * (1.5 times its words), which is too short to explain a service.
 	 *
-	 * @var array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>}>
+	 * `optional` names fields the model may leave out (`eyebrow`, `button2`);
+	 * the block that holds each one is then dropped from the pattern, so no
+	 * sample text stays on the page.
+	 *
+	 * @var array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
 	 */
 	private const TWENTY_TWENTY_FIVE = array(
 		'hero'            => array(
@@ -90,6 +94,47 @@ final class Layouts {
 			'slots'   => array( 'heading', 'text', 'button.label', 'button.url' ),
 			'limits'  => array( 'text' => 40 ),
 		),
+	);
+
+	/**
+	 * The Ollie layout profile (S5). Ollie files its heroes and CTAs with an
+	 * eyebrow paragraph before the heading and two buttons, so the profile maps
+	 * those as `eyebrow`, `button` and `button2`. `hero-light` is the one hero
+	 * with a single trailing image and a plain cover; `text-call-to-action-buttons`
+	 * is its CTA with the same eyebrow and two buttons. (`text-call-to-action`, the
+	 * one that already fits heading, text and one button, paints its photo with an
+	 * inline `background-image:url()` that the validator refuses.) Ollie has no
+	 * pattern that fits `text-with-image`, `services` or `faq` without an extra
+	 * image, card or button the model's fields can't fill, so those three use the
+	 * curated fallback.
+	 *
+	 * @var array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 */
+	private const OLLIE = array(
+		'hero' => array(
+			'pattern'  => 'ollie/hero-light',
+			'slots'    => array( 'eyebrow', 'heading', 'text', 'button.label', 'button.url', 'button2.label', 'button2.url', 'image' ),
+			'limits'   => array(
+				'eyebrow' => 4,
+				'text'    => 40,
+			),
+			'optional' => array( 'eyebrow', 'button2' ),
+		),
+		'cta'  => array(
+			'pattern'  => 'ollie/text-call-to-action-buttons',
+			'slots'    => array( 'eyebrow', 'heading', 'text', 'button.label', 'button.url', 'button2.label', 'button2.url' ),
+			'limits'   => array(
+				'eyebrow' => 4,
+				'text'    => 40,
+			),
+			'optional' => array( 'eyebrow', 'button2' ),
+		),
+	);
+
+	/** The block that holds each optional profile field. */
+	private const OPTIONAL_BLOCKS = array(
+		'eyebrow' => 'core/paragraph',
+		'button2' => 'core/button',
 	);
 
 	/** Layout names, whatever the theme: the schema enum never varies with it. */
@@ -148,18 +193,21 @@ final class Layouts {
 	/**
 	 * 0.3 layout profiles: the active theme's layout => pattern map. The
 	 * stylesheet's profile wins outright (no merge with its parent's), else
-	 * the parent theme's, else none, so an unprofiled theme gets
-	 * `layout_unavailable` for every theme-backed layout.
+	 * the parent theme's, else none. A layout the profile doesn't map, or whose
+	 * pattern the theme doesn't offer, is built from the curated pattern.
 	 *
-	 * @return array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>}>
+	 * @return array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
 	 */
 	public static function profile(): array {
-		$profiles = array( 'twentytwentyfive' => self::TWENTY_TWENTY_FIVE );
+		$profiles = array(
+			'twentytwentyfive' => self::TWENTY_TWENTY_FIVE,
+			'ollie'            => self::OLLIE,
+		);
 		if ( function_exists( 'apply_filters' ) ) {
 			/**
 			 * Layout profiles keyed by theme slug. `@internal`.
 			 *
-			 * @param array<string, array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>}>> $profiles Profiles.
+			 * @param array<string, array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>> $profiles Profiles.
 			 */
 			$profiles = apply_filters( 'senroflux_layout_profiles', $profiles );
 		}
@@ -223,18 +271,22 @@ final class Layouts {
 
 		$map     = self::profile()[ $layout ] ?? null;
 		$pattern = null !== $map ? $vocabulary->resolveThemePattern( $map['pattern'] ) : null;
-		$slots   = null !== $pattern ? ThemePatterns::textSlots( (string) $pattern['markup'] ) : array();
-		if ( null === $map || null === $pattern || count( $slots ) !== count( $map['slots'] ) ) {
-			return self::error(
-				'layout_unavailable',
-				sprintf(
-					/* translators: 1: section number, 2: layout name. */
-					__( 'Section %1$d: the "%2$s" layout needs a pattern the active theme does not provide. Write this section as `markup` instead.', 'senroflux' ),
-					$index + 1,
-					$layout
-				),
-				$index
-			);
+		$markup  = null !== $pattern ? (string) $pattern['markup'] : '';
+		$slots   = null !== $pattern ? ThemePatterns::textSlots( $markup ) : array();
+		$curated = null === $map || null === $pattern || count( $slots ) !== count( $map['slots'] );
+		if ( $curated ) {
+			// D1 step 3: the theme has no pattern for this layout, so SenroFlux's
+			// own pattern is filled from the same fields.
+			$plan   = self::curatedPlan( $layout, $section );
+			$map    = $plan['map'];
+			$name   = $plan['pattern'];
+			$markup = self::curatedMarkup( $vocabulary, $name, $plan['repeat'] );
+			if ( '' === $markup ) {
+				return self::unavailable( $layout, $index );
+			}
+			$slots = ThemePatterns::textSlots( $markup );
+		} else {
+			$name = (string) $map['pattern'];
 		}
 
 		$items_error = self::checkItemCount( $section, $map['slots'], $layout, $index );
@@ -242,14 +294,13 @@ final class Layouts {
 			return $items_error;
 		}
 
-		$paths  = $map['slots'];
-		$markup = (string) $pattern['markup'];
-		if ( 'services' === $layout ) {
-			$plan = self::servicesImagePlan( $section, $index );
-			if ( $plan instanceof WP_Error ) {
-				return $plan;
+		$paths = $map['slots'];
+		if ( 'services' === $layout && ! $curated ) {
+			$photos = self::servicesImagePlan( $section, $index );
+			if ( $photos instanceof WP_Error ) {
+				return $photos;
 			}
-			if ( $plan ) {
+			if ( $photos ) {
 				// 0.3 quality fix (images budget 0): nobody gave a card photo,
 				// so the pattern's own `core/image` blocks are dropped rather
 				// than refused — there is rarely a third distinct, relevant
@@ -258,6 +309,13 @@ final class Layouts {
 				$paths  = array_values( array_filter( $paths, static fn ( string $p ): bool => ! str_ends_with( $p, '.image' ) ) );
 				$slots  = ThemePatterns::textSlots( $markup );
 			}
+		}
+
+		$absent = self::absentOptionalPositions( $section, $paths, $map['optional'] ?? array() );
+		if ( array() !== $absent ) {
+			$markup = self::withoutSlotBlocks( $markup, $absent );
+			$paths  = array_values( array_diff_key( $paths, array_flip( $absent ) ) );
+			$slots  = ThemePatterns::textSlots( $markup );
 		}
 
 		$values = array();
@@ -289,7 +347,314 @@ final class Layouts {
 			return $error;
 		}
 
-		return self::finish( $filled['content'], $section, (string) $map['pattern'] );
+		$content = self::finish( $filled['content'], $section, $name );
+
+		return $curated ? PresetAdapter::adapt( $content ) : $content;
+	}
+
+	/**
+	 * The profile entries that name `$pattern`, as `layout => entry`.
+	 *
+	 * @return array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 */
+	private static function profileEntriesFor( string $pattern ): array {
+		return array_filter( self::profile(), static fn ( $map ): bool => is_array( $map ) && ( $map['pattern'] ?? null ) === $pattern );
+	}
+
+	/**
+	 * The page role (`hero` or `cta`) a theme pattern plays when the active
+	 * profile builds that layout from it, else null. A profile's hero counts as
+	 * the page's hero even when the theme files it under `ollie/hero` rather
+	 * than the bare `banner` category.
+	 */
+	public static function roleOf( string $pattern ): ?string {
+		$entries = self::profileEntriesFor( $pattern );
+		foreach ( array( 'hero', 'cta' ) as $role ) {
+			if ( isset( $entries[ $role ] ) ) {
+				return $role;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The block names the Validator may match zero or more times in a profile
+	 * pattern: the card photos of `services` (all or none, see
+	 * {@see servicesImagePlan()}) and the blocks of a profile's optional
+	 * fields.
+	 *
+	 * @return list<string>
+	 */
+	public static function repeatableBlocks( string $pattern ): array {
+		$blocks = array();
+		foreach ( self::profileEntriesFor( $pattern ) as $layout => $map ) {
+			if ( 'services' === $layout ) {
+				$blocks[] = 'core/image';
+			}
+			foreach ( $map['optional'] ?? array() as $field ) {
+				if ( isset( self::OPTIONAL_BLOCKS[ $field ] ) ) {
+					$blocks[] = self::OPTIONAL_BLOCKS[ $field ];
+				}
+			}
+		}
+
+		return array_values( array_unique( $blocks ) );
+	}
+
+	/**
+	 * D1 step 3: the curated pattern a layout falls back to and how its fields
+	 * map onto that pattern's slots. Field limits and item counts match the
+	 * theme profiles', so the model's contract doesn't change with the theme.
+	 * `repeat` names the child block to grow to the item count (the curated
+	 * feature-grid and faq ship two).
+	 *
+	 * @param array<string,mixed> $section The item.
+	 * @return array{pattern:string, map:array{slots:list<string>, limits:array<string,int>}, repeat:array<string,int>}
+	 */
+	private static function curatedPlan( string $layout, array $section ): array {
+		$image  = is_array( $section['image'] ?? null ) ? $section['image'] : array();
+		$cover  = '' !== trim( (string) ( $image['url'] ?? '' ) ) || '' !== trim( (string) ( $image['alt'] ?? '' ) );
+		$button = array( 'button.label', 'button.url' );
+		$items  = static function ( array $fields, int $count ): array {
+			$paths = array();
+			for ( $i = 0; $i < $count; $i++ ) {
+				foreach ( $fields as $field ) {
+					$paths[] = 'items.' . $i . '.' . $field;
+				}
+			}
+
+			return $paths;
+		};
+
+		return match ( $layout ) {
+			'hero'            => array(
+				'pattern' => $cover ? 'cover-hero' : 'hero',
+				'map'     => array(
+					'slots'  => array_merge( $cover ? array( 'image' ) : array(), array( 'heading', 'text' ), $button ),
+					'limits' => array( 'text' => 40 ),
+				),
+				'repeat'  => array(),
+			),
+			'text-with-image' => array(
+				'pattern' => 'media-text',
+				'map'     => array(
+					'slots'  => array( 'image', 'heading', 'text' ),
+					'limits' => array(),
+				),
+				'repeat'  => array(),
+			),
+			'services'        => array(
+				'pattern' => 'feature-grid',
+				'map'     => array(
+					'slots'  => array_merge( array( 'heading' ), $items( array( 'title', 'text' ), 3 ) ),
+					'limits' => array(
+						'heading' => 8,
+						'title'   => 6,
+						'text'    => 60,
+					),
+				),
+				'repeat'  => array( 'core/column' => 3 ),
+			),
+			'faq'             => array(
+				'pattern' => 'faq',
+				'map'     => array(
+					'slots'  => array_merge( array( 'heading' ), $items( array( 'question', 'answer' ), 4 ) ),
+					'limits' => array(
+						'question' => 12,
+						'answer'   => 60,
+					),
+				),
+				'repeat'  => array( 'core/details' => 4 ),
+			),
+			default           => array(
+				'pattern' => 'cta',
+				'map'     => array(
+					'slots'  => array_merge( array( 'heading', 'text' ), $button ),
+					'limits' => array( 'text' => 40 ),
+				),
+				'repeat'  => array(),
+			),
+		};
+	}
+
+	/**
+	 * The curated pattern's markup with its repeatable children grown to the
+	 * counts in `$repeat`, or an empty string when the pattern is missing.
+	 *
+	 * @param array<string,int> $repeat Child block name => how many it should have.
+	 */
+	private static function curatedMarkup( Vocabulary $vocabulary, string $slug, array $repeat ): string {
+		foreach ( $vocabulary->curated() as $candidate ) {
+			if ( $slug !== $candidate['slug'] ) {
+				continue;
+			}
+
+			$markup = (string) $candidate['markup'];
+			if ( array() === $repeat ) {
+				return $markup;
+			}
+
+			$blocks = parse_blocks( $markup );
+			foreach ( $repeat as $child => $count ) {
+				$blocks = array_map( static fn ( array $block ): array => self::withChildCount( $block, $child, $count ), $blocks );
+			}
+
+			/** @var list<array{blockName: string|null, attrs: array<string,mixed>, innerBlocks: list<array<string,mixed>>, innerHTML: string, innerContent: array<string,mixed>}> $blocks */
+			return serialize_blocks( $blocks );
+		}
+
+		return '';
+	}
+
+	/**
+	 * Grow the children named `$child` (anywhere under `$block`) to `$count` by
+	 * repeating the last one, keeping `innerContent`'s null markers in step.
+	 *
+	 * @param array<string,mixed> $block A parsed block.
+	 * @return array<string,mixed>
+	 */
+	private static function withChildCount( array $block, string $child, int $count ): array {
+		$inner = array_map(
+			static fn ( array $candidate ): array => self::withChildCount( $candidate, $child, $count ),
+			array_values( $block['innerBlocks'] ?? array() )
+		);
+
+		$have = 0;
+		$last = null;
+		foreach ( $inner as $position => $candidate ) {
+			$candidate_name = $candidate['blockName'] ?? null;
+			if ( $child === $candidate_name ) {
+				++$have;
+				$last = $position;
+			}
+		}
+
+		if ( null !== $last && $have < $count ) {
+			$extra   = $count - $have;
+			$content = array();
+			$cursor  = 0;
+			foreach ( $block['innerContent'] ?? array() as $chunk ) {
+				$content[] = $chunk;
+				if ( null === $chunk && $cursor++ === $last ) {
+					for ( $n = 0; $n < $extra; $n++ ) {
+						$content[] = null;
+					}
+				}
+			}
+
+			array_splice( $inner, $last + 1, 0, array_fill( 0, $extra, $inner[ $last ] ) );
+			$block['innerContent'] = $content;
+		}
+
+		$block['innerBlocks'] = $inner;
+
+		return $block;
+	}
+
+	/**
+	 * Slot positions of the optional profile fields the model left out: every
+	 * slot of a field is empty. A field given in part (a button label with no
+	 * link) stays, and `checkSlot()` names what is missing.
+	 *
+	 * @param array<string,mixed> $section  The item.
+	 * @param list<string>        $paths    The slot map, in slot order.
+	 * @param list<string>        $optional The profile's optional field names.
+	 * @return list<int>
+	 */
+	private static function absentOptionalPositions( array $section, array $paths, array $optional ): array {
+		$absent = array();
+		foreach ( $optional as $field ) {
+			$positions = array();
+			foreach ( $paths as $position => $path ) {
+				if ( $field === $path || str_starts_with( $path, $field . '.' ) ) {
+					$positions[] = $position;
+				}
+			}
+
+			$empty = array() !== $positions;
+			foreach ( $positions as $position ) {
+				$empty = $empty && '' === self::slotValue( $section, $paths[ $position ], 'text' );
+			}
+			if ( $empty ) {
+				$absent = array_merge( $absent, $positions );
+			}
+		}
+
+		return $absent;
+	}
+
+	/**
+	 * Drop the blocks whose own text, link and image slots are all among
+	 * `$positions` (slot numbers in document order, as
+	 * {@see ThemePatterns::textSlots()} counts them).
+	 *
+	 * @param list<int> $positions Slot positions to drop.
+	 */
+	private static function withoutSlotBlocks( string $markup, array $positions ): string {
+		$cursor = 0;
+		$blocks = array();
+		foreach ( parse_blocks( $markup ) as $block ) {
+			$kept = self::withoutBlocksAt( $block, $positions, $cursor );
+			if ( null !== $kept ) {
+				$blocks[] = $kept;
+			}
+		}
+
+		/** @var list<array{blockName: string|null, attrs: array<string,mixed>, innerBlocks: list<array<string,mixed>>, innerHTML: string, innerContent: array<string,mixed>}> $blocks */
+		return serialize_blocks( $blocks );
+	}
+
+	/**
+	 * @param array<string,mixed> $block     One parsed block.
+	 * @param list<int>           $positions Slot positions to drop.
+	 * @param int                 $cursor    The next slot number; advanced past this block's slots.
+	 * @return array<string,mixed>|null Null when the block is dropped.
+	 */
+	private static function withoutBlocksAt( array $block, array $positions, int &$cursor ): ?array {
+		$own     = count( ThemePatterns::textSlots( implode( '', array_filter( $block['innerContent'] ?? array(), 'is_string' ) ) ) );
+		$first   = $cursor;
+		$cursor += $own;
+
+		if ( $own > 0 && array() === ( $block['innerBlocks'] ?? array() ) && array() === array_diff( range( $first, $cursor - 1 ), $positions ) ) {
+			return null;
+		}
+
+		$content = array();
+		$kept    = array();
+		$given   = array_values( $block['innerBlocks'] ?? array() );
+		$next    = 0;
+		foreach ( $block['innerContent'] ?? array() as $chunk ) {
+			if ( null !== $chunk ) {
+				$content[] = $chunk;
+				continue;
+			}
+
+			$child = $given[ $next++ ] ?? null;
+			$child = null === $child ? null : self::withoutBlocksAt( $child, $positions, $cursor );
+			if ( null !== $child ) {
+				$kept[]    = $child;
+				$content[] = null;
+			}
+		}
+
+		$block['innerBlocks']  = $kept;
+		$block['innerContent'] = $content;
+
+		return $block;
+	}
+
+	private static function unavailable( string $layout, int $index ): WP_Error {
+		return self::error(
+			'layout_unavailable',
+			sprintf(
+				/* translators: 1: section number, 2: layout name. */
+				__( 'Section %1$d: the "%2$s" layout has no pattern to build from. Write this section as `markup` instead.', 'senroflux' ),
+				$index + 1,
+				$layout
+			),
+			$index
+		);
 	}
 
 	/**
@@ -603,6 +968,12 @@ final class Layouts {
 
 			$image = is_array( $section['image'] ?? null ) ? $section['image'] : array();
 			$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+			// Only a cover that carries its own background photo takes the model's
+			// image; Ollie's `hero-light` cover has none, and a CTA cover keeps the
+			// theme's.
+			if ( '' === trim( (string) ( $attrs['url'] ?? '' ) ) || '' === trim( (string) ( $image['url'] ?? '' ) ) ) {
+				continue;
+			}
 			unset( $attrs['id'] );
 			$attrs['url']               = trim( (string) ( $image['url'] ?? '' ) );
 			$attrs['alt']               = trim( (string) ( $image['alt'] ?? '' ) );
@@ -706,16 +1077,7 @@ final class Layouts {
 		$close = '<!-- /wp:paragraph -->';
 		$last  = strrpos( $markup, $close );
 		if ( false === $first || false === $last ) {
-			return self::error(
-				'layout_unavailable',
-				sprintf(
-					/* translators: 1: section number, 2: layout name. */
-					__( 'Section %1$d: the "%2$s" layout needs a pattern the active theme does not provide. Write this section as `markup` instead.', 'senroflux' ),
-					$index + 1,
-					self::TEXT
-				),
-				$index
-			);
+			return self::unavailable( self::TEXT, $index );
 		}
 
 		$head = (string) preg_replace(
@@ -732,7 +1094,7 @@ final class Layouts {
 			)
 		);
 
-		return $head . $body . substr( $markup, $last + strlen( $close ) );
+		return PresetAdapter::adapt( $head . $body . substr( $markup, $last + strlen( $close ) ) );
 	}
 
 	private static function fieldLabel( string $path ): string {

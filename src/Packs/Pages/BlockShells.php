@@ -15,7 +15,8 @@
  *   - the same comment attributes, ignoring `metadata`, an explicit default
  *     heading level, key order, and the SLUG of a preset (spacing
  *     `var:preset|spacing|<slug>`, `fontSize`), which may vary as long as
- *     slugs the vocabulary repeats stay equal;
+ *     slugs the vocabulary repeats stay equal (a `core/cover`'s `overlayColor`
+ *     is the same kind of slug: S5 rewrites it to the theme's darkest colour);
  *   - `style.spacing.padding`/`style.spacing.margin` are OPTIONAL: pure
  *     presentation the vocabulary happens to ship, not something the block
  *     editor needs to accept the write, so a block matches whether it
@@ -357,6 +358,10 @@ final class BlockShells {
 				$attrs[ $key ] = 'var:preset|' . $preset[1] . '|' . $token;
 			} elseif ( 'fontSize' === $key && preg_match( self::SLUG, $value ) ) {
 				$attrs[ $key ] = $this->slugToken( $slugs, 'has-', $value, '-font-size' );
+			} elseif ( 'overlayColor' === $key && preg_match( self::SLUG, $value ) ) {
+				// D4 (S5): a curated cover's overlay is rewritten to the active
+				// theme's darkest palette colour, so its slug may vary too.
+				$attrs[ $key ] = $this->slugToken( $slugs, 'has-', $value, '-background-color' );
 			}
 		}
 
