@@ -145,7 +145,7 @@ class SettingsScreen {
 		$error = isset( $_GET['senroflux_brief_error'] ) ? sanitize_text_field( wp_unslash( $_GET['senroflux_brief_error'] ) ) : '';
 		if ( SiteBrief::ERROR_TOO_LONG === $error ) {
 			printf(
-				'<div class="notice notice-error"><p>%s</p></div>',
+				'<div data-senroflux-notice class="notice notice-error"><p>%s</p></div>',
 				esc_html(
 					sprintf(
 						/* translators: %d is the character cap. */
@@ -155,12 +155,12 @@ class SettingsScreen {
 				)
 			);
 		} elseif ( '' !== $error ) {
-			echo '<div class="notice notice-error"><p>' . esc_html__( 'The site brief could not be saved.', 'senroflux' ) . '</p></div>';
+			echo '<div data-senroflux-notice class="notice notice-error"><p>' . esc_html__( 'The site brief could not be saved.', 'senroflux' ) . '</p></div>';
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only flash.
 		if ( isset( $_GET['senroflux_brief_saved'] ) ) {
-			echo '<div class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'senroflux' ) . '</p></div>';
+			echo '<div data-senroflux-notice class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'senroflux' ) . '</p></div>';
 		}
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
