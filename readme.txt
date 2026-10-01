@@ -165,6 +165,15 @@ edits only; any transition to `publish`/`future`, or any edit to an
 already-public post, goes through the separate `publish-post` ability,
 which is a higher-tier, separately governed call.
 
+= Will pages use my theme's design? =
+
+On block themes, yes. SenroFlux builds each section from one of your theme's
+own patterns when one fits the content, and otherwise uses its own layouts
+with your theme's spacing and colours. It never adds colours of its own to a
+theme pattern. To use only SenroFlux's layouts, untick "Use my theme's block
+patterns" under SenroFlux → Settings. Developers can drop individual patterns
+with the `senroflux_theme_patterns` filter.
+
 = Does SenroFlux support WordPress multisite? =
 
 No. SenroFlux refuses to activate on a multisite install.
@@ -192,6 +201,16 @@ New:
   `@wordpress/scripts`); `tools.php?page=senroflux-runs` redirects there.
 * Extension API: `SENROFLUX_API_VERSION`, a reflection-enforced `@api`
   surface for third-party packs (see "Extension API" above).
+* Pages follow your theme. Each page layout (hero, text, text with image,
+  services, FAQ, call to action) is built from the active theme's own
+  block patterns where one fits, filled with the run's copy. Twenty
+  Twenty-Five and Ollie have built-in mappings; other block themes are
+  matched automatically, and anything that doesn't fit falls back to
+  SenroFlux's own layouts, using the theme's spacing and colours.
+* Section tone: a section can sit on a contrast or accent band taken from
+  the theme palette, only where the text keeps WCAG AA contrast.
+* A Settings checkbox, "Use my theme's block patterns", to build every page
+  from SenroFlux's own layouts instead.
 
 **Breaking changes from 0.2:**
 

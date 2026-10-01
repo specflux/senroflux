@@ -174,6 +174,8 @@ accepts `allow`: the tool surface for HTTP-started runs comes entirely from the
 | `senroflux_packs` | Yes | Registers packs beyond the bundled pages pack. |
 | `senroflux_model_gateway` | No | Swap the model seam (testing/hosting edge cases). |
 | `senroflux_language_name` | No | `(array $names)` - display names used when telling the model the conversation/content locale. |
+| `senroflux_theme_patterns` | No | `(array $eligible)` - the active theme's patterns the pages pack may build from, applied last. It can only remove: an entry not already eligible is ignored, and a non-array return leaves the list unchanged. The `senroflux_use_theme_patterns` option (Settings checkbox) empties the list before this runs. |
+| `senroflux_layout_profiles` | No | `(array $profiles)` - layout profiles keyed by theme slug: which pattern builds each layout on that theme. Twenty Twenty-Five and Ollie ship built in; a theme without one is matched automatically or falls back to the curated layouts. |
 
 ## Extension API
 
