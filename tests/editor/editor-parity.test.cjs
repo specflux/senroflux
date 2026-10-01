@@ -138,6 +138,20 @@ test( 'a filled Ollie pattern opens in the editor without recovery', () => {
 	assert.deepEqual( invalidBlocks( fixtures.ollie ), [] );
 } );
 
+// D1 amendment (S5b): an Ollie pattern adapted by all three bounded changes at
+// once (emoji paragraphs dropped, four cards trimmed to three, the layout's
+// heading inserted first) must open in the editor without recovery.
+test( 'an adapted Ollie section (dropped, trimmed, heading inserted) opens in the editor without recovery', () => {
+	assert.ok( fixtures.adapted.includes( 'senroflux/ollie/features-with-emojis' ) );
+	assert.equal( ( fixtures.adapted.match( /<h3/g ) || [] ).length, 3, 'four cards trimmed to three' );
+	assert.ok( ! /😍|😎|🤓|🤣/u.test( fixtures.adapted ), 'the emoji paragraphs are dropped' );
+	assert.ok(
+		fixtures.adapted.indexOf( '<h2' ) < fixtures.adapted.indexOf( '<h3' ),
+		'the inserted heading comes first'
+	);
+	assert.deepEqual( invalidBlocks( fixtures.adapted ), [] );
+} );
+
 // Negative control: the check must be able to fail. Removing a colour from the
 // block comment while the HTML keeps its inline style — what the old step-5
 // strip did — has to be flagged.

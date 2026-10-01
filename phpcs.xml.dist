@@ -19,6 +19,14 @@
     -->
     <exclude-pattern>tests/e2e/fake-provider/*</exclude-pattern>
 
+    <!--
+        S5b: tests/ThemePatterns/spectra-one/* are verbatim copies of Spectra
+        One's own pattern files (GPL, same as this plugin). Their PHP preamble
+        (short arrays, unprefixed globals) is the theme's code, kept as
+        shipped so the fixtures stay real theme markup.
+    -->
+    <exclude-pattern>tests/ThemePatterns/spectra-one/*</exclude-pattern>
+
     <arg name="colors"/>
     <arg name="extensions" value="php"/>
     <arg value="ps"/>

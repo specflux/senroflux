@@ -507,15 +507,28 @@ final class LayoutsTest extends TestCase {
 		$this->assertStringContainsString( 'Fake hero heading', $built );
 	}
 
-	public function test_a_theme_with_no_profile_gets_the_curated_fallback(): void {
+	public function test_a_theme_with_no_profile_maps_its_patterns_automatically(): void {
 		self::contributeFakeProfile();
 		$GLOBALS['senroflux_test_stylesheet'] = 'unprofiled-theme';
+
+		// D1 step 2 (S5b): no profile, so the theme's own patterns are matched to the layout by category and slot fit.
+		$built = Layouts::render( self::outline()[0], 0, new Vocabulary() );
+
+		$this->assertIsString( $built, $built instanceof WP_Error ? $built->get_error_message() : '' );
+		$this->assertSame( 'senroflux/twentytwentyfive/hero-full-width-image', parse_blocks( $built )[0]['attrs']['metadata']['name'] ?? '' );
+		$this->assertSame( array( 'hero', 'text-with-image', 'services', 'faq', 'cta', 'text' ), Layouts::names() );
+	}
+
+	public function test_a_theme_with_no_profile_and_no_matching_pattern_gets_the_curated_fallback(): void {
+		self::contributeFakeProfile();
+		$GLOBALS['senroflux_test_stylesheet']     = 'unprofiled-theme';
+		$GLOBALS['senroflux_test_theme_patterns'] = array();
+		ThemePatterns::resetCache();
 
 		$built = Layouts::render( self::outline()[0], 0, new Vocabulary() );
 
 		$this->assertIsString( $built, $built instanceof WP_Error ? $built->get_error_message() : '' );
 		$this->assertSame( 'senroflux/cover-hero', parse_blocks( $built )[0]['attrs']['metadata']['name'] ?? '' );
-		$this->assertSame( array( 'hero', 'text-with-image', 'services', 'faq', 'cta', 'text' ), Layouts::names() );
 	}
 
 	public function test_a_child_theme_falls_back_to_its_parents_profile(): void {

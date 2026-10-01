@@ -106,6 +106,13 @@ if ( ! function_exists( 'esc_attr_x' ) ) {
 	}
 }
 
+if ( ! function_exists( 'trailingslashit' ) ) {
+	// Spectra One's pattern files build their image URLs with it.
+	function trailingslashit( string $value ): string {
+		return rtrim( $value, '/\\' ) . '/';
+	}
+}
+
 if ( ! function_exists( 'get_template_directory_uri' ) ) {
 	function get_template_directory_uri(): string {
 		return 'https://example.test/wp-content/themes/twentytwentyfive';

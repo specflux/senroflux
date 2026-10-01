@@ -696,18 +696,7 @@ class Validator implements ContentValidator {
 	 * @return array<string,mixed>|null
 	 */
 	private function expectedTreeForBlock( array $block ): ?array {
-		$slug = $this->matchPatternSchema( $block );
-		if ( null === $slug ) {
-			return null;
-		}
-
-		foreach ( $this->vocabulary->all() as $pattern ) {
-			if ( $slug === (string) $pattern['slug'] ) {
-				return $this->expectedTree( $pattern );
-			}
-		}
-
-		return null;
+		return $this->matchPattern( $block )['tree'] ?? null;
 	}
 
 	/**
@@ -1024,28 +1013,11 @@ class Validator implements ContentValidator {
 	 * @param array<string,mixed> $block One parsed block.
 	 */
 	private function localSignature( array $block ): string {
-		$name  = (string) ( $block['blockName'] ?? '' );
-		$attrs = $block['attrs'] ?? array();
-		$parts = array();
-
-		if ( isset( $attrs['align'] ) && is_string( $attrs['align'] ) && '' !== $attrs['align'] ) {
-			$parts[] = 'align=' . $attrs['align'];
-		}
-
-		// `{"layout":{"type":"default"}}` IS the absent-layout default.
-		if ( isset( $attrs['layout']['type'] ) && is_string( $attrs['layout']['type'] ) && 'default' !== $attrs['layout']['type'] ) {
-			$parts[] = 'layout=' . $attrs['layout']['type'];
-		}
-
-		// A heading with no `level` IS an h2; spell the effective value out so
-		// `{"level":2}` and no attribute at all cannot diverge.
-		if ( 'core/heading' === $name ) {
-			$level   = isset( $attrs['level'] ) && is_numeric( $attrs['level'] ) ? (int) $attrs['level'] : 2;
-			$parts[] = 'level=' . $level;
-		}
-
-		return array() === $parts ? $name : $name . '[' . implode( ',', $parts ) . ']';
+		return ThemeAdaptation::signature( $block );
 	}
+
+	/** Steps {@see alignAdapted()} may take over one block before it gives up. */
+	private const ADAPT_BUDGET = 4000;
 
 	/**
 	 * The expected structural tree for a pattern's TOP-level block, cached.
@@ -1063,6 +1035,18 @@ class Validator implements ContentValidator {
 	 * @param array<string,mixed> $block One parsed block.
 	 */
 	private function matchPatternSchema( array $block ): ?string {
+		return $this->matchPattern( $block )['slug'] ?? null;
+	}
+
+	/**
+	 * {@see matchPatternSchema()} with the shipped tree reshaped to the
+	 * block's own children, so a colour attribute can be compared with the
+	 * shipped block it sits at ({@see checkDecorativeColor()}).
+	 *
+	 * @param array<string,mixed> $block One parsed block.
+	 * @return array{slug:string, tree:array<string,mixed>}|null
+	 */
+	private function matchPattern( array $block ): ?array {
 		$claimed  = (string) ( $block['attrs']['metadata']['name'] ?? '' );
 		$patterns = $this->vocabulary->all();
 		usort(
@@ -1083,13 +1067,145 @@ class Validator implements ContentValidator {
 			// ships an h1 itself (Ollie's heroes) matches as written.
 			$candidates = empty( $pattern['theme_derived'] ) ? array( $block ) : array( $block, $this->h1AsH2( $block ) );
 			foreach ( $candidates as $candidate ) {
-				if ( $this->matchesShape( $candidate, $expected, $repeatable ) ) {
-					return (string) $pattern['slug'];
+				if ( ! empty( $pattern['adapt'] ) ) {
+					$budget  = self::ADAPT_BUDGET;
+					$aligned = $this->alignAdapted( $candidate, $expected, true, $budget );
+					if ( null !== $aligned ) {
+						return array(
+							'slug' => (string) $pattern['slug'],
+							'tree' => $aligned,
+						);
+					}
+				} elseif ( $this->matchesShape( $candidate, $expected, $repeatable ) ) {
+					return array(
+						'slug' => (string) $pattern['slug'],
+						'tree' => $expected,
+					);
 				}
 			}
 		}
 
 		return null;
+	}
+
+	/**
+	 * Recognise a candidate as the shipped tree with the three adaptations of
+	 * {@see ThemeAdaptation} and nothing else: any block that holds slots may be
+	 * dropped, a repeated item group may be cloned or trimmed, and a heading
+	 * block may head the section when the pattern has none. Returns the shipped
+	 * tree reshaped to mirror the candidate (each candidate child paired with
+	 * the shipped block it came from), or null when it is anything else: an
+	 * added block, a reordered one, one moved to another container.
+	 *
+	 * @param array<string,mixed> $candidate The parsed block being validated.
+	 * @param array<string,mixed> $expected  The shipped pattern's block.
+	 * @param bool                $top       Whether this is the pattern's top-level block.
+	 * @param int                 $budget    Alignment steps left, so a hostile tree cannot run long.
+	 * @return array<string,mixed>|null
+	 */
+	private function alignAdapted( array $candidate, array $expected, bool $top, int &$budget ): ?array {
+		if ( ThemeAdaptation::signature( $candidate ) !== ThemeAdaptation::signature( $expected ) ) {
+			return null;
+		}
+
+		$actual = array_values( $candidate['innerBlocks'] ?? array() );
+		$wanted = array_values( $expected['innerBlocks'] ?? array() );
+		/** @var list<array<string,mixed>> $actual */
+		/** @var list<array<string,mixed>> $wanted */
+
+		if ( array() === $wanted ) {
+			return array() === $actual ? $expected : null;
+		}
+		// A container that lost every child is dropped with them, never left empty,
+		// unless it holds a slot itself (a cover's photo) and every child it
+		// lost was one that may be dropped.
+		if ( array() === $actual ) {
+			if ( array() === ThemeAdaptation::ownSlots( $expected ) ) {
+				return null;
+			}
+			foreach ( $wanted as $model ) {
+				if ( ! ThemeAdaptation::droppable( $model ) ) {
+					return null;
+				}
+			}
+			$expected['innerBlocks'] = array();
+
+			return $expected;
+		}
+
+		$kids = $this->alignChildren( $actual, $wanted, 0, 0, $budget );
+		if ( null === $kids && $top && ! ThemeAdaptation::hasHeadingOutsideRuns( $expected ) ) {
+			$first = $actual[0];
+			$level = isset( $first['attrs']['level'] ) && is_numeric( $first['attrs']['level'] ) ? (int) $first['attrs']['level'] : 2;
+			if ( 'core/heading' === ( $first['blockName'] ?? null ) && array() === ( $first['innerBlocks'] ?? array() ) && $level <= 2 ) {
+				$rest = $this->alignChildren( array_slice( $actual, 1 ), $wanted, 0, 0, $budget );
+				if ( null !== $rest ) {
+					$stub = array(
+						'blockName'    => 'core/heading',
+						'attrs'        => array( 'level' => $level ),
+						'innerBlocks'  => array(),
+						'innerHTML'    => '',
+						'innerContent' => array(),
+					);
+					$kids = array_merge( array( $stub ), $rest );
+				}
+			}
+		}
+		if ( null === $kids ) {
+			return null;
+		}
+
+		$expected['innerBlocks'] = $kids;
+
+		return $expected;
+	}
+
+	/**
+	 * Align the candidate's children `$actual[$i..]` with the shipped ones
+	 * `$wanted[$j..]`, in order: each shipped child is matched, or skipped when
+	 * it may be dropped; the last of a run of identical shipped children may
+	 * also be matched again and again (a cloned item).
+	 *
+	 * @param list<array<string,mixed>> $actual Candidate children.
+	 * @param list<array<string,mixed>> $wanted Shipped children.
+	 * @return list<array<string,mixed>>|null The shipped block paired with each candidate child.
+	 */
+	private function alignChildren( array $actual, array $wanted, int $i, int $j, int &$budget ): ?array {
+		if ( --$budget < 0 ) {
+			return null;
+		}
+
+		$have = count( $actual );
+		if ( $j >= count( $wanted ) ) {
+			return $i >= $have ? array() : null;
+		}
+
+		$model = $wanted[ $j ];
+		if ( $i < $have ) {
+			$node = $this->alignAdapted( $actual[ $i ], $model, false, $budget );
+			if ( null !== $node ) {
+				$last_of_run = $j > 0 && 1 === ThemeAdaptation::runLength( $wanted, $j ) && ThemeAdaptation::sameShape( $wanted[ $j - 1 ], $model );
+				$extra       = array();
+				if ( $last_of_run ) {
+					// Clones of the last item, as many as follow it.
+					for ( $at = $i + 1; $at < $have && $at <= $i + ThemeAdaptation::MAX_ITEMS; $at++ ) {
+						$copy = $this->alignAdapted( $actual[ $at ], $model, false, $budget );
+						if ( null === $copy ) {
+							break;
+						}
+						$extra[] = $copy;
+					}
+				}
+				for ( $take = count( $extra ); $take >= 0; $take-- ) {
+					$rest = $this->alignChildren( $actual, $wanted, $i + 1 + $take, $j + 1, $budget );
+					if ( null !== $rest ) {
+						return array_merge( array( $node ), array_slice( $extra, 0, $take ), $rest );
+					}
+				}
+			}
+		}
+
+		return ThemeAdaptation::droppable( $model ) ? $this->alignChildren( $actual, $wanted, $i, $j + 1, $budget ) : null;
 	}
 
 	/**

@@ -145,6 +145,21 @@ final class ThemePatterns {
 			}
 		}
 
+		// D1 step 2 (S5b): on a theme with no profile, the patterns automatic
+		// matching picks for a layout also play its page role and are adapted.
+		if ( array() === Layouts::profile() ) {
+			foreach ( Layouts::autoPicks( $eligible ) as $name => $layouts ) {
+				foreach ( $eligible as $position => $entry ) {
+					if ( $name !== $entry['name'] ) {
+						continue;
+					}
+					$eligible[ $position ]['auto_layouts'] = $layouts;
+					$eligible[ $position ]['is_hero']      = $entry['is_hero'] || in_array( 'hero', $layouts, true );
+					$eligible[ $position ]['is_cta']       = $entry['is_cta'] || in_array( 'cta', $layouts, true );
+				}
+			}
+		}
+
 		self::$memo = array(
 			'eligible' => $eligible,
 			'skipped'  => $skipped,
@@ -499,6 +514,7 @@ final class ThemePatterns {
 				'slots'  => array(),
 				'stated' => self::statedLines( $slots ),
 			),
+			'categories'    => $categories,
 			'theme_derived' => true,
 			// 0.3 quality fix: a pattern counts as a hero/cta for the page-shape
 			// rules only when the theme dedicates it to EXACTLY that one role.

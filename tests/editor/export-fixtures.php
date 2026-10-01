@@ -172,6 +172,45 @@ if ( ! $senroflux_ollie_page['ok'] ) {
 	throw new RuntimeException( 'The Ollie pattern page was refused: ' . esc_html( (string) $senroflux_ollie_page['wp_error']?->get_error_code() ) );
 }
 
+// D1 amendment (S5b): a real Ollie pattern (`features-with-emojis`) adapted by
+// the layouts path with all three bounded changes at once (each card's emoji
+// paragraph dropped, four cards trimmed to three, the layout's heading
+// inserted at the top), then cleaned by the Validator, must open in the
+// editor without recovery.
+$senroflux_adapted_path = dirname( __DIR__ ) . '/ThemePatterns/ollie/features-with-emojis.php';
+ob_start();
+require $senroflux_adapted_path;
+$senroflux_adapted_content = trim( (string) ob_get_clean() );
+
+$GLOBALS['senroflux_test_theme_patterns'] = array(
+	array(
+		'name'        => 'ollie/features-with-emojis',
+		'title'       => 'Features With Emojis',
+		'description' => '',
+		'content'     => $senroflux_adapted_content,
+		'filePath'    => $senroflux_adapted_path,
+		'categories'  => array( 'ollie/features' ),
+	),
+);
+$GLOBALS['senroflux_test_stylesheet']     = 'ollie';
+ThemePatterns::resetCache();
+
+$senroflux_adapted_section = LayoutsTest::outline()[2];
+foreach ( array_keys( $senroflux_adapted_section['items'] ) as $senroflux_adapted_key ) {
+	unset( $senroflux_adapted_section['items'][ $senroflux_adapted_key ]['image'] );
+}
+$senroflux_adapted_vocabulary = new Vocabulary();
+$senroflux_adapted_built      = Layouts::render( $senroflux_adapted_section, 0, $senroflux_adapted_vocabulary );
+if ( ! is_string( $senroflux_adapted_built ) ) {
+	throw new RuntimeException( 'The adapted Ollie section was refused: ' . esc_html( $senroflux_adapted_built->get_error_message() ) );
+}
+$senroflux_adapted_page = ( new Validator( $senroflux_adapted_vocabulary ) )->clean(
+	$senroflux_patterns['hero'] . "\n\n" . $senroflux_adapted_built
+);
+if ( ! $senroflux_adapted_page['ok'] ) {
+	throw new RuntimeException( 'The adapted Ollie page was refused: ' . esc_html( (string) $senroflux_adapted_page['wp_error']?->get_error_code() ) );
+}
+
 echo wp_json_encode(
 	array(
 		'patterns' => $senroflux_patterns,
@@ -179,5 +218,6 @@ echo wp_json_encode(
 		'layouts'  => $senroflux_layouts['content'],
 		'toned'    => $senroflux_toned['content'],
 		'ollie'    => $senroflux_ollie_page['content'],
+		'adapted'  => $senroflux_adapted_page['content'],
 	)
 );

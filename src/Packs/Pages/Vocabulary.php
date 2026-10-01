@@ -179,6 +179,10 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * @return array<string,mixed>
 	 */
 	private static function withProfileRepeatables( array $pattern ): array {
+		// S5b: a pattern a layout is built from by choice or automatic match is
+		// recognised as its shipped tree with the three adaptations.
+		$pattern['adapt'] = Layouts::adaptsPattern( $pattern );
+
 		$blocks = Layouts::repeatableBlocks( (string) ( $pattern['name'] ?? '' ) );
 		if ( array() === $blocks ) {
 			return $pattern;

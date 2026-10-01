@@ -39,7 +39,7 @@ final class Layouts {
 	 * the block that holds each one is then dropped from the pattern, so no
 	 * sample text stays on the page.
 	 *
-	 * @var array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 * @var array<string, array{pattern:string, slots?:list<string>, limits?:array<string,int>, optional?:list<string>}>
 	 */
 	private const TWENTY_TWENTY_FIVE = array(
 		'hero'            => array(
@@ -97,44 +97,103 @@ final class Layouts {
 	);
 
 	/**
-	 * The Ollie layout profile (S5). Ollie files its heroes and CTAs with an
-	 * eyebrow paragraph before the heading and two buttons, so the profile maps
-	 * those as `eyebrow`, `button` and `button2`. `hero-light` is the one hero
-	 * with a single trailing image and a plain cover; `text-call-to-action-buttons`
-	 * is its CTA with the same eyebrow and two buttons. (`text-call-to-action`, the
-	 * one that already fits heading, text and one button, paints its photo with an
-	 * inline `background-image:url()` that the validator refuses.) Ollie has no
-	 * pattern that fits `text-with-image`, `services` or `faq` without an extra
-	 * image, card or button the model's fields can't fill, so those three use the
-	 * curated fallback.
+	 * The Ollie layout profile (S5, S5b): a pattern choice per layout, from
+	 * Ollie's own patterns. Which field fills which slot comes from the pattern
+	 * itself ({@see ThemeAdaptation}), so an Ollie hero's eyebrow and second
+	 * button, a card's emoji, a trailing "Still have questions?" bar and the
+	 * pattern's own item count all adapt to the model's fields.
 	 *
-	 * @var array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 *   - `hero`: `hero-light`, the hero with one trailing image and a plain
+	 *     cover; its eyebrow and second button are optional fields.
+	 *   - `text-with-image`: `hero-text-image-and-logos`, a centred heading and
+	 *     paragraph over one wide rounded photo; its eyebrow, buttons and the
+	 *     cover's empty caption paragraph are dropped.
+	 *   - `services`: `features-with-emojis`, four cards (an emoji, a title, a
+	 *     text) in a grid under no heading; the emoji is dropped, the cards are
+	 *     trimmed to the item count and the layout's heading is inserted.
+	 *   - `faq`: `faq`, an eyebrow, a heading and four question and answer
+	 *     groups in two columns; the eyebrow, the subtitle and the closing
+	 *     "Still have questions?" bar are dropped, the groups cloned or trimmed.
+	 *   - `cta`: `text-call-to-action-buttons`, the CTA with the same eyebrow
+	 *     and two buttons as the hero. (`text-call-to-action`, the one that
+	 *     already fits heading, text and one button, paints its photo with an
+	 *     inline `background-image:url()` that the validator refuses.)
+	 *
+	 * @var array<string, array{pattern:string}>
 	 */
 	private const OLLIE = array(
-		'hero' => array(
-			'pattern'  => 'ollie/hero-light',
-			'slots'    => array( 'eyebrow', 'heading', 'text', 'button.label', 'button.url', 'button2.label', 'button2.url', 'image' ),
-			'limits'   => array(
-				'eyebrow' => 4,
-				'text'    => 40,
-			),
-			'optional' => array( 'eyebrow', 'button2' ),
-		),
-		'cta'  => array(
-			'pattern'  => 'ollie/text-call-to-action-buttons',
-			'slots'    => array( 'eyebrow', 'heading', 'text', 'button.label', 'button.url', 'button2.label', 'button2.url' ),
-			'limits'   => array(
-				'eyebrow' => 4,
-				'text'    => 40,
-			),
-			'optional' => array( 'eyebrow', 'button2' ),
-		),
+		'hero'            => array( 'pattern' => 'ollie/hero-light' ),
+		'text-with-image' => array( 'pattern' => 'ollie/image-and-text-card' ),
+		'services'        => array( 'pattern' => 'ollie/features-with-emojis' ),
+		'faq'             => array( 'pattern' => 'ollie/faq' ),
+		'cta'             => array( 'pattern' => 'ollie/text-call-to-action-buttons' ),
 	);
 
 	/** The block that holds each optional profile field. */
 	private const OPTIONAL_BLOCKS = array(
 		'eyebrow' => 'core/paragraph',
 		'button2' => 'core/button',
+	);
+
+	/**
+	 * The field limits of a dynamically mapped layout (S5b): the ceilings the
+	 * model's contract states, since a pattern's own sample text (an inserted
+	 * heading has none) says nothing about how long a field may be.
+	 *
+	 * @var array<string, array<string,int>>
+	 */
+	private const LAYOUT_LIMITS = array(
+		'hero'            => array(
+			'eyebrow' => 4,
+			'heading' => 5,
+			'text'    => 40,
+		),
+		'text-with-image' => array(
+			'heading' => 5,
+			'text'    => 119,
+		),
+		'services'        => array(
+			'heading' => 8,
+			'title'   => 6,
+			'text'    => 60,
+		),
+		'faq'             => array(
+			'heading'  => 5,
+			'question' => 12,
+			'answer'   => 60,
+		),
+		'cta'             => array(
+			'eyebrow' => 4,
+			'heading' => 5,
+			'text'    => 40,
+		),
+	);
+
+	/**
+	 * How many items an adapted pattern's repeated group is cloned or trimmed
+	 * to: services cards and faq pairs. A count outside the range is built
+	 * from the curated pattern, which states its own.
+	 *
+	 * @var array<string, array{int,int}>
+	 */
+	private const ITEM_RANGES = array(
+		'services' => array( 2, 3 ),
+		'faq'      => array( 2, ThemeAdaptation::MAX_ITEMS ),
+	);
+
+	/**
+	 * D1 step 2: the categories, compared by the part after the last `/`, a
+	 * theme pattern may be filed under to be matched to a layout without a
+	 * profile.
+	 *
+	 * @var array<string, list<string>>
+	 */
+	private const AUTO_CATEGORIES = array(
+		'hero'            => array( 'banner', 'hero', 'featured' ),
+		'text-with-image' => array( 'text', 'about', 'features', 'featured' ),
+		'services'        => array( 'services', 'featured', 'features', 'card' ),
+		'faq'             => array( 'text', 'faq' ),
+		'cta'             => array( 'call-to-action' ),
 	);
 
 	/** Layout names, whatever the theme: the schema enum never varies with it. */
@@ -196,7 +255,7 @@ final class Layouts {
 	 * the parent theme's, else none. A layout the profile doesn't map, or whose
 	 * pattern the theme doesn't offer, is built from the curated pattern.
 	 *
-	 * @return array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 * @return array<string, array{pattern:string, slots?:list<string>, limits?:array<string,int>, optional?:list<string>}>
 	 */
 	public static function profile(): array {
 		$profiles = array(
@@ -207,7 +266,7 @@ final class Layouts {
 			/**
 			 * Layout profiles keyed by theme slug. `@internal`.
 			 *
-			 * @param array<string, array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>> $profiles Profiles.
+			 * @param array<string, array<string, array{pattern:string, slots?:list<string>, limits?:array<string,int>, optional?:list<string>}>> $profiles Profiles.
 			 */
 			$profiles = apply_filters( 'senroflux_layout_profiles', $profiles );
 		}
@@ -282,53 +341,45 @@ final class Layouts {
 			);
 		}
 
-		$map     = self::profile()[ $layout ] ?? null;
-		$pattern = null !== $map ? $vocabulary->resolveThemePattern( $map['pattern'] ) : null;
-		$markup  = null !== $pattern ? (string) $pattern['markup'] : '';
-		$slots   = null !== $pattern ? ThemePatterns::textSlots( $markup ) : array();
-		$curated = null === $map || null === $pattern || count( $slots ) !== count( $map['slots'] );
-		if ( $curated ) {
-			// D1 step 3: the theme has no pattern for this layout, so SenroFlux's
-			// own pattern is filled from the same fields.
-			$plan   = self::curatedPlan( $layout, $section );
-			$map    = $plan['map'];
-			$name   = $plan['pattern'];
-			$markup = self::curatedMarkup( $vocabulary, $name, $plan['repeat'] );
-			if ( '' === $markup ) {
-				return self::unavailable( $layout, $index );
-			}
-			$slots = ThemePatterns::textSlots( $markup );
-		} else {
-			$name = (string) $map['pattern'];
+		$source = self::source( $layout, $section, $index, $vocabulary );
+		if ( $source instanceof WP_Error ) {
+			return $source;
 		}
 
-		$items_error = self::checkItemCount( $section, $map['slots'], $layout, $index );
-		if ( null !== $items_error ) {
-			return $items_error;
-		}
-
-		$paths = $map['slots'];
-		if ( 'services' === $layout && ! $curated ) {
-			$photos = self::servicesImagePlan( $section, $index );
-			if ( $photos instanceof WP_Error ) {
-				return $photos;
+		$name    = $source['name'];
+		$markup  = $source['markup'];
+		$map     = $source['map'];
+		$curated = $source['curated'];
+		$slots   = ThemePatterns::textSlots( $markup );
+		$paths   = $map['slots'];
+		if ( ! $source['adapted'] ) {
+			$items_error = self::checkItemCount( $section, $map['slots'], $layout, $index );
+			if ( null !== $items_error ) {
+				return $items_error;
 			}
-			if ( $photos ) {
-				// 0.3 quality fix (images budget 0): nobody gave a card photo,
-				// so the pattern's own `core/image` blocks are dropped rather
-				// than refused — there is rarely a third distinct, relevant
-				// CC0 photo for every industry.
-				$markup = self::stripImageBlocks( $markup );
-				$paths  = array_values( array_filter( $paths, static fn ( string $p ): bool => ! str_ends_with( $p, '.image' ) ) );
+
+			if ( 'services' === $layout && ! $curated ) {
+				$photos = self::servicesImagePlan( $section, $index );
+				if ( $photos instanceof WP_Error ) {
+					return $photos;
+				}
+				if ( $photos ) {
+					// 0.3 quality fix (images budget 0): nobody gave a card photo,
+					// so the pattern's own `core/image` blocks are dropped rather
+					// than refused — there is rarely a third distinct, relevant
+					// CC0 photo for every industry.
+					$markup = self::stripImageBlocks( $markup );
+					$paths  = array_values( array_filter( $paths, static fn ( string $p ): bool => ! str_ends_with( $p, '.image' ) ) );
+					$slots  = ThemePatterns::textSlots( $markup );
+				}
+			}
+
+			$absent = self::absentOptionalPositions( $section, $paths, $map['optional'] ?? array() );
+			if ( array() !== $absent ) {
+				$markup = self::withoutSlotBlocks( $markup, $absent );
+				$paths  = array_values( array_diff_key( $paths, array_flip( $absent ) ) );
 				$slots  = ThemePatterns::textSlots( $markup );
 			}
-		}
-
-		$absent = self::absentOptionalPositions( $section, $paths, $map['optional'] ?? array() );
-		if ( array() !== $absent ) {
-			$markup = self::withoutSlotBlocks( $markup, $absent );
-			$paths  = array_values( array_diff_key( $paths, array_flip( $absent ) ) );
-			$slots  = ThemePatterns::textSlots( $markup );
 		}
 
 		$values = array();
@@ -374,9 +425,72 @@ final class Layouts {
 	}
 
 	/**
+	 * Where a layout's section is built from (D1): the active profile's explicit
+	 * slot map, else a theme pattern adapted to the fields (the profile's choice,
+	 * or on a theme with no profile an automatic match), else SenroFlux's own
+	 * curated pattern.
+	 *
+	 * @param array<string,mixed> $section The item.
+	 * @return array{name:string, markup:string, map:array{slots:list<string>, limits?:array<string,int>, optional?:list<string>}, curated:bool, adapted:bool}|WP_Error
+	 */
+	private static function source( string $layout, array $section, int $index, Vocabulary $vocabulary ): array|WP_Error {
+		$profile = self::profile();
+		$map     = $profile[ $layout ] ?? null;
+
+		if ( is_array( $map ) && isset( $map['slots'] ) ) {
+			// An explicit slot map: the pattern is filled slot for slot as written.
+			$pattern = $vocabulary->resolveThemePattern( $map['pattern'] );
+			if ( null !== $pattern && count( ThemePatterns::textSlots( (string) $pattern['markup'] ) ) === count( $map['slots'] ) ) {
+				return array(
+					'name'    => $map['pattern'],
+					'markup'  => (string) $pattern['markup'],
+					'map'     => $map,
+					'curated' => false,
+					'adapted' => false,
+				);
+			}
+		} else {
+			// A pattern choice only (or no profile at all): the pattern is adapted
+			// to the fields, which are then mapped onto its slots by kind and order.
+			$planned = self::adaptedPlan( $layout, $section, $index, $vocabulary, is_array( $map ) ? ( $map['pattern'] ?? null ) : null, array() === $profile );
+			if ( $planned instanceof WP_Error ) {
+				return $planned;
+			}
+			if ( null !== $planned ) {
+				return array(
+					'name'    => $planned['name'],
+					'markup'  => $planned['markup'],
+					'map'     => array(
+						'slots'  => $planned['paths'],
+						'limits' => self::LAYOUT_LIMITS[ $layout ],
+					),
+					'curated' => false,
+					'adapted' => true,
+				);
+			}
+		}
+
+		// D1 step 3: the theme has no pattern for this layout, so SenroFlux's
+		// own pattern is filled from the same fields.
+		$plan   = self::curatedPlan( $layout, $section );
+		$markup = self::curatedMarkup( $vocabulary, $plan['pattern'], $plan['repeat'] );
+		if ( '' === $markup ) {
+			return self::unavailable( $layout, $index );
+		}
+
+		return array(
+			'name'    => $plan['pattern'],
+			'markup'  => $markup,
+			'map'     => $plan['map'],
+			'curated' => true,
+			'adapted' => false,
+		);
+	}
+
+	/**
 	 * The profile entries that name `$pattern`, as `layout => entry`.
 	 *
-	 * @return array<string, array{pattern:string, slots:list<string>, limits?:array<string,int>, optional?:list<string>}>
+	 * @return array<string, array{pattern:string, slots?:list<string>, limits?:array<string,int>, optional?:list<string>}>
 	 */
 	private static function profileEntriesFor( string $pattern ): array {
 		return array_filter( self::profile(), static fn ( $map ): bool => is_array( $map ) && ( $map['pattern'] ?? null ) === $pattern );
@@ -410,6 +524,9 @@ final class Layouts {
 	public static function repeatableBlocks( string $pattern ): array {
 		$blocks = array();
 		foreach ( self::profileEntriesFor( $pattern ) as $layout => $map ) {
+			if ( ! isset( $map['slots'] ) ) {
+				continue; // A pattern choice is adapted ({@see adaptsPattern()}), not given a 0..n block.
+			}
 			if ( 'services' === $layout ) {
 				$blocks[] = 'core/image';
 			}
@@ -421,6 +538,174 @@ final class Layouts {
 		}
 
 		return array_values( array_unique( $blocks ) );
+	}
+
+	/**
+	 * Whether the Validator should recognise a theme pattern as its shipped
+	 * tree with the three adaptations ({@see ThemeAdaptation}): the active
+	 * profile builds a layout from it by pattern choice alone, or, on a theme
+	 * with no profile, automatic matching picked it for one.
+	 *
+	 * @param array<string,mixed> $pattern One theme-derived vocabulary entry.
+	 */
+	public static function adaptsPattern( array $pattern ): bool {
+		$name = (string) ( $pattern['name'] ?? '' );
+		foreach ( self::profileEntriesFor( $name ) as $map ) {
+			if ( ! isset( $map['slots'] ) ) {
+				return true;
+			}
+		}
+
+		return array() === self::profile() && array() !== ( $pattern['auto_layouts'] ?? array() );
+	}
+
+	/**
+	 * D1 step 2 for the theme's whole pattern list: which layouts each pattern
+	 * is picked for when the theme has no profile. A pattern is picked for a
+	 * layout when it is the first, in slug order, that fits a section of that
+	 * layout with and without its image; that pattern then also counts as the
+	 * page's hero or call-to-action.
+	 *
+	 * @param list<array<string,mixed>> $entries Vocabulary-shaped theme patterns.
+	 * @return array<string, list<string>> Pattern name => layout names.
+	 */
+	public static function autoPicks( array $entries ): array {
+		$picks = array();
+		foreach ( self::THEME_LAYOUTS as $layout ) {
+			// Whether the section brings an image: a hero and a services section may or
+			// may not; text with image always does; the others have no image field.
+			$variants = match ( $layout ) {
+				'hero', 'services' => array( true, false ),
+				'text-with-image'  => array( true ),
+				default            => array( false ),
+			};
+			foreach ( $variants as $images ) {
+				$found = self::autoPlan(
+					$layout,
+					$entries,
+					array(
+						'images'  => $images,
+						'items'   => 'faq' === $layout ? 4 : 3,
+						'eyebrow' => false,
+						'button2' => false,
+					)
+				);
+				if ( null !== $found && ! in_array( $layout, $picks[ $found['name'] ] ?? array(), true ) ) {
+					$picks[ $found['name'] ][] = $layout;
+				}
+			}
+		}
+
+		return $picks;
+	}
+
+	/**
+	 * The first theme pattern, in slug order, filed under one of the layout's
+	 * categories that the three adaptations fit to the fields; null when none
+	 * does. Restrictive: a pattern that would lose more than two thirds of its slots to
+	 * dropping, or must leave one of the model's images out, is not a fit.
+	 *
+	 * @param list<array<string,mixed>> $entries Vocabulary-shaped theme patterns.
+	 * @param array<string,mixed>       $options {@see ThemeAdaptation::plan()}.
+	 * @return array{name:string, markup:string, paths:list<string>}|null
+	 */
+	private static function autoPlan( string $layout, array $entries, array $options ): ?array {
+		usort( $entries, static fn ( array $a, array $b ): int => strcmp( (string) $a['name'], (string) $b['name'] ) );
+
+		foreach ( $entries as $entry ) {
+			$categories = array_map(
+				static fn ( string $category ): string => strtolower( substr( (string) strrchr( '/' . $category, '/' ), 1 ) ),
+				array_map( 'strval', (array) ( $entry['categories'] ?? array() ) )
+			);
+			if ( array() === array_intersect( $categories, self::AUTO_CATEGORIES[ $layout ] ) ) {
+				continue;
+			}
+
+			$plan = self::planFor( $layout, (string) $entry['markup'], $options + array( 'strict' => true ) );
+			if ( null !== $plan && $plan['dropped'] * 3 <= $plan['total'] * 2 ) {
+				return array(
+					'name'   => (string) $entry['name'],
+					'markup' => $plan['markup'],
+					'paths'  => $plan['paths'],
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param array<string,mixed> $options {@see ThemeAdaptation::plan()}.
+	 * @return array{markup:string, paths:list<string>, dropped:int, total:int}|null
+	 */
+	private static function planFor( string $layout, string $markup, array $options ): ?array {
+		if ( isset( self::ITEM_RANGES[ $layout ] ) ) {
+			[$min, $max] = self::ITEM_RANGES[ $layout ];
+			$items       = (int) ( $options['items'] ?? 0 );
+			if ( $items < $min || $items > $max ) {
+				return null;
+			}
+		}
+
+		return ThemeAdaptation::plan( $layout, $markup, $options );
+	}
+
+	/**
+	 * The adapted pattern for a layout (S5b): the profile's pattern choice, or
+	 * on a theme with no profile the first pattern automatic matching finds.
+	 * Null when nothing fits, which is never a refusal: the layout is then built
+	 * from the curated pattern. A profile's own pattern may leave a model's
+	 * photo unplaced (the author chose a text-only design); a matched one may not.
+	 *
+	 * @param array<string,mixed> $section The item.
+	 * @param string|null         $chosen  The profile's pattern for this layout, if any.
+	 * @param bool                $auto    Whether the theme has no profile, so patterns are matched.
+	 * @return array{name:string, markup:string, paths:list<string>}|WP_Error|null
+	 */
+	private static function adaptedPlan( string $layout, array $section, int $index, Vocabulary $vocabulary, ?string $chosen, bool $auto ): array|WP_Error|null {
+		if ( null === $chosen && ! $auto ) {
+			return null;
+		}
+
+		$mixed   = null;
+		$options = array(
+			'eyebrow' => '' !== self::slotValue( $section, 'eyebrow', 'text' ),
+			'button2' => '' !== self::slotValue( $section, 'button2.label', 'text' ) || '' !== self::slotValue( $section, 'button2.url', 'text' ),
+		);
+		if ( 'hero' === $layout ) {
+			[$url, $alt]       = explode( '||', self::slotValue( $section, 'image', 'image' ), 2 );
+			$options['images'] = '' !== $url || '' !== $alt;
+		} elseif ( 'text-with-image' === $layout ) {
+			$options['images'] = true;
+		} elseif ( 'services' === $layout || 'faq' === $layout ) {
+			$options['items'] = is_array( $section['items'] ?? null ) ? count( $section['items'] ) : 0;
+			if ( 'services' === $layout ) {
+				$photos = self::servicesImagePlan( $section, $index );
+				if ( $photos instanceof WP_Error ) {
+					$mixed  = $photos;
+					$photos = true;
+				}
+				$options['images'] = false === $photos;
+			}
+		}
+
+		if ( null !== $chosen ) {
+			$entry = $vocabulary->resolveThemePattern( $chosen );
+			$plan  = null === $entry ? null : self::planFor( $layout, (string) $entry['markup'], $options );
+			$found = null === $plan ? null : array(
+				'name'   => $chosen,
+				'markup' => $plan['markup'],
+				'paths'  => $plan['paths'],
+			);
+		} else {
+			$found = self::autoPlan( $layout, $vocabulary->themeDerived(), $options );
+		}
+
+		if ( null === $found ) {
+			return null;
+		}
+
+		return $mixed ?? $found;
 	}
 
 	/**
