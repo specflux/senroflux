@@ -53,6 +53,62 @@ if ( ! $senroflux_layouts['ok'] ) {
 	throw new RuntimeException( 'The layouts page was refused: ' . esc_html( (string) $senroflux_layouts['wp_error']?->get_error_message() ) );
 }
 
+// D3b (S6): curated sections wearing a tone (an image-less hero defaults to
+// `contrast`; the text section takes `accent`), built with Twenty
+// Twenty-Five's real palette and no theme patterns so every layout is the
+// curated one, then cleaned by the Validator like any write.
+$senroflux_theme_patterns                  = $GLOBALS['senroflux_test_theme_patterns'] ?? array();
+$GLOBALS['senroflux_test_theme_patterns']  = array();
+$GLOBALS['senroflux_test_global_settings'] = array(
+	'color' => array(
+		'palette' => array(
+			array(
+				'slug'  => 'base',
+				'color' => '#FFFFFF',
+			),
+			array(
+				'slug'  => 'contrast',
+				'color' => '#111111',
+			),
+			array(
+				'slug'  => 'accent-1',
+				'color' => '#FFEE58',
+			),
+			array(
+				'slug'  => 'accent-3',
+				'color' => '#503AA8',
+			),
+			array(
+				'slug'  => 'accent-6',
+				'color' => 'color-mix(in srgb, currentColor 20%, transparent)',
+			),
+		),
+	),
+);
+ThemePatterns::resetCache();
+$senroflux_toned_outline  = LayoutsTest::outline();
+$senroflux_toned_services = $senroflux_toned_outline[2];
+foreach ( $senroflux_toned_services['items'] as $senroflux_toned_key => $senroflux_toned_item ) {
+	unset( $senroflux_toned_services['items'][ $senroflux_toned_key ]['image'] );
+}
+$senroflux_toned_hero = $senroflux_toned_outline[0];
+unset( $senroflux_toned_hero['image'] );
+$senroflux_toned_parts = array();
+foreach ( array( $senroflux_toned_hero, array( 'tone' => 'accent' ) + $senroflux_toned_outline[1], $senroflux_toned_services, $senroflux_toned_outline[5] ) as $senroflux_toned_index => $senroflux_toned_section ) {
+	$senroflux_toned_built = Layouts::render( $senroflux_toned_section, $senroflux_toned_index, $senroflux_vocabulary );
+	if ( ! is_string( $senroflux_toned_built ) ) {
+		throw new RuntimeException( 'A toned layout was refused: ' . esc_html( $senroflux_toned_built->get_error_message() ) );
+	}
+	$senroflux_toned_parts[] = $senroflux_toned_built;
+}
+$senroflux_toned = ( new Validator( $senroflux_vocabulary ) )->clean( implode( "\n\n", $senroflux_toned_parts ) );
+if ( ! $senroflux_toned['ok'] ) {
+	throw new RuntimeException( 'The toned page was refused: ' . esc_html( $senroflux_toned['wp_error']?->get_error_message() ?? '' ) );
+}
+$GLOBALS['senroflux_test_theme_patterns'] = $senroflux_theme_patterns;
+unset( $GLOBALS['senroflux_test_global_settings'] );
+ThemePatterns::resetCache();
+
 // D3a (S4): a real Ollie pattern (`tests/ThemePatterns/ollie/numbers-stacked.php`,
 // GPL, same licence as this plugin), filled through the plugin's own fill
 // path and joined to the curated hero so `checkPageShape()`'s `hero_first`
@@ -121,6 +177,7 @@ echo wp_json_encode(
 		'patterns' => $senroflux_patterns,
 		'page'     => $senroflux_clean['content'],
 		'layouts'  => $senroflux_layouts['content'],
+		'toned'    => $senroflux_toned['content'],
 		'ollie'    => $senroflux_ollie_page['content'],
 	)
 );

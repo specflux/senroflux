@@ -312,8 +312,11 @@ class Validator implements ContentValidator {
 			return $this->refuse( $markup_error );
 		}
 
-		// Step 2c — colour attributes.
-		$color_error = $this->checkDecorativeColor( $blocks );
+		// Step 2c — colour attributes. D3b (S6): the tone pair SenroFlux itself
+		// writes on a curated group is the one colour this step lets through,
+		// here and in the step 4b shell match.
+		$judged      = array_map( fn ( array $block ): array => $this->withoutToneColors( $block ), $blocks );
+		$color_error = $this->checkDecorativeColor( $judged );
 		if ( null !== $color_error ) {
 			return $this->refuse( $color_error );
 		}
@@ -395,7 +398,7 @@ class Validator implements ContentValidator {
 		}
 
 		// Step 4b — editor parity.
-		$shell_error = $this->checkBlockShells( $blocks );
+		$shell_error = $this->checkBlockShells( $judged );
 		if ( null !== $shell_error ) {
 			return $this->refuse( $shell_error );
 		}
@@ -655,6 +658,33 @@ class Validator implements ContentValidator {
 		}
 
 		return null;
+	}
+
+	/**
+	 * D3b (S6): a top-level block without the `backgroundColor`/`textColor`
+	 * pair of a tone (and its buttons' inverse pair), when SenroFlux's own tone wrote it. That is a curated
+	 * (never theme) `core/group` wearing exactly the pair, and the four classes,
+	 * that {@see Tone::apply()} derives from the active palette. A model can't
+	 * pick the pair: any other slug, a lone attribute, the pair on a nested
+	 * block, on a cover, or beside a `style.color` stays a `decorative_color`.
+	 * A model that copied the whole pair by hand gets exactly what `tone` would
+	 * have given it, no new colour.
+	 *
+	 * @param array<string,mixed> $block One top-level parsed block.
+	 * @return array<string,mixed>
+	 */
+	private function withoutToneColors( array $block ): array {
+		if ( ! Tone::isApplied( $block ) ) {
+			return $block;
+		}
+
+		$slug    = $this->matchPatternSchema( $block );
+		$curated = array_column( $this->vocabulary->curated(), 'slug' );
+		if ( null === $slug || ! in_array( $slug, $curated, true ) ) {
+			return $block;
+		}
+
+		return Tone::withoutAppliedColors( $block );
 	}
 
 	/**

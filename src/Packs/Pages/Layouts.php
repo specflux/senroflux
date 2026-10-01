@@ -160,11 +160,11 @@ final class Layouts {
 	 */
 	public static function rulesLines(): array {
 		return array(
-			'Write a page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme design is built for you. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Write `markup` only when no layout fits.',
+			'Write a page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme design is built for you. Hero first. Give each image slot its own image, except services (all or none). Use `text` where a layout is too short. Optional `tone` (default, contrast, accent) bands a section: max 2, never adjacent. Write `markup` only when no layout fits.',
 			'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
 			'Give a visitor what they need to decide: for each service, who it is for and what happens; what happens at the first visit; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between.',
 			'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
-			'Markup patterns, if none fits: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only. Re-read every object after writing.',
+			'Markup patterns, if none fits: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta. Use at most one cta. A page is 2–8 sections. No pattern more than twice except text-section. An image belongs only in a layout\'s image slot, cover-hero or media-text (see pages/media-rules). No colour attributes except cover-hero\'s own preset overlayColor. Spacing and typography: standard preset slugs only.',
 			'A pattern is NOT a block: it is a core/group (or core/cover, or core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only these blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
 			'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. In an faq, the question is the <summary> element inside the core/details block and the answer is a core/paragraph block inside it.',
 			'To publish a page you already created, call the update ability with the id and status only; omit content entirely (omitted content means unchanged). Never resend unchanged content.',
@@ -176,7 +176,7 @@ final class Layouts {
 			// SAME verb set this pack's runProposePlan() check uses, so it
 			// cannot drift from what is actually accepted.
 			'When you propose a plan, spell each step\'s verbs exactly as the propose-plan tool\'s own verb list gives them. Creating the page as a draft is pages/create-draft; making a draft live is pages/publish. Any other word is refused as unknown_verb.',
-			'Give a block ONLY the attributes its shape names below; any other (an extra align or layout) is refused as unknown_pattern. Only hero, cover-hero and cta give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call pages/list-patterns with the pattern names.',
+			'Give a block ONLY the attributes its shape names below; any other is refused as unknown_pattern. Only hero, cover-hero and cta give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call pages/list-patterns with the pattern names.',
 			'Shapes (">" = child, "(n–m)" = how many of that child):',
 			'hero: group align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
 			'cover-hero: cover align=full > heading level 1, paragraph align=center, buttons layout=flex > button (1–2)',
@@ -250,6 +250,19 @@ final class Layouts {
 	 */
 	public static function render( array $section, int $index, Vocabulary $vocabulary, bool $images_budget_zero = false ): string|WP_Error {
 		$layout = (string) ( $section['layout'] ?? '' );
+
+		if ( array_key_exists( 'tone', $section ) && ! in_array( $section['tone'], Tone::NAMES, true ) ) {
+			return self::error(
+				'layout_field',
+				sprintf(
+					/* translators: 1: section number, 2: layout name. */
+					__( 'Section %1$d (%2$s): `tone` must be default, contrast or accent.', 'senroflux' ),
+					$index + 1,
+					$layout
+				),
+				$index
+			);
+		}
 
 		if ( self::TEXT === $layout ) {
 			return self::renderText( $section, $index, $vocabulary );
@@ -349,7 +362,15 @@ final class Layouts {
 
 		$content = self::finish( $filled['content'], $section, $name );
 
-		return $curated ? PresetAdapter::adapt( $content ) : $content;
+		if ( ! $curated ) {
+			return $content;
+		}
+
+		// D3b: only SenroFlux's own sections take a tone, and an image-less hero
+		// (the curated `hero`, not `cover-hero`) reads as a band by default.
+		$tone = is_string( $section['tone'] ?? null ) ? $section['tone'] : ( 'hero' === $name ? Tone::CONTRAST : Tone::DEFAULT );
+
+		return Tone::apply( PresetAdapter::adapt( $content ), $tone );
 	}
 
 	/**
@@ -1094,7 +1115,9 @@ final class Layouts {
 			)
 		);
 
-		return PresetAdapter::adapt( $head . $body . substr( $markup, $last + strlen( $close ) ) );
+		$tone = is_string( $section['tone'] ?? null ) ? $section['tone'] : Tone::DEFAULT;
+
+		return Tone::apply( PresetAdapter::adapt( $head . $body . substr( $markup, $last + strlen( $close ) ) ), $tone );
 	}
 
 	private static function fieldLabel( string $path ): string {

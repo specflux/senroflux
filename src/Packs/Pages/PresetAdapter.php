@@ -95,22 +95,41 @@ final class PresetAdapter {
 		return $darkest;
 	}
 
-	private static function luminance( string $color ): ?float {
+	/**
+	 * WCAG relative luminance of a hex colour (`#rgb` or `#rrggbb`), or null
+	 * for anything else.
+	 */
+	public static function luminance( string $color ): ?float {
+		$channels = self::channels( $color );
+		if ( null === $channels ) {
+			return null;
+		}
+
+		$rgb = array_map(
+			static fn ( float $value ): float => $value <= 0.03928 ? $value / 12.92 : ( ( $value + 0.055 ) / 1.055 ) ** 2.4,
+			$channels
+		);
+
+		return 0.2126 * $rgb[0] + 0.7152 * $rgb[1] + 0.0722 * $rgb[2];
+	}
+
+	/**
+	 * A hex colour's red, green and blue as 0 to 1, or null when it isn't one.
+	 *
+	 * @return array{float,float,float}|null
+	 */
+	public static function channels( string $color ): ?array {
 		if ( ! preg_match( '/^#([0-9a-f]{3}|[0-9a-f]{6})$/i', trim( $color ), $match ) ) {
 			return null;
 		}
 
 		$hex = 3 === strlen( $match[1] ) ? (string) preg_replace( '/(.)/', '$1$1', $match[1] ) : $match[1];
-		$rgb = array_map(
-			static function ( string $channel ): float {
-				$value = hexdec( $channel ) / 255;
 
-				return $value <= 0.03928 ? $value / 12.92 : ( ( $value + 0.055 ) / 1.055 ) ** 2.4;
-			},
-			str_split( $hex, 2 )
+		return array(
+			hexdec( substr( $hex, 0, 2 ) ) / 255,
+			hexdec( substr( $hex, 2, 2 ) ) / 255,
+			hexdec( substr( $hex, 4, 2 ) ) / 255,
 		);
-
-		return 0.2126 * $rgb[0] + 0.7152 * $rgb[1] + 0.0722 * $rgb[2];
 	}
 
 	/**

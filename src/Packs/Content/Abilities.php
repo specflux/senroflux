@@ -13,6 +13,7 @@ use Specflux\SenroFlux\Packs\Pages\HeroTemplate;
 use Specflux\SenroFlux\Packs\Pages\Layouts;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary as PagesVocabulary;
 use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
+use Specflux\SenroFlux\Packs\Pages\Tone;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\RunStore;
 use Specflux\SenroFlux\Run\Tracker;
@@ -1049,6 +1050,10 @@ final class Abilities {
 							),
 						),
 					),
+					'tone'       => array(
+						'type'        => 'string',
+						'description' => __( 'default, contrast or accent: the section\'s band colour, set from the theme palette. At most 2 per page, never side by side. An image-less hero is contrast unless you set it.', 'senroflux' ),
+					),
 					'markup'     => array( 'type' => 'string' ),
 					'pattern'    => array( 'type' => 'string' ),
 					'slots'      => array(
@@ -1395,6 +1400,7 @@ final class Abilities {
 			return $wall;
 		}
 
+		$sections   = Tone::withHeroDefaultYielding( $sections );
 		$vocabulary = self::currentVocabulary();
 		$parts      = array();
 		$images     = array();
@@ -1546,6 +1552,14 @@ final class Abilities {
 					'index'  => $index,
 				)
 			);
+		}
+
+		// D3b: read each section's tone back from what was built, so the image-less
+		// hero's default and a tone dropped for want of an AA pair both count as
+		// they render.
+		$tone_error = Tone::pageCheck( array_map( Tone::of( ... ), $parts ) );
+		if ( null !== $tone_error ) {
+			return $tone_error;
 		}
 
 		return implode( "\n\n", $parts );

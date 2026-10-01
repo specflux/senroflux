@@ -2130,6 +2130,74 @@ final class AbilitiesTest extends TestCase {
 		$this->assertStringContainsString( 'Sections 2 to 4', $result->get_error_message() );
 	}
 
+	/**
+	 * D3b page rule through create-post: the model's own tones may not sit side
+	 * by side or exceed two. The image-less hero's `contrast` default is
+	 * SenroFlux's choice, so it steps aside rather than cause a refusal.
+	 */
+	public function test_create_post_refuses_adjacent_and_excess_section_tones(): void {
+		require_once dirname( __DIR__, 2 ) . '/Packs/Pages/LayoutsTest.php';
+		$GLOBALS['senroflux_test_theme_patterns']  = array();
+		$GLOBALS['senroflux_test_global_settings'] = array(
+			'color' => array(
+				'palette' => array(
+					array(
+						'slug'  => 'base',
+						'color' => '#FFFFFF',
+					),
+					array(
+						'slug'  => 'contrast',
+						'color' => '#111111',
+					),
+					array(
+						'slug'  => 'accent-3',
+						'color' => '#503AA8',
+					),
+				),
+			),
+		);
+		ThemePatterns::resetCache();
+		$this->grant( 'edit_pages' );
+
+		$outline = LayoutsTest::outline();
+		$hero    = $outline[0];
+		unset( $hero['image'] );
+		$faq  = $outline[4];
+		$page = 0;
+		$call = function ( array $sections ) use ( &$page ) {
+			return $this->ability( 'senroflux/create-post' )->execute(
+				array(
+					'post_type'       => 'page',
+					'title'           => 'Home ' . ( ++$page ),
+					'sections'        => $sections,
+					'no_image_reason' => 'A text-only page for the test.',
+				)
+			);
+		};
+
+		$adjacent = $call( array( $outline[1], array( 'tone' => 'contrast' ) + $outline[1], array( 'tone' => 'contrast' ) + $faq ) );
+		$this->assertInstanceOf( WP_Error::class, $adjacent );
+		$this->assertSame( 'layout_tone_adjacent', $adjacent->get_error_code() );
+		$this->assertStringContainsString( 'Sections 2 and 3', $adjacent->get_error_message() );
+
+		$too_many = $call( array( array( 'tone' => 'accent' ) + $outline[1], $outline[1], array( 'tone' => 'accent' ) + $faq, $outline[1], array( 'tone' => 'contrast' ) + $outline[5] ) );
+		$this->assertInstanceOf( WP_Error::class, $too_many );
+		$this->assertSame( 'layout_tone_count', $too_many->get_error_code() );
+
+		$beside = $call( array( $hero, array( 'tone' => 'contrast' ) + $outline[1] ) );
+		$this->assertIsArray( $beside, $beside instanceof WP_Error ? $beside->get_error_message() : '' );
+		$this->assertSame( 1, substr_count( $GLOBALS['senroflux_test_posts'][ $beside['id'] ]->post_content, '"backgroundColor":"contrast"' ) );
+
+		$fine = $call( array( $hero, array( 'tone' => 'accent' ) + $faq ) );
+		$this->assertIsArray( $fine, $fine instanceof WP_Error ? $fine->get_error_message() : '' );
+		$stored = $GLOBALS['senroflux_test_posts'][ $fine['id'] ]->post_content;
+		$this->assertStringContainsString( '"backgroundColor":"contrast"', $stored );
+		$this->assertStringContainsString( '"backgroundColor":"accent-3"', $stored );
+
+		unset( $GLOBALS['senroflux_test_global_settings'] );
+		ThemePatterns::resetCache();
+	}
+
 	public function test_hero_image_reuse_across_pages_is_refused_naming_the_other_page(): void {
 		require_once dirname( __DIR__, 2 ) . '/Packs/Pages/LayoutsTest.php';
 		LayoutsTest::registerThemeFixtures();
