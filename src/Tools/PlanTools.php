@@ -410,16 +410,21 @@ final class PlanTools {
 			}
 
 			// S7: annotate the step with the highest tier among its verbs,
-			// through the RUN's map so the card and the fence agree.
-			$tier = 0;
+			// through the RUN's map so the card and the fence agree. The
+			// per-verb tiers ride along so the card counts only the verbs
+			// that actually park (live J4 told the approver 15, not 5).
+			$tier       = 0;
+			$verb_tiers = array();
 			foreach ( $normalized_verbs as $verb ) {
-				$tier = max( $tier, VerbTier::tierFor( $verb, $verb_map, $run_id ) );
+				$verb_tiers[ $verb ] = VerbTier::tierFor( $verb, $verb_map, $run_id );
+				$tier                = max( $tier, $verb_tiers[ $verb ] );
 			}
 
 			$normalized_steps[] = array(
-				'text'  => $text,
-				'verbs' => $normalized_verbs,
-				'tier'  => $tier,
+				'text'       => $text,
+				'verbs'      => $normalized_verbs,
+				'tier'       => $tier,
+				'verb_tiers' => $verb_tiers,
 			);
 		}
 

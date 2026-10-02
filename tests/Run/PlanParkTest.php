@@ -212,14 +212,16 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'text'  => 'Read the draft',
-					'verbs' => array( 'agsafe-smoke/read' ),
-					'tier'  => 0,
+					'text'       => 'Read the draft',
+					'verbs'      => array( 'agsafe-smoke/read' ),
+					'tier'       => 0,
+					'verb_tiers' => array( 'agsafe-smoke/read' => 0 ),
 				),
 				array(
-					'text'  => 'Publish it',
-					'verbs' => array( 'agsafe-smoke/write' ),
-					'tier'  => 1,
+					'text'       => 'Publish it',
+					'verbs'      => array( 'agsafe-smoke/write' ),
+					'tier'       => 1,
+					'verb_tiers' => array( 'agsafe-smoke/write' => 1 ),
 				),
 			),
 			$payload['steps']
@@ -231,14 +233,16 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame(
 			array(
 				array(
-					'text'  => 'Read the draft',
-					'verbs' => array( 'agsafe-smoke/read' ),
-					'tier'  => 0,
+					'text'       => 'Read the draft',
+					'verbs'      => array( 'agsafe-smoke/read' ),
+					'tier'       => 0,
+					'verb_tiers' => array( 'agsafe-smoke/read' => 0 ),
 				),
 				array(
-					'text'  => 'Publish it',
-					'verbs' => array( 'agsafe-smoke/write' ),
-					'tier'  => 1,
+					'text'       => 'Publish it',
+					'verbs'      => array( 'agsafe-smoke/write' ),
+					'tier'       => 1,
+					'verb_tiers' => array( 'agsafe-smoke/write' => 1 ),
 				),
 			),
 			$ui['steps'] ?? null
@@ -1296,6 +1300,15 @@ final class PlanParkTest extends TestCase {
 		// edit is irreversible.
 		$this->assertSame( 1, $steps[0]['tier'] ?? null, 'pages/update-draft is tier 1 in the pack map' );
 		$this->assertSame( 2, $steps[1]['tier'] ?? null, 'the highest tier among a step\'s verbs wins' );
+		// The Runs screen counts approvals from the per-verb tiers, not the step max.
+		$this->assertSame( array( 'pages/update-draft' => 1 ), $steps[0]['verb_tiers'] ?? null );
+		$this->assertSame(
+			array(
+				'pages/read'    => 0,
+				'pages/publish' => 2,
+			),
+			$steps[1]['verb_tiers'] ?? null
+		);
 	}
 
 	// ------------------------------------------------------------------
