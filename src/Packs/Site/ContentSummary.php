@@ -143,9 +143,56 @@ final class ContentSummary {
 
 		$row  = 'Update site navigation';
 		$row .= sprintf( ' — current: %s', self::itemLabels( $current ) );
-		$row .= sprintf( ' — proposed: %s', self::itemLabels( $proposed ) );
+		$row .= sprintf( ' — proposed: %s', self::itemLabels( Navigation::orderedItems( $proposed ) ) );
+
+		$removed = self::removedLabels( $current, $proposed );
+		if ( array() !== $removed ) {
+			$row .= sprintf( ' — removes: %s', implode( ', ', $removed ) );
+		}
 
 		return $row;
+	}
+
+	/**
+	 * The CURRENT items the proposed list leaves out, as escaped quoted
+	 * paths. A page item is matched by its page id, a custom link by its
+	 * url — the label may be reworded without it counting as removed. Shown,
+	 * never refused: a person may want the removal.
+	 *
+	 * @param list<array<string,mixed>> $current  The current items.
+	 * @param array<int|string,mixed>   $proposed The call's proposed items.
+	 * @return list<string>
+	 */
+	private static function removedLabels( array $current, array $proposed ): array {
+		$page_ids = array();
+		$urls     = array();
+		foreach ( $proposed as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			if ( isset( $item['page_id'] ) && is_numeric( $item['page_id'] ) ) {
+				$page_ids[ (int) $item['page_id'] ] = true;
+			}
+			if ( isset( $item['url'] ) && is_string( $item['url'] ) ) {
+				$urls[ rtrim( $item['url'], '/' ) ] = true;
+			}
+		}
+
+		$removed = array();
+		foreach ( $current as $item ) {
+			$page_id = $item['page_id'] ?? null;
+			if ( is_int( $page_id ) && 0 !== $page_id ) {
+				$kept = isset( $page_ids[ $page_id ] );
+			} else {
+				$url  = is_string( $item['url'] ?? null ) ? rtrim( $item['url'], '/' ) : '';
+				$kept = '' === $url || isset( $urls[ $url ] );
+			}
+			if ( ! $kept ) {
+				$removed[] = self::itemLabels( array( $item ), $current );
+			}
+		}
+
+		return $removed;
 	}
 
 	/**
@@ -242,23 +289,45 @@ final class ContentSummary {
 
 	/**
 	 * A comma-joined, escaped list of item labels, or a placeholder when
-	 * there are none.
+	 * there are none. A nested item reads as its path ("Services › Web
+	 * Design"), resolved through the `key`/`parent` the items carry.
 	 *
-	 * @param array<int|string,mixed> $items {@see Navigation}'s item shape,
-	 *                                       or a call's proposed item list —
-	 *                                       each entry is checked, never
-	 *                                       assumed, since the proposed side
-	 *                                       comes straight from the call.
+	 * @param array<int|string,mixed>       $items   {@see Navigation}'s item shape,
+	 *                                               or a call's proposed item list —
+	 *                                               each entry is checked, never
+	 *                                               assumed, since the proposed side
+	 *                                               comes straight from the call.
+	 * @param array<int|string,mixed>|null  $context The full list the paths resolve
+	 *                                               against, when `$items` is a subset.
 	 */
-	private static function itemLabels( array $items ): string {
+	private static function itemLabels( array $items, ?array $context = null ): string {
 		if ( array() === $items ) {
 			return esc_html__( '(none)', 'senroflux' );
 		}
 
+		$by_key = array();
+		foreach ( $context ?? $items as $item ) {
+			if ( is_array( $item ) && is_string( $item['key'] ?? null ) ) {
+				$by_key[ $item['key'] ] = $item;
+			}
+		}
+
 		$labels = array();
 		foreach ( $items as $item ) {
-			$label    = is_array( $item ) && is_string( $item['label'] ?? null ) ? $item['label'] : '';
-			$labels[] = sprintf( '&quot;%s&quot;', esc_html( $label ) );
+			$path   = array();
+			$seen   = array();
+			$cursor = is_array( $item ) ? $item : array();
+			while ( true ) {
+				$path[] = esc_html( is_string( $cursor['label'] ?? null ) ? $cursor['label'] : '' );
+				$parent = $cursor['parent'] ?? null;
+				if ( ! is_string( $parent ) || ! isset( $by_key[ $parent ] ) || isset( $seen[ $parent ] ) ) {
+					break;
+				}
+				$seen[ $parent ] = true;
+				$cursor          = $by_key[ $parent ];
+			}
+
+			$labels[] = sprintf( '&quot;%s&quot;', implode( ' › ', array_reverse( $path ) ) );
 		}
 
 		return implode( ', ', $labels );

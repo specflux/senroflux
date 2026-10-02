@@ -89,7 +89,9 @@ if ( ! function_exists( 'get_nav_menu_locations' ) ) {
 }
 
 if ( ! function_exists( 'wp_get_nav_menu_items' ) ) {
-	function wp_get_nav_menu_items( int $menu ): array {
+	function wp_get_nav_menu_items( $menu, $args = array() ) {
+		unset( $args );
+		$menu  = (int) $menu;
 		$items = $GLOBALS['senroflux_test_nav_menu_items'][ $menu ] ?? array();
 
 		// Sort by menu_order, mirroring core's own ordering guarantee.
@@ -103,7 +105,13 @@ if ( ! function_exists( 'wp_get_nav_menu_items' ) ) {
 }
 
 if ( ! function_exists( 'wp_update_nav_menu_item' ) ) {
-	function wp_update_nav_menu_item( int $menu_id, int $menu_item_db_id = 0, array $menu_item_data = array() ): int {
+	function wp_update_nav_menu_item( $menu_id = 0, $menu_item_db_id = 0, $menu_item_data = array(), $fire_after_hooks = true ) {
+		unset( $fire_after_hooks );
+		$menu_id         = (int) $menu_id;
+		$menu_item_db_id = (int) $menu_item_db_id;
+		if ( isset( $GLOBALS['senroflux_test_nav_item_failure'] ) && ( $menu_item_data['menu-item-title'] ?? '' ) === $GLOBALS['senroflux_test_nav_item_failure'] ) {
+			return new WP_Error( 'update_nav_menu_item_failed', 'Stubbed failure.' );
+		}
 		$id = 0 !== $menu_item_db_id ? $menu_item_db_id : (int) ( $GLOBALS['senroflux_test_next_menu_item_id'] ?? 500 );
 		$GLOBALS['senroflux_test_next_menu_item_id'] = $id + 1;
 
@@ -113,7 +121,10 @@ if ( ! function_exists( 'wp_update_nav_menu_item' ) ) {
 		$item->url        = (string) ( $menu_item_data['menu-item-url'] ?? '' );
 		$item->object     = (string) ( $menu_item_data['menu-item-object'] ?? '' );
 		$item->object_id  = (int) ( $menu_item_data['menu-item-object-id'] ?? 0 );
-		$item->menu_order = count( $GLOBALS['senroflux_test_nav_menu_items'][ $menu_id ] ?? array() ) + 1;
+		$position         = (int) ( $menu_item_data['menu-item-position'] ?? 0 );
+		$item->menu_order = 0 !== $position ? $position : count( $GLOBALS['senroflux_test_nav_menu_items'][ $menu_id ] ?? array() ) + 1;
+		// Core stores the parent as post meta and `wp_setup_nav_menu_item()` exposes it as a string.
+		$item->menu_item_parent = (string) (int) ( $menu_item_data['menu-item-parent-id'] ?? 0 );
 
 		$GLOBALS['senroflux_test_nav_menu_items'][ $menu_id ][ $id ] = $item;
 

@@ -161,6 +161,80 @@ final class ContentSummaryTest extends TestCase {
 		$this->assertStringNotContainsString( '<script>', $sum );
 	}
 
+	public function test_navigation_card_shows_nesting_and_the_removed_pages(): void {
+		$GLOBALS['senroflux_test_is_block_theme']       = false;
+		$GLOBALS['senroflux_test_registered_nav_menus'] = array( 'primary' => 'Primary' );
+		$GLOBALS['senroflux_test_nav_menu_locations']   = array( 'primary' => 5 );
+		$menu_item                                      = static fn ( int $id, string $title, int $page ): object => (object) array(
+			'ID'               => $id,
+			'title'            => $title,
+			'url'              => 'https://example.test/?page_id=' . $page,
+			'object'           => 'page',
+			'object_id'        => $page,
+			'menu_order'       => $id,
+			'menu_item_parent' => '0',
+		);
+		$GLOBALS['senroflux_test_nav_menu_items'][5]    = array(
+			1 => $menu_item( 1, 'Home', 10 ),
+			2 => $menu_item( 2, 'Web Design', 11 ),
+			3 => $menu_item( 3, 'Contact', 12 ),
+		);
+
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/update-navigation',
+			array(
+				'items' => array(
+					array(
+						'label'   => 'Contact',
+						'page_id' => 12,
+						'order'   => 5,
+					),
+					array(
+						'label'   => 'Home',
+						'page_id' => 10,
+						'order'   => 0,
+					),
+					array(
+						'label' => 'Services <b>',
+						'url'   => '/services',
+						'order' => 1,
+						'key'   => 's',
+					),
+					array(
+						'label'   => 'SEO Audits',
+						'page_id' => 13,
+						'order'   => 0,
+						'parent'  => 's',
+					),
+				),
+			)
+		);
+
+		$this->assertStringContainsString( 'current: &quot;Home&quot;, &quot;Web Design&quot;, &quot;Contact&quot;', $sum );
+		$this->assertStringContainsString( 'proposed: &quot;Home&quot;, &quot;Services &lt;b&gt;&quot;, &quot;Services &lt;b&gt; › SEO Audits&quot;, &quot;Contact&quot;', $sum );
+		$this->assertStringContainsString( 'removes: &quot;Web Design&quot;', $sum );
+		$this->assertStringNotContainsString( '<b>', $sum );
+	}
+
+	public function test_navigation_card_says_nothing_about_removal_when_nothing_is_dropped(): void {
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/update-navigation',
+			array(
+				'items' => array(
+					array(
+						'label' => 'Shop',
+						'url'   => '/shop',
+						'order' => 0,
+					),
+				),
+			)
+		);
+
+		$this->assertStringNotContainsString( 'removes', $sum );
+	}
+
 	// ------------------------------------------------------------------
 	// set-front-page
 	// ------------------------------------------------------------------
