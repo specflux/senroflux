@@ -14,10 +14,6 @@ const { gotoRuns, waitLoaded, startRun, waitForPark, acceptPlan, waitSettled } =
  * The fake-provider mu-plugin turns both switches on from the
  * `senroflux_e2e_preapproval` option (and registers the Tier-2
  * `senroflux-e2e/publish-thing` fixture ability, the only tier a grant covers).
- *
- * UNRUN: written in a worktree that cannot reach the e2e environment. The
- * fixture change needs a wp-env restart (single-file mu-plugin mount); run
- * `npx playwright test tests/e2e/specs/preapprove.as-mode.spec.js` after merge.
  */
 test.describe( 'S14 pre-approval from the plan card (Agent Safety mode)', () => {
 	test.afterEach( () => {

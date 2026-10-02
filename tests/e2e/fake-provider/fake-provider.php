@@ -443,6 +443,15 @@ add_action(
 				);
 			}
 
+			/**
+			 * This fixture names abilities directly (no roles), so its pack
+			 * verbs already are the ability ids Agent Safety gates — without
+			 * this, `Pack::gateVerbFor()` finds no role and no grant is issued.
+			 */
+			public function gateVerbFor( string $pack_verb ): ?string {
+				return in_array( $pack_verb, $this->allowList(), true ) ? $pack_verb : null;
+			}
+
 			/** @return array<string,int> */
 			public function verbMap(): array {
 				return array(
