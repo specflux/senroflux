@@ -873,6 +873,8 @@ final class Plugin {
 			}
 		}
 
+		$plan_ui = $this->runner()->parkedPlanUi( $run );
+
 		return array(
 			'run'         => array(
 				'id'                  => $run->id,
@@ -917,7 +919,9 @@ final class Plugin {
 			'steps'       => $steps,
 			// 0.3 S20: keyed by seq in $suggestions above; re-indexed for the caller.
 			'suggestions' => array_values( $suggestions ),
-			'ui'          => array(),
+			// A run parked on a plan carries the plan card's UI facts (e.g.
+			// `preapprove_available`), fresh, so the card survives a reload.
+			'ui'          => null !== $plan_ui ? array( 'plan' => $plan_ui ) : array(),
 		);
 	}
 

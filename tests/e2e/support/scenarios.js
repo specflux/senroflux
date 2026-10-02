@@ -146,4 +146,29 @@ function readBeforeAnyPlan() {
 	];
 }
 
-module.exports = { PLAN_GOAL, call, text, fullTour, keyboardTour, quickComplete, planOnly, readBeforeAnyPlan, unverifiedWrite, writeThenQuestion };
+/**
+ * Plan with two Tier-2 publishes, then the two publishes and their re-reads
+ * (the fixture's created ids are `thing-3` and `thing-4`). With pre-approval
+ * accepted neither publish parks for approval; the trailing text is the
+ * harness's own re-read nudge answer.
+ */
+function publishTwice() {
+	return [
+		call( 'senroflux__propose-plan', {
+			goal: PLAN_GOAL,
+			steps: [
+				{ text: 'Publish the first thing', verbs: [ 'senroflux-e2e/publish-thing' ] },
+				{ text: 'Publish the second thing', verbs: [ 'senroflux-e2e/publish-thing' ] },
+			],
+			assumptions: [],
+		} ),
+		call( 'wpab__senroflux-e2e__publish-thing', { title: 'First' } ),
+		call( 'wpab__senroflux-e2e__publish-thing', { title: 'Second' } ),
+		call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-3' } ),
+		call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-4' } ),
+		text( 'Published both.' ),
+		text( 'Done.' ),
+	];
+}
+
+module.exports = { PLAN_GOAL, publishTwice, call, text, fullTour, keyboardTour, quickComplete, planOnly, readBeforeAnyPlan, unverifiedWrite, writeThenQuestion };

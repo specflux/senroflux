@@ -187,3 +187,24 @@ describe( 'the re-render defect: deep-linked run id (string) vs server run id (n
 		expect( listRuns ).toHaveBeenCalledTimes( 2 );
 	} );
 } );
+
+describe( 'a reloaded plan park keeps the pre-approve option (proof shakedown)', () => {
+	beforeEach( () => {
+		jest.clearAllMocks();
+	} );
+
+	it( 'offers "Accept and pre-approve" from the run-detail read ui.plan', async () => {
+		const parkedRun = { id: 5, goal: 'Schedule three posts', status: 'awaiting_plan', pack: 'pages', viewer_may_tick: true, step_count: 4 };
+
+		listRuns.mockResolvedValue( [ parkedRun ] );
+		getRun.mockResolvedValue( {
+			run: parkedRun,
+			steps: [ { seq: 4, kind: 'plan', message: { goal: 'Schedule three posts', steps: [], assumptions: [] } } ],
+			ui: { plan: { step_id: 4, remaining_plans: 1, preapprove_available: true, review_url: '' } },
+		} );
+
+		render( <App config={ { initialRunId: '5', nonce: 'abc', consumer: 'admin', gateMode: 'agent_safety' } } /> );
+
+		expect( await screen.findByRole( 'radio', { name: /accept and pre-approve/i } ) ).toBeInTheDocument();
+	} );
+} );

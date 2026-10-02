@@ -671,6 +671,33 @@ final class Runner {
 				$pending_calls = $this->extractCalls( $turn->message );
 
 				if ( array() === $pending_calls ) {
+					// An EMPTY turn (no text, no calls) is never the model
+					// finishing (live proof J6: it followed a refused plan and
+					// the run "completed" with nothing written). Nudge once;
+					// a second one fails the run.
+					if ( '' === $this->joinedText( $turn->message->toArray() ) ) {
+						if ( $this->emptyTurnAlreadyNudged( $run ) ) {
+							$report = $this->failError(
+								$run,
+								'empty_model_turn',
+								__( 'The model returned an empty reply twice in a row, so the run was stopped before it changed anything further. Start the run again or try a different model.', 'senroflux' )
+							);
+
+							return array(
+								'run' => $this->refresh( $run ),
+								'ui'  => array( 'report' => $report ),
+							);
+						}
+
+						$this->appendEmptyTurnNudge( $run, $new_steps );
+						$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
+						return array(
+							'run' => $this->refresh( $run ),
+							'ui'  => null,
+						);
+					}
+
 					// S12: a finish attempt may be parked by a verify nudge.
 					if ( $this->finishAttempt( $run, $new_steps ) ) {
 						// Nudged: S12 says KEEP RUNNING. Saying so explicitly
@@ -1590,7 +1617,10 @@ final class Runner {
 		$steps = array_values(
 			array_filter(
 				$this->store->getSteps( $run->id ),
+				// A zero-part model turn (see the empty-turn nudge) stays in the
+				// audit trail but is never resent: providers reject it.
 				static fn ( Step $step ): bool => in_array( $step->kind, StepKind::historyKinds(), true ) && null !== $step->messageArray
+					&& ! ( StepKind::Model === $step->kind && self::isEmptyModelMessage( $step->messageArray ) )
 			)
 		);
 
@@ -3706,6 +3736,27 @@ final class Runner {
 	}
 
 	/**
+	 * The plan card's UI facts for a run currently parked on a plan, computed
+	 * fresh (same {@see planUi()} the tick response uses), or null when the
+	 * run is not `awaiting_plan`. The run-detail read carries this so the
+	 * card survives a page reload: the stored plan step has only the plan.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function parkedPlanUi( Run $run ): ?array {
+		if ( RunStatus::AwaitingPlan !== $run->status ) {
+			return null;
+		}
+
+		$context = $this->latestPlanContext( $run->id );
+		if ( null === $context ) {
+			return null;
+		}
+
+		return $this->planUi( $context['payload'], $context['step_id'], $this->remainingPlans( $run ), $run->id );
+	}
+
+	/**
 	 * Latest parked plan context (validated payload + step seq + the
 	 * originating propose-plan call id).
 	 *
@@ -4209,6 +4260,72 @@ final class Runner {
 		);
 
 		return true;
+	}
+
+	/**
+	 * Has an empty-turn nudge already been sent since the model last said or
+	 * did anything? Walks the steps in order: the nudge note sets the flag, a
+	 * model turn with text or calls clears it, an empty one leaves it alone
+	 * (so the empty turn just appended counts as the repeat, not a reset).
+	 */
+	private function emptyTurnAlreadyNudged( Run $run ): bool {
+		$nudged = false;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::System === $step->kind && 'empty_turn_nudge' === ( $step->messageArray['note'] ?? null ) ) {
+				$nudged = true;
+			} elseif ( StepKind::Model === $step->kind && null !== $step->messageArray && ! self::isEmptyModelMessage( $step->messageArray ) ) {
+				$nudged = false;
+			}
+		}
+
+		return $nudged;
+	}
+
+	/**
+	 * Whether a stored model message carries neither text nor a function call.
+	 *
+	 * @param array<string,mixed> $message_array The stored message.
+	 */
+	private static function isEmptyModelMessage( array $message_array ): bool {
+		foreach ( (array) ( $message_array['parts'] ?? array() ) as $part ) {
+			if ( ! is_array( $part ) ) {
+				continue;
+			}
+			if ( isset( $part['functionCall'] ) || ( is_string( $part['text'] ?? null ) && '' !== $part['text'] ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Append the empty-turn nudge: an audit-only system note plus a real
+	 * history-bearing user turn (the same pairing as the verify nudge, for
+	 * the same wire-validity reason — the prompt must end on a user turn).
+	 *
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 */
+	private function appendEmptyTurnNudge( Run $run, array &$new_steps ): void {
+		$payload = array( 'note' => 'empty_turn_nudge' );
+
+		$new_steps[] = array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+		$new_steps[] = $this->appendStep(
+			$run->id,
+			StepKind::User,
+			new UserMessage(
+				array(
+					new MessagePart( 'Your last reply was empty. Continue: call the next tool, or say what you finished.' ),
+				)
+			)
+		);
 	}
 
 	/**

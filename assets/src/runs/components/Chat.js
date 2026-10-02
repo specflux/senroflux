@@ -114,6 +114,19 @@ function modelLabel( run, modelChoices ) {
  * @param {boolean}  [props.canFollowUp]         The viewer holds the run's pack capability (S20); offers "Start a follow-up" on a terminal run.
  * @param {Function} [props.onFollowUp]          `( run ) => void` — the follow-up affordance's click.
  */
+/**
+ * The plan card's payload: the stored plan step carries only the plan
+ * (goal, steps, assumptions), so the server's plan-park UI facts
+ * (`preapprove_available`, ...) are merged in — but only when they describe
+ * THIS step, never a stale earlier plan's.
+ */
+function planCardPayload( step, planUi ) {
+	if ( 'plan' !== step.kind || ! planUi || planUi.step_id !== step.seq ) {
+		return step.message;
+	}
+	return { ...step.message, ...planUi };
+}
+
 export default function Chat( {
 	run,
 	steps,
@@ -127,6 +140,7 @@ export default function Chat( {
 	modelChoices,
 	canFollowUp,
 	onFollowUp,
+	planUi,
 } ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
@@ -216,7 +230,7 @@ export default function Chat( {
 							<ParkCard
 								key={ index }
 								kind={ step.kind }
-								payload={ step.message }
+								payload={ planCardPayload( step, planUi ) }
 								gateMode={ run.gate_mode }
 								onResolve={ onResolvePark }
 								busy={ busy }
@@ -268,6 +282,12 @@ export default function Chat( {
 					</div>
 				) }
 			</div>
+			{ /* A failed run says why (e.g. the model went silent twice), when the server gave a reason. */ }
+			{ 'failed' === run.status && run.error && 'string' === typeof run.error.message && '' !== run.error.message && (
+				<p className="senroflux-run-error" role="alert" dir="auto">
+					{ run.error.message }
+				</p>
+			) }
 			{ /* 0.3 S12 (stage 22b): the harness-built report, once the run is terminal. */ }
 			{ isTerminalStatus( run.status ) && run.report && 'object' === typeof run.report && (
 				<ReportView report={ run.report } steps={ steps } />

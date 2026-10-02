@@ -216,7 +216,8 @@
 	color: #646970;
 }
 
-.senroflux-action-error {
+.senroflux-action-error,
+.senroflux-run-error {
 	margin: 0 20px;
 	color: #b32d2e;
 }
