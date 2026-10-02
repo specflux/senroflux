@@ -326,15 +326,155 @@ final class CommerceSummary {
 		if ( $zone_id > 0 && class_exists( '\WC_Shipping_Zone' ) ) {
 			$existing = new \WC_Shipping_Zone( $zone_id );
 			if ( $existing->get_id() > 0 ) {
-				$previous = $existing->get_zone_name();
+				$previous = self::zoneDetail(
+					$existing->get_zone_name(),
+					self::regionLabels( $existing->get_zone_locations() ),
+					self::methodLabels( $existing->get_shipping_methods() )
+				);
 			}
 		}
 
-		$row = null !== $previous
-			? sprintf( 'Save shipping zone — current name &quot;%s&quot;', esc_html( $previous ) )
-			: 'Save new shipping zone';
+		$proposed = self::zoneDetail(
+			$name,
+			self::regionLabels( is_array( $input['locations'] ?? null ) ? $input['locations'] : array() ),
+			self::methodLabels( is_array( $input['methods'] ?? null ) ? $input['methods'] : array() )
+		);
 
-		return $row . sprintf( ' — proposed name &quot;%s&quot;', esc_html( $name ) );
+		return null !== $previous
+			? sprintf( 'Save shipping zone — current: %s — proposed: %s', $previous, $proposed )
+			: sprintf( 'Save new shipping zone — current: none — proposed: %s', $proposed );
+	}
+
+	/**
+	 * One side (current or proposed) of the shipping card, already escaped.
+	 *
+	 * @param list<string> $regions Region labels (unescaped).
+	 * @param list<string> $methods Method labels (unescaped).
+	 */
+	private static function zoneDetail( string $name, array $regions, array $methods ): string {
+		return sprintf(
+			'name &quot;%s&quot;; regions: %s; methods: %s',
+			esc_html( $name ),
+			esc_html( array() === $regions ? 'none' : implode( ', ', $regions ) ),
+			esc_html( array() === $methods ? 'none' : implode( ', ', $methods ) )
+		);
+	}
+
+	/**
+	 * Human labels for zone locations, from either the ability's input
+	 * (`{code,type?}` or a bare code string) or `WC_Shipping_Zone` (objects
+	 * with `code`/`type`).
+	 *
+	 * @param array<mixed> $locations Locations.
+	 * @return list<string>
+	 */
+	private static function regionLabels( array $locations ): array {
+		$labels = array();
+
+		foreach ( $locations as $location ) {
+			if ( is_object( $location ) ) {
+				$location = get_object_vars( $location );
+			}
+			$code = is_array( $location ) ? ( $location['code'] ?? '' ) : $location;
+			$type = is_array( $location ) && is_string( $location['type'] ?? null ) ? $location['type'] : '';
+			if ( ! is_scalar( $code ) || '' === (string) $code ) {
+				continue;
+			}
+			$labels[] = self::regionLabel( (string) $code, $type );
+		}
+
+		return $labels;
+	}
+
+	/**
+	 * `country:CA`, `state:CA:ON`, `continent:NA` and `postcode:...` all
+	 * resolve to a name when WooCommerce can supply one, else stay as given.
+	 */
+	private static function regionLabel( string $code, string $type ): string {
+		if ( preg_match( '/^(country|state|continent|postcode):(.+)$/', $code, $m ) ) {
+			$type = $m[1];
+			$code = $m[2];
+		}
+		$raw = '' === $type || 'country' === $type ? $code : $type . ':' . $code;
+
+		if ( ! function_exists( 'WC' ) ) {
+			return $raw;
+		}
+		$wc = \WC();
+		if ( ! is_object( $wc ) || ! isset( $wc->countries ) || ! is_object( $wc->countries ) ) {
+			return $raw;
+		}
+
+		if ( 'continent' === $type && method_exists( $wc->countries, 'get_continents' ) ) {
+			$continents = $wc->countries->get_continents();
+			$name       = is_array( $continents ) && is_array( $continents[ $code ] ?? null ) ? ( $continents[ $code ]['name'] ?? null ) : null;
+			return is_string( $name ) ? $name : $raw;
+		}
+
+		$countries = method_exists( $wc->countries, 'get_countries' ) ? $wc->countries->get_countries() : array();
+		$countries = is_array( $countries ) ? $countries : array();
+		if ( 'state' === $type ) {
+			$parts   = explode( ':', $code, 2 );
+			$country = $countries[ $parts[0] ] ?? null;
+			$states  = method_exists( $wc->countries, 'get_states' ) ? $wc->countries->get_states( $parts[0] ) : array();
+			$state   = is_array( $states ) && isset( $parts[1] ) ? ( $states[ $parts[1] ] ?? null ) : null;
+			if ( is_string( $state ) && is_string( $country ) ) {
+				return $state . ', ' . $country;
+			}
+			return $raw;
+		}
+		if ( '' === $type || 'country' === $type ) {
+			return is_string( $countries[ $code ] ?? null ) ? $countries[ $code ] : $raw;
+		}
+
+		return $raw;
+	}
+
+	/**
+	 * `Label (method id) cost` for each shipping method, from either the
+	 * ability's input (`{id,label,cost}` or a bare id) or `WC_Shipping_Zone`
+	 * (method objects).
+	 *
+	 * @param array<mixed> $methods Methods.
+	 * @return list<string>
+	 */
+	private static function methodLabels( array $methods ): array {
+		$labels = array();
+
+		foreach ( $methods as $method ) {
+			$id    = '';
+			$label = '';
+			$cost  = null;
+
+			if ( is_object( $method ) ) {
+				$id       = is_scalar( $method->id ?? null ) ? (string) $method->id : '';
+				$title    = self::call( $method, 'get_title' );
+				$label    = is_string( $title ) ? $title : '';
+				$settings = $method->instance_settings ?? null;
+				$cost     = is_array( $settings ) ? ( $settings['cost'] ?? null ) : null;
+			} elseif ( is_array( $method ) ) {
+				$id    = is_scalar( $method['id'] ?? $method['method_id'] ?? null ) ? (string) ( $method['id'] ?? $method['method_id'] ) : '';
+				$label = is_string( $method['label'] ?? null ) ? $method['label'] : '';
+				$cost  = $method['cost'] ?? null;
+			} elseif ( is_scalar( $method ) ) {
+				$id = (string) $method;
+			}
+			if ( '' === $id && '' === $label ) {
+				continue;
+			}
+
+			$text = '' !== $label ? $label : str_replace( '_', ' ', $id );
+			if ( '' !== $id && '' !== $label ) {
+				$text .= sprintf( ' (%s)', str_replace( '_', ' ', $id ) );
+			}
+			if ( is_numeric( $cost ) ) {
+				$decimals = function_exists( 'wc_get_price_decimals' ) ? (int) wc_get_price_decimals() : null;
+				$text    .= ' ' . ( null === $decimals ? (string) $cost : number_format( (float) $cost, $decimals, '.', '' ) );
+			}
+			$labels[] = $text;
+		}
+
+		return $labels;
 	}
 
 	/**
@@ -354,9 +494,20 @@ final class CommerceSummary {
 
 		$row = null !== $previous
 			? sprintf( 'Save tax rate — current rate %s', esc_html( $previous ) )
-			: 'Save new tax rate';
+			: 'Save new tax rate — current: none';
 
-		return $row . sprintf( ' — proposed rate %s', esc_html( $rate ) );
+		$where = array_filter(
+			array(
+				is_string( $input['country'] ?? null ) ? $input['country'] : '',
+				is_string( $input['state'] ?? null ) ? $input['state'] : '',
+			)
+		);
+		$row  .= sprintf( ' — proposed rate %s', esc_html( $rate ) );
+		if ( is_string( $input['name'] ?? null ) && '' !== $input['name'] ) {
+			$row .= sprintf( ' (&quot;%s&quot;)', esc_html( $input['name'] ) );
+		}
+
+		return array() === $where ? $row : $row . sprintf( ' for %s', esc_html( implode( ' ', $where ) ) );
 	}
 
 	/**

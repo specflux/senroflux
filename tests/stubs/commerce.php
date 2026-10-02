@@ -380,6 +380,30 @@ if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 	}
 }
 
+if ( ! function_exists( 'WC' ) ) {
+	/** Minimal `WC()` carrying only `countries`, as the approval cards read it. */
+	function WC(): object {
+		return new class() {
+			public object $countries;
+
+			public function __construct() {
+				$this->countries = new class() {
+					/** @return array<string,string> */
+					public function get_countries(): array {
+						return $GLOBALS['senroflux_test_countries'] ?? array();
+					}
+				};
+			}
+		};
+	}
+}
+
+if ( ! function_exists( 'wc_get_price_decimals' ) ) {
+	function wc_get_price_decimals(): int {
+		return 2;
+	}
+}
+
 // ------------------------------------------------------------------
 // Stage 13: tax rates
 // ------------------------------------------------------------------

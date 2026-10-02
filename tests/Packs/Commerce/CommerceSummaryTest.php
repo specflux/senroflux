@@ -36,6 +36,7 @@ final class CommerceSummaryTest extends TestCase {
 		$GLOBALS['senroflux_test_coupon_meta']              = array();
 		$GLOBALS['senroflux_test_shipping_zones']           = array();
 		$GLOBALS['senroflux_test_tax_rates']                = array();
+		$GLOBALS['senroflux_test_countries']                = array();
 		$GLOBALS['senroflux_test_gateway_supports_refunds'] = true;
 		remove_all_filters( CommerceSummary::HOOK );
 	}
@@ -319,8 +320,116 @@ final class CommerceSummaryTest extends TestCase {
 			)
 		);
 
-		$this->assertStringContainsString( 'current name &quot;Old Zone&quot;', $sum );
-		$this->assertStringContainsString( 'proposed name &quot;New Zone&quot;', $sum );
+		$this->assertStringContainsString( 'current: name &quot;Old Zone&quot;; regions: none; methods: none', $sum );
+		$this->assertStringContainsString( 'proposed: name &quot;New Zone&quot;', $sum );
+	}
+
+	public function test_shipping_zone_existing_shows_current_regions_and_methods_beside_proposed(): void {
+		$GLOBALS['senroflux_test_shipping_zones'][7] = array(
+			'name'      => 'Old Zone',
+			'locations' => array(
+				array(
+					'code' => 'US',
+					'type' => 'country',
+				),
+			),
+			'methods'   => array( 'free_shipping' ),
+		);
+		$GLOBALS['senroflux_test_countries']         = array(
+			'US' => 'United States',
+			'CA' => 'Canada',
+		);
+
+		$sum = CommerceSummary::filter(
+			'plain',
+			'senroflux/shipping-zone-save',
+			array(
+				'zone_id'   => 7,
+				'name'      => 'North America',
+				'locations' => array( array( 'code' => 'country:CA' ) ),
+				'methods'   => array(
+					array(
+						'id'    => 'flat_rate',
+						'label' => 'Canada Shipping',
+						'cost'  => '12',
+					),
+				),
+			)
+		);
+
+		$this->assertStringContainsString( 'current: name &quot;Old Zone&quot;; regions: United States; methods: free shipping', $sum );
+		$this->assertStringContainsString( 'proposed: name &quot;North America&quot;; regions: Canada; methods: Canada Shipping (flat rate) 12.00', $sum );
+	}
+
+	public function test_shipping_zone_new_shows_current_none_regions_and_each_method_cost(): void {
+		$GLOBALS['senroflux_test_countries'] = array( 'CA' => 'Canada' );
+
+		$sum = CommerceSummary::filter(
+			'plain',
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Canada',
+				'locations' => array( array( 'code' => 'country:CA' ) ),
+				'methods'   => array(
+					array(
+						'id'    => 'flat_rate',
+						'label' => 'Canada Shipping',
+						'cost'  => '12',
+					),
+					array(
+						'id'    => 'local_pickup',
+						'label' => 'Pickup',
+						'cost'  => '0.5',
+					),
+				),
+			)
+		);
+
+		$this->assertSame(
+			'Save new shipping zone — current: none — proposed: name &quot;Canada&quot;; regions: Canada; methods: Canada Shipping (flat rate) 12.00, Pickup (local pickup) 0.50',
+			$sum
+		);
+	}
+
+	public function test_shipping_zone_unknown_region_falls_back_to_code(): void {
+		$GLOBALS['senroflux_test_countries'] = array( 'CA' => 'Canada' );
+
+		$sum = CommerceSummary::filter(
+			'plain',
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Odd',
+				'locations' => array(
+					array( 'code' => 'country:ZZ' ),
+					array( 'code' => 'postcode:9000*' ),
+					array( 'code' => 'continent:NA' ),
+				),
+				'methods'   => array(),
+			)
+		);
+
+		$this->assertStringContainsString( 'regions: ZZ, postcode:9000*, continent:NA; methods: none', $sum );
+	}
+
+	public function test_shipping_zone_escapes_html_in_method_label(): void {
+		$sum = CommerceSummary::filter(
+			'plain',
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Z',
+				'locations' => array(),
+				'methods'   => array(
+					array(
+						'id'    => 'flat_rate',
+						'label' => '<b>Bold</b>',
+						'cost'  => '1',
+					),
+				),
+			)
+		);
+
+		$this->assertStringNotContainsString( '<b>', $sum );
+		$this->assertStringContainsString( '&lt;b&gt;Bold&lt;/b&gt;', $sum );
 	}
 
 	public function test_shipping_zone_create_has_no_previous(): void {
@@ -334,7 +443,7 @@ final class CommerceSummaryTest extends TestCase {
 			)
 		);
 
-		$this->assertStringContainsString( 'Save new shipping zone', $sum );
+		$this->assertStringContainsString( 'Save new shipping zone — current: none', $sum );
 	}
 
 	public function test_tax_rate_shows_previous_rate_beside_proposed(): void {
@@ -356,6 +465,24 @@ final class CommerceSummaryTest extends TestCase {
 
 		$this->assertStringContainsString( 'current rate 5.0000', $sum );
 		$this->assertStringContainsString( 'proposed rate 7.0000', $sum );
+	}
+
+	public function test_tax_rate_new_shows_current_none_and_where(): void {
+		$sum = CommerceSummary::filter(
+			'plain',
+			'senroflux/tax-rate-save',
+			array(
+				'country'  => 'CA',
+				'state'    => 'ON',
+				'rate'     => '13',
+				'name'     => 'HST',
+				'priority' => 1,
+				'compound' => false,
+				'shipping' => true,
+			)
+		);
+
+		$this->assertSame( 'Save new tax rate — current: none — proposed rate 13 (&quot;HST&quot;) for CA ON', $sum );
 	}
 
 	// ------------------------------------------------------------------
