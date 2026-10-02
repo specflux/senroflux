@@ -15,6 +15,13 @@ parameters:
     # exact message so a NEW violation fails loudly instead of being absorbed.
     ignoreErrors:
         -
+            # WooCommerce is not installed in this checkout, so phpstan cannot
+            # resolve its shipping classes; addZoneMethod() is only reached
+            # from executeShippingZoneSave(), behind its class_exists() guard.
+            message: '#^(Parameter \$zone of method .*addZoneMethod\(\) has invalid type WC_Shipping_Zone\.|Call to .* on an unknown class WC_Shipping_Zones?\.|Class WC_Shipping_Method not found\.|(Call to method|Access to property) .* on an unknown class WC_Shipping_Method\.)$#'
+            path: src/Packs/Commerce/Abilities.php
+            count: 8
+        -
             # wpdb::prepare()'s stub requires `@phpstan-param literal-string
             # $query`, but every prepared statement interpolates this plugin's
             # OWN computed table names into an otherwise-literal SQL template

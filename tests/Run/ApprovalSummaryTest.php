@@ -179,7 +179,7 @@ final class ApprovalSummaryTest extends TestCase {
 						'methods'   => array(),
 					);
 				},
-				array( 'current name &quot;Old Zone&quot;', 'proposed name &quot;New Zone&quot;' ),
+				array( 'current: name &quot;Old Zone&quot;', 'proposed: name &quot;New Zone&quot;' ),
 			),
 			'navigation'    => array(
 				'senroflux/update-navigation',

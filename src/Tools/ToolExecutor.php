@@ -200,11 +200,18 @@ final class ToolExecutor {
 	 * or float, use its string form. Live journey J9: regular_price 18 was
 	 * refused nine times for a {"type":"string"} property.
 	 *
+	 * Composite schemas (`allOf`/`anyOf`/`oneOf`, at any level) are repaired
+	 * against {@see self::compositeView()}, which only ever narrows: WooCommerce's
+	 * product-create/update inputs are a top-level `oneOf` of object branches
+	 * with no `properties` of their own, and regular_price 18 was refused six
+	 * times in a row because nothing looked inside the branches.
+	 *
 	 * @param mixed               $value  An argument value.
 	 * @param array<string,mixed> $schema Its JSON schema.
 	 */
 	private static function repairModelSlips( mixed $value, array $schema ): mixed {
-		$types = (array) ( $schema['type'] ?? array() );
+		$schema = self::compositeView( $schema );
+		$types  = (array) ( $schema['type'] ?? array() );
 
 		if ( is_string( $value )
 			&& ! in_array( 'string', $types, true )
@@ -245,5 +252,113 @@ final class ToolExecutor {
 		}
 
 		return $value;
+	}
+
+	/**
+	 * Flatten a schema's `allOf`/`anyOf`/`oneOf` branches into one plain view
+	 * (`type`, `properties`, `items`) for {@see self::repairModelSlips()}. A
+	 * schema with no composite keyword is returned untouched.
+	 *
+	 * Fail closed: the view must never let a value be converted that some
+	 * alternative could accept as it is. So a type is the union over every
+	 * voter, and ANY voter with no `type` leaves the view typeless (no decoding,
+	 * no conversion); a property or `items` schema is kept as written only when
+	 * every voter that declares it declares it identically, else it shrinks to
+	 * the union of the declarers' types (or nothing, if one has none). A branch
+	 * that does not declare a property does not vote for it.
+	 *
+	 * @param array<string,mixed> $schema A JSON schema.
+	 * @return array<string,mixed>
+	 */
+	private static function compositeView( array $schema ): array {
+		$views = array();
+		foreach ( array( 'allOf', 'anyOf', 'oneOf' ) as $keyword ) {
+			if ( ! is_array( $schema[ $keyword ] ?? null ) ) {
+				continue;
+			}
+			foreach ( $schema[ $keyword ] as $branch ) {
+				if ( is_array( $branch ) ) {
+					$views[] = self::compositeView( $branch );
+				}
+			}
+		}
+
+		if ( array() === $views ) {
+			return $schema;
+		}
+
+		// The schema itself votes only for what it declares: a bare
+		// {"oneOf":[...]} has no type of its own to contradict its branches.
+		$own = array_intersect_key( $schema, array_flip( array( 'type', 'properties', 'items' ) ) );
+		if ( array() !== $own ) {
+			$views[] = $own;
+		}
+
+		$types = array();
+		foreach ( $views as $view ) {
+			if ( ! isset( $view['type'] ) ) {
+				$types = null;
+				break;
+			}
+			$types = array_merge( $types, (array) $view['type'] );
+		}
+
+		$merged = array();
+		if ( null !== $types ) {
+			$merged['type'] = array_values( array_unique( $types ) );
+		}
+
+		$names = array();
+		foreach ( $views as $view ) {
+			if ( is_array( $view['properties'] ?? null ) ) {
+				$names = array_merge( $names, array_keys( $view['properties'] ) );
+			}
+		}
+		foreach ( array_unique( $names ) as $name ) {
+			$declared = array();
+			foreach ( $views as $view ) {
+				if ( is_array( $view['properties'][ $name ] ?? null ) ) {
+					$declared[] = $view['properties'][ $name ];
+				}
+			}
+			if ( array() !== $declared ) {
+				$merged['properties'][ $name ] = self::agreedSchema( $declared );
+			}
+		}
+
+		$declared = array();
+		foreach ( $views as $view ) {
+			if ( is_array( $view['items'] ?? null ) ) {
+				$declared[] = $view['items'];
+			}
+		}
+		if ( array() !== $declared ) {
+			$merged['items'] = self::agreedSchema( $declared );
+		}
+
+		return $merged;
+	}
+
+	/**
+	 * The one schema a set of declarations of the same property agree on.
+	 *
+	 * @param non-empty-list<array<mixed>> $declared Every voter's schema for it.
+	 * @return array<string,mixed> The shared schema; else only the union of their types; else empty.
+	 */
+	private static function agreedSchema( array $declared ): array {
+		if ( array() === array_filter( $declared, static fn ( array $schema ): bool => $schema !== $declared[0] ) ) {
+			return $declared[0];
+		}
+
+		$types = array();
+		foreach ( $declared as $schema ) {
+			$type = self::compositeView( $schema )['type'] ?? null;
+			if ( null === $type ) {
+				return array();
+			}
+			$types = array_merge( $types, (array) $type );
+		}
+
+		return array( 'type' => array_values( array_unique( $types ) ) );
 	}
 }

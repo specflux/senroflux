@@ -87,6 +87,17 @@ final class Abilities {
 	/** `products-catalogue` page size when the caller names none. */
 	private const CATALOGUE_DEFAULT_PER_PAGE = 20;
 
+	/**
+	 * Shipping methods `shipping-zone-save` can add, with the settings each
+	 * holds beyond title/enabled — per their `instance_form_fields`
+	 * (free_shipping has no cost or tax status).
+	 */
+	private const ZONE_METHOD_FIELDS = array(
+		'flat_rate'     => array( 'cost', 'tax_status' ),
+		'free_shipping' => array(),
+		'local_pickup'  => array( 'cost', 'tax_status' ),
+	);
+
 	/** `products-catalogue` page-size cap (WooCommerce's own `products-query` caps at 100 too). */
 	private const CATALOGUE_MAX_PER_PAGE = 100;
 
@@ -404,7 +415,7 @@ final class Abilities {
 			'senroflux/shipping-zone-save',
 			array(
 				'label'               => __( 'Save shipping zone', 'senroflux' ),
-				'description'         => __( 'Create or update a shipping zone. Never deletes one.', 'senroflux' ),
+				'description'         => __( 'Create or update a shipping zone. Never deletes one. On an existing zone the locations given REPLACE its current ones, and the methods given are ADDED to its existing methods (none are removed or edited).', 'senroflux' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'                 => 'object',
@@ -413,8 +424,50 @@ final class Abilities {
 					'properties'           => array(
 						'zone_id'   => array( 'type' => 'integer' ),
 						'name'      => array( 'type' => 'string' ),
-						'locations' => array( 'type' => 'array' ),
-						'methods'   => array( 'type' => 'array' ),
+						'locations' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'code' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'code' => array(
+										'type'        => 'string',
+										'description' => __( 'Region code: "CA" (country), "CA:ON" (state), "NA" (continent) or a postcode such as "90210".', 'senroflux' ),
+									),
+									'type' => array(
+										'type'        => 'string',
+										'enum'        => ShippingZoneInput::LOCATION_TYPES,
+										'description' => __( 'Defaults to country.', 'senroflux' ),
+									),
+								),
+							),
+						),
+						'methods'   => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'method_id' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'method_id'  => array(
+										'type' => 'string',
+										'enum' => array_keys( self::ZONE_METHOD_FIELDS ),
+									),
+									'title'      => array( 'type' => 'string' ),
+									'cost'       => array(
+										'type'        => 'string',
+										'description' => __( 'Decimal such as "12" or "4.50". Not for free_shipping.', 'senroflux' ),
+									),
+									'tax_status' => array(
+										'type'        => 'string',
+										'enum'        => array( 'taxable', 'none' ),
+										'description' => __( 'Not for free_shipping.', 'senroflux' ),
+									),
+									'enabled'    => array( 'type' => 'boolean' ),
+								),
+							),
+						),
 					),
 				),
 				'output_schema'       => array(
@@ -422,8 +475,34 @@ final class Abilities {
 					'required'             => array( 'zone_id' ),
 					'additionalProperties' => false,
 					'properties'           => array(
-						'zone_id'  => array( 'type' => 'integer' ),
-						'previous' => array( 'type' => array( 'object', 'null' ) ),
+						'zone_id'   => array( 'type' => 'integer' ),
+						'previous'  => array( 'type' => array( 'object', 'null' ) ),
+						'locations' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'additionalProperties' => false,
+								'properties'           => array(
+									'code' => array( 'type' => 'string' ),
+									'type' => array( 'type' => 'string' ),
+								),
+							),
+						),
+						'methods'   => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'additionalProperties' => false,
+								'properties'           => array(
+									'method_id'   => array( 'type' => 'string' ),
+									'instance_id' => array( 'type' => 'integer' ),
+									'title'       => array( 'type' => 'string' ),
+									'cost'        => array( 'type' => 'string' ),
+									'tax_status'  => array( 'type' => 'string' ),
+									'enabled'     => array( 'type' => 'boolean' ),
+								),
+							),
+						),
 					),
 				),
 				'execute_callback'    => static function ( $input = array() ) {
@@ -948,14 +1027,17 @@ final class Abilities {
 	}
 
 	/**
+	 * Everything is validated before anything is persisted; a refusal leaves
+	 * the store untouched. A new zone is saved before its locations are set
+	 * because `WC_Shipping_Zone::add_location()` ignores a zone with no id
+	 * yet (the REST controller saves first for the same reason).
+	 *
 	 * @param array<string,mixed> $input Call input.
 	 * @return array<string,mixed>|WP_Error
 	 */
 	private static function executeShippingZoneSave( array $input ): array|WP_Error {
-		$zone_id   = (int) ( $input['zone_id'] ?? 0 );
-		$name      = is_string( $input['name'] ?? null ) ? trim( $input['name'] ) : '';
-		$locations = is_array( $input['locations'] ?? null ) ? $input['locations'] : array();
-		$methods   = is_array( $input['methods'] ?? null ) ? $input['methods'] : array();
+		$zone_id = (int) ( $input['zone_id'] ?? 0 );
+		$name    = is_string( $input['name'] ?? null ) ? trim( $input['name'] ) : '';
 
 		if ( '' === $name ) {
 			return new WP_Error( 'invalid_input', __( 'A zone name is required.', 'senroflux' ), array( 'status' => 400 ) );
@@ -964,43 +1046,323 @@ final class Abilities {
 			return new WP_Error( 'gateway_unavailable', __( 'Shipping zones are not available.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
+		$locations = self::resolveZoneLocations( is_array( $input['locations'] ?? null ) ? $input['locations'] : array() );
+		if ( is_wp_error( $locations ) ) {
+			return $locations;
+		}
+		$methods = self::resolveZoneMethods( is_array( $input['methods'] ?? null ) ? $input['methods'] : array() );
+		if ( is_wp_error( $methods ) ) {
+			return $methods;
+		}
+
 		$previous = null;
 		if ( $zone_id > 0 ) {
-			$existing = new \WC_Shipping_Zone( $zone_id );
-			if ( 0 === $existing->get_id() ) {
+			$zone = new \WC_Shipping_Zone( $zone_id );
+			if ( 0 === $zone->get_id() ) {
 				return new WP_Error( 'not_found', __( 'Shipping zone not found.', 'senroflux' ), array( 'status' => 400 ) );
 			}
 			$previous = array(
-				'name'      => $existing->get_zone_name(),
-				'locations' => $existing->get_zone_locations(),
-				'methods'   => $existing->get_shipping_methods(),
+				'name'      => $zone->get_zone_name(),
+				'locations' => $zone->get_zone_locations(),
+				'methods'   => $zone->get_shipping_methods(),
 			);
-			$zone     = $existing;
 		} else {
 			$zone = new \WC_Shipping_Zone();
 		}
 
 		$zone->set_zone_name( $name );
-		foreach ( $locations as $location ) {
-			$code = is_array( $location ) ? (string) ( $location['code'] ?? '' ) : (string) $location;
-			$type = is_array( $location ) ? (string) ( $location['type'] ?? 'country' ) : 'country';
-			if ( '' !== $code ) {
-				$zone->add_location( $code, $type );
-			}
+		if ( 0 === $zone->get_id() ) {
+			$zone->save();
 		}
+		$zone->set_locations( $locations );
 		$saved_id = (int) $zone->save();
 
+		$added = array();
 		foreach ( $methods as $method ) {
-			$method_id = is_array( $method ) ? (string) ( $method['id'] ?? '' ) : (string) $method;
-			if ( '' !== $method_id ) {
-				$zone->add_shipping_method( $method_id );
+			$result = self::addZoneMethod( $zone, $method );
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+			$added[] = $result;
+		}
+
+		$saved_locations = array();
+		foreach ( $zone->get_zone_locations() as $location ) {
+			$location = (array) $location;
+			if ( is_string( $location['code'] ?? null ) && is_string( $location['type'] ?? null ) ) {
+				$saved_locations[] = array(
+					'code' => $location['code'],
+					'type' => $location['type'],
+				);
 			}
 		}
 
 		return array(
-			'zone_id'  => $saved_id,
-			'previous' => $previous,
+			'zone_id'   => $saved_id,
+			'previous'  => $previous,
+			'locations' => $saved_locations,
+			'methods'   => $added,
 		);
+	}
+
+	/**
+	 * @param array<mixed> $locations Raw `locations` input.
+	 * @return list<array{code:string,type:string}>|WP_Error
+	 */
+	private static function resolveZoneLocations( array $locations ): array|WP_Error {
+		$resolved  = array();
+		$countries = self::wcCountries();
+
+		foreach ( $locations as $location ) {
+			if ( ! is_array( $location ) ) {
+				return new WP_Error( 'invalid_input', __( 'Each location must be an object with a code.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+			$extra = array_diff( array_keys( $location ), array( 'code', 'type' ) );
+			if ( array() !== $extra ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: unexpected location field names. */
+						__( 'Unknown location field: %s. A location takes only code and type.', 'senroflux' ),
+						implode( ', ', array_map( 'strval', $extra ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$parsed = ShippingZoneInput::location( $location );
+			if ( is_wp_error( $parsed ) ) {
+				return $parsed;
+			}
+			if ( null !== $countries && ! self::zoneLocationExists( $countries, $parsed ) ) {
+				return new WP_Error(
+					'unknown_location',
+					sprintf(
+						/* translators: 1: location type, 2: location code. */
+						__( 'WooCommerce has no %1$s "%2$s".', 'senroflux' ),
+						$parsed['type'],
+						$parsed['code']
+					),
+					array( 'status' => 400 )
+				);
+			}
+			$resolved[] = $parsed;
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * `WC()->countries`, or null when WooCommerce cannot say which regions
+	 * exist (the check is then skipped rather than refusing everything).
+	 */
+	private static function wcCountries(): ?object {
+		if ( ! function_exists( 'WC' ) ) {
+			return null;
+		}
+		$wc = \WC();
+		if ( ! is_object( $wc ) || ! isset( $wc->countries ) || ! is_object( $wc->countries ) || ! method_exists( $wc->countries, 'get_countries' ) ) {
+			return null;
+		}
+
+		return array() === $wc->countries->get_countries() ? null : $wc->countries;
+	}
+
+	/**
+	 * @param array{code:string,type:string} $location Parsed location.
+	 */
+	private static function zoneLocationExists( object $countries, array $location ): bool {
+		$code = $location['code'];
+
+		if ( 'continent' === $location['type'] ) {
+			$continents = method_exists( $countries, 'get_continents' ) ? $countries->get_continents() : null;
+
+			return ! is_array( $continents ) || isset( $continents[ $code ] );
+		}
+		if ( 'country' === $location['type'] ) {
+			$known = method_exists( $countries, 'get_countries' ) ? $countries->get_countries() : array();
+
+			return is_array( $known ) && isset( $known[ $code ] );
+		}
+		if ( 'state' === $location['type'] ) {
+			list( $country, $state ) = explode( ':', $code, 2 );
+			$states                  = method_exists( $countries, 'get_states' ) ? $countries->get_states( $country ) : null;
+
+			return is_array( $states ) && isset( $states[ $state ] );
+		}
+
+		return true;
+	}
+
+	/**
+	 * @param array<mixed> $methods Raw `methods` input.
+	 * @return list<array{method_id:string,title:?string,cost:?string,tax_status:?string,enabled:?bool}>|WP_Error
+	 */
+	private static function resolveZoneMethods( array $methods ): array|WP_Error {
+		$resolved = array();
+		$known    = array() === $methods ? array() : self::registeredShippingMethods();
+
+		foreach ( $methods as $method ) {
+			if ( ! is_array( $method ) ) {
+				return new WP_Error( 'invalid_input', __( 'Each method must be an object with a method_id.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+			$extra = array_diff( array_keys( $method ), array( 'method_id', 'title', 'cost', 'tax_status', 'enabled' ) );
+			if ( array() !== $extra ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: unexpected method field names. */
+						__( 'Unknown method field: %s. A method takes method_id, title, cost, tax_status and enabled.', 'senroflux' ),
+						implode( ', ', array_map( 'strval', $extra ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$method_id = $method['method_id'] ?? null;
+			if ( ! is_string( $method_id ) || ! isset( self::ZONE_METHOD_FIELDS[ $method_id ] ) || ! in_array( $method_id, $known, true ) ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: comma-separated shipping method ids. */
+						__( 'method_id must be one of: %s.', 'senroflux' ),
+						implode( ', ', array_intersect( array_keys( self::ZONE_METHOD_FIELDS ), $known ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$settings = array();
+			foreach ( array( 'title', 'cost', 'tax_status' ) as $field ) {
+				if ( ! array_key_exists( $field, $method ) ) {
+					continue;
+				}
+				$value = $method[ $field ];
+				if ( ! is_string( $value ) ) {
+					return new WP_Error( 'invalid_input', sprintf( /* translators: %s: field name. */ __( 'Method %s must be a string.', 'senroflux' ), $field ), array( 'status' => 400 ) );
+				}
+				if ( 'title' !== $field && ! in_array( $field, self::ZONE_METHOD_FIELDS[ $method_id ], true ) ) {
+					return new WP_Error(
+						'invalid_input',
+						sprintf(
+							/* translators: 1: method field name, 2: shipping method id. */
+							__( '%1$s cannot be set on %2$s.', 'senroflux' ),
+							$field,
+							$method_id
+						),
+						array( 'status' => 400 )
+					);
+				}
+				if ( 'cost' === $field && 1 !== preg_match( '/^\d+(\.\d+)?$/', $value ) ) {
+					return new WP_Error( 'invalid_input', __( 'Method cost must be a plain decimal such as "12" or "4.50".', 'senroflux' ), array( 'status' => 400 ) );
+				}
+				if ( 'tax_status' === $field && ! in_array( $value, array( 'taxable', 'none' ), true ) ) {
+					return new WP_Error( 'invalid_input', __( 'Method tax_status must be "taxable" or "none".', 'senroflux' ), array( 'status' => 400 ) );
+				}
+				if ( 'title' === $field ) {
+					$value = sanitize_text_field( $value );
+					if ( '' === $value ) {
+						return new WP_Error( 'invalid_input', __( 'A method title cannot be empty.', 'senroflux' ), array( 'status' => 400 ) );
+					}
+				}
+				$settings[ $field ] = $value;
+			}
+
+			$enabled = null;
+			if ( array_key_exists( 'enabled', $method ) ) {
+				$enabled = filter_var( $method['enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
+				if ( null === $enabled ) {
+					return new WP_Error( 'invalid_input', __( 'Method enabled must be true or false.', 'senroflux' ), array( 'status' => 400 ) );
+				}
+			}
+
+			$resolved[] = array(
+				'method_id'  => $method_id,
+				'title'      => $settings['title'] ?? null,
+				'cost'       => $settings['cost'] ?? null,
+				'tax_status' => $settings['tax_status'] ?? null,
+				'enabled'    => $enabled,
+			);
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * Shipping method ids WooCommerce has registered.
+	 *
+	 * @return list<string>
+	 */
+	private static function registeredShippingMethods(): array {
+		if ( ! function_exists( 'WC' ) ) {
+			return array();
+		}
+		$wc = \WC();
+		if ( ! is_object( $wc ) || ! method_exists( $wc, 'shipping' ) ) {
+			return array();
+		}
+		$shipping = $wc->shipping();
+
+		return is_object( $shipping ) && method_exists( $shipping, 'get_shipping_method_class_names' )
+			? array_map( 'strval', array_keys( (array) $shipping->get_shipping_method_class_names() ) )
+			: array();
+	}
+
+	/**
+	 * Add one method to the zone and apply its settings the way WooCommerce's
+	 * `WC_REST_Shipping_Zone_Methods_V2_Controller::create_item()` and
+	 * `update_fields()` do: instance settings option, then `is_enabled`.
+	 *
+	 * @param array{method_id:string,title:?string,cost:?string,tax_status:?string,enabled:?bool} $method Validated method.
+	 * @return array<string,mixed>|WP_Error What was saved.
+	 */
+	private static function addZoneMethod( \WC_Shipping_Zone $zone, array $method ): array|WP_Error {
+		global $wpdb;
+
+		$instance_id = (int) $zone->add_shipping_method( $method['method_id'] );
+		$instance    = $instance_id > 0 ? \WC_Shipping_Zones::get_shipping_method( $instance_id ) : false;
+		if ( ! $instance instanceof \WC_Shipping_Method ) {
+			return new WP_Error(
+				'method_not_added',
+				sprintf(
+					/* translators: %s: shipping method id. */
+					__( 'WooCommerce could not add the %s method to the zone.', 'senroflux' ),
+					$method['method_id']
+				),
+				array( 'status' => 500 )
+			);
+		}
+
+		$instance->init_instance_settings();
+		$settings = (array) $instance->instance_settings;
+		foreach ( array( 'title', 'cost', 'tax_status' ) as $field ) {
+			if ( null !== $method[ $field ] ) {
+				$settings[ $field ] = $method[ $field ];
+			}
+		}
+		update_option(
+			$instance->get_instance_option_key(),
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WooCommerce's own per-method settings filter, applied as its REST controller does.
+			apply_filters( 'woocommerce_shipping_' . $instance->id . '_instance_settings_values', $settings, $instance )
+		);
+
+		$enabled = $method['enabled'] ?? true;
+		if ( ! $enabled ) {
+			$wpdb->update( "{$wpdb->prefix}woocommerce_shipping_zone_methods", array( 'is_enabled' => 0 ), array( 'instance_id' => $instance_id ) );
+		}
+
+		$saved = array(
+			'method_id'   => $method['method_id'],
+			'instance_id' => $instance_id,
+			'title'       => is_string( $settings['title'] ?? null ) ? $settings['title'] : '',
+			'cost'        => is_scalar( $settings['cost'] ?? null ) ? (string) $settings['cost'] : '',
+			'enabled'     => $enabled,
+		);
+		if ( is_string( $settings['tax_status'] ?? null ) ) {
+			$saved['tax_status'] = $settings['tax_status'];
+		}
+
+		return $saved;
 	}
 
 	/**

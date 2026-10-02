@@ -309,24 +309,101 @@ if ( ! isset( $GLOBALS['senroflux_test_shipping_zones'] ) ) {
 if ( ! isset( $GLOBALS['senroflux_test_next_zone_id'] ) ) {
 	$GLOBALS['senroflux_test_next_zone_id'] = 1;
 }
+if ( ! isset( $GLOBALS['senroflux_test_next_instance_id'] ) ) {
+	$GLOBALS['senroflux_test_next_instance_id'] = 1;
+}
+
+if ( ! class_exists( 'WC_Shipping_Method', false ) ) {
+	/** Instance-settings surface of the real `WC_Shipping_Method` the zone code touches. */
+	class WC_Shipping_Method {
+
+		public string $id = '';
+		public int $instance_id;
+		/** @var array<string,mixed> */
+		public array $instance_settings = array();
+		public string $enabled          = 'yes';
+
+		public function __construct( int $instance_id = 0 ) {
+			$this->instance_id = $instance_id;
+		}
+
+		public function get_instance_option_key(): string {
+			return $this->instance_id ? 'woocommerce_' . $this->id . '_' . $this->instance_id . '_settings' : '';
+		}
+
+		/** Like the real one: stored settings, else the form-field defaults. */
+		public function init_instance_settings(): void {
+			$stored = get_option( $this->get_instance_option_key(), null );
+			if ( is_array( $stored ) ) {
+				$this->instance_settings = $stored;
+				return;
+			}
+			$defaults = array(
+				'title'      => ucwords( str_replace( '_', ' ', $this->id ) ),
+				'tax_status' => 'taxable',
+				'cost'       => '',
+			);
+			if ( 'free_shipping' === $this->id ) {
+				$defaults = array(
+					'title'    => 'Free shipping',
+					'requires' => '',
+				);
+			}
+			$this->instance_settings = $defaults;
+		}
+
+		public function get_title(): string {
+			$this->init_instance_settings();
+
+			return (string) ( $this->instance_settings['title'] ?? '' );
+		}
+	}
+}
+
+if ( ! class_exists( 'WC_Shipping_Zones', false ) ) {
+	class WC_Shipping_Zones {
+
+		/** @return WC_Shipping_Method|false */
+		public static function get_shipping_method( int $instance_id ) {
+			foreach ( $GLOBALS['senroflux_test_shipping_zones'] as $zone ) {
+				foreach ( $zone['methods'] as $row ) {
+					if ( $row['instance_id'] === $instance_id ) {
+						$method     = new WC_Shipping_Method( $instance_id );
+						$method->id = $row['method_id'];
+
+						return $method;
+					}
+				}
+			}
+
+			return false;
+		}
+	}
+}
 
 if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 	class WC_Shipping_Zone {
 
 		private int $id      = 0;
 		private string $name = '';
-		/** @var list<array{code:string,type:string}> */
+		/** @var list<object{code:string,type:string}> */
 		private array $locations = array();
-		/** @var list<string> */
+		/** @var list<array{instance_id:int,method_id:string}> */
 		private array $methods = array();
 
-		public function __construct( int $id = 0 ) {
-			$existing = $GLOBALS['senroflux_test_shipping_zones'][ $id ] ?? null;
-			if ( $id > 0 && is_array( $existing ) ) {
-				$this->id        = $id;
+		public function __construct( int|null $zone = null ) {
+			$existing = $GLOBALS['senroflux_test_shipping_zones'][ $zone ] ?? null;
+			if ( (int) $zone > 0 && is_array( $existing ) ) {
+				$this->id        = $zone;
 				$this->name      = $existing['name'];
-				$this->locations = $existing['locations'];
-				$this->methods   = $existing['methods'];
+				$this->locations = array_map( static fn( $location ) => (object) $location, $existing['locations'] );
+				foreach ( $existing['methods'] as $method ) {
+					// Fixtures may list bare method ids; real zones always have instances.
+					$this->methods[] = is_array( $method ) ? $method : array(
+						'instance_id' => (int) $GLOBALS['senroflux_test_next_instance_id']++,
+						'method_id'   => (string) $method,
+					);
+				}
 			}
 		}
 
@@ -338,29 +415,58 @@ if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 			return $this->name;
 		}
 
-		/** @return list<array{code:string,type:string}> */
+		/** @return list<object{code:string,type:string}> */
 		public function get_zone_locations(): array {
 			return $this->locations;
 		}
 
-		/** @return list<string> */
+		/** @return array<int,WC_Shipping_Method> instance id => method, like the real one. */
 		public function get_shipping_methods(): array {
-			return $this->methods;
+			$methods = array();
+			foreach ( $this->methods as $row ) {
+				$method                         = new WC_Shipping_Method( $row['instance_id'] );
+				$method->id                     = $row['method_id'];
+				$methods[ $row['instance_id'] ] = $method;
+			}
+
+			return $methods;
 		}
 
 		public function set_zone_name( string $name ): void {
 			$this->name = $name;
 		}
 
+		/** A no-op on a zone with no id yet, exactly like the real one. */
 		public function add_location( string $code, string $type ): void {
-			$this->locations[] = array(
-				'code' => $code,
-				'type' => $type,
-			);
+			if ( 0 !== $this->id ) {
+				$this->locations[] = (object) array(
+					'code' => $code,
+					'type' => $type,
+				);
+			}
 		}
 
-		public function add_shipping_method( string $method_id ): void {
-			$this->methods[] = $method_id;
+		/** @param list<array{code:string,type:string}> $locations */
+		public function set_locations( array $locations = array() ): void {
+			$this->locations = array();
+			foreach ( $locations as $location ) {
+				$this->add_location( $location['code'], $location['type'] );
+			}
+		}
+
+		/** @return int New instance id, 0 when the method is not registered. */
+		public function add_shipping_method( string $type ): int {
+			if ( ! in_array( $type, array( 'flat_rate', 'free_shipping', 'local_pickup' ), true ) ) {
+				return 0;
+			}
+			$instance_id     = (int) $GLOBALS['senroflux_test_next_instance_id']++;
+			$this->methods[] = array(
+				'instance_id' => $instance_id,
+				'method_id'   => $type,
+			);
+			$this->save();
+
+			return $instance_id;
 		}
 
 		public function save(): int {
@@ -371,12 +477,59 @@ if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 
 			$GLOBALS['senroflux_test_shipping_zones'][ $this->id ] = array(
 				'name'      => $this->name,
-				'locations' => $this->locations,
+				'locations' => array_map( 'get_object_vars', $this->locations ),
 				'methods'   => $this->methods,
 			);
 
 			return $this->id;
 		}
+	}
+}
+
+if ( ! function_exists( 'WC' ) ) {
+	/** Minimal `WC()` carrying `countries` and `shipping()`, as the approval cards and zone ability read them. */
+	function WC(): object {
+		return new class() {
+			public object $countries;
+
+			public function __construct() {
+				$this->countries = new class() {
+					/** @return array<string,string> */
+					public function get_countries(): array {
+						return $GLOBALS['senroflux_test_countries'] ?? array();
+					}
+
+					/** @return array<string,array{name:string,countries:list<string>}> */
+					public function get_continents(): array {
+						return $GLOBALS['senroflux_test_continents'] ?? array();
+					}
+
+					/** @return array<string,string>|false */
+					public function get_states( ?string $cc = null ): array|false {
+						return $GLOBALS['senroflux_test_states'][ $cc ] ?? false;
+					}
+				};
+			}
+
+			public function shipping(): object {
+				return new class() {
+					/** @return array<string,string> */
+					public function get_shipping_method_class_names(): array {
+						return array(
+							'flat_rate'     => 'WC_Shipping_Flat_Rate',
+							'free_shipping' => 'WC_Shipping_Free_Shipping',
+							'local_pickup'  => 'WC_Shipping_Local_Pickup',
+						);
+					}
+				};
+			}
+		};
+	}
+}
+
+if ( ! function_exists( 'wc_get_price_decimals' ) ) {
+	function wc_get_price_decimals(): int {
+		return 2;
 	}
 }
 

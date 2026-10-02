@@ -584,4 +584,151 @@ final class ToolExecutorTest extends TestCase {
 		$this->assertSame( '-5', $seen['received']['regular_price'] );
 		$this->assertSame( 'error', $outcome->kind );
 	}
+
+	/**
+	 * Live proof run: Woo's product-create input is a top-level `oneOf` of
+	 * object branches with no `properties` of its own, and one branch has no
+	 * regular_price at all; 18 was refused six times in a row.
+	 *
+	 * @param string $keyword allOf, anyOf or oneOf.
+	 * @return array<string,mixed>
+	 */
+	private function wooShapedSchema( string $keyword = 'oneOf' ): array {
+		$price = array(
+			'type'    => 'string',
+			'pattern' => '^(?:-?(?:[0-9]+(?:[\\.][0-9]+)?|[\\.][0-9]+)|)$',
+		);
+
+		return array(
+			'type'   => 'object',
+			$keyword => array(
+				array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'name'          => array( 'type' => 'string' ),
+						'regular_price' => $price,
+					),
+					'required'             => array( 'name' ),
+					'additionalProperties' => false,
+				),
+				array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'name'          => array( 'type' => 'string' ),
+						'regular_price' => $price,
+						'sale_price'    => array( 'type' => 'string' ),
+					),
+					'required'             => array( 'sale_price' ),
+					'additionalProperties' => false,
+				),
+				array(
+					'type'                 => 'object',
+					'properties'           => array(
+						'name' => array( 'type' => 'string' ),
+					),
+					'required'             => array( 'name' ),
+					'additionalProperties' => false,
+				),
+			),
+		);
+	}
+
+	public function test_numbers_are_repaired_through_a_woo_shaped_one_of_object_schema(): void {
+		$seen = $this->registerRecordingAbility( $this->wooShapedSchema() );
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'name'          => 'Mug',
+				'regular_price' => 18,
+				'sale_price'    => 12.5,
+				'stock'         => 3,
+			)
+		);
+
+		$this->assertSame( '18', $seen['received']['regular_price'] );
+		$this->assertSame( '12.5', $seen['received']['sale_price'] );
+		$this->assertSame( 'Mug', $seen['received']['name'] );
+		$this->assertSame( 3, $seen['received']['stock'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18.5 ) );
+		$this->assertSame( '18.5', $seen['received']['regular_price'] );
+	}
+
+	public function test_all_of_and_any_of_are_repaired_the_same_way(): void {
+		foreach ( array( 'allOf', 'anyOf' ) as $keyword ) {
+			$seen = $this->registerRecordingAbility( $this->wooShapedSchema( $keyword ) );
+
+			$this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18 ) );
+
+			$this->assertSame( '18', $seen['received']['regular_price'], $keyword );
+		}
+	}
+
+	public function test_a_branch_that_accepts_a_number_blocks_the_conversion(): void {
+		foreach ( array( array( 'string', 'number' ), 'number', 'integer' ) as $type ) {
+			$schema = $this->wooShapedSchema();
+			$schema['oneOf'][1]['properties']['regular_price'] = array( 'type' => $type );
+			$seen = $this->registerRecordingAbility( $schema );
+
+			$this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18 ) );
+
+			$this->assertSame( 18, $seen['received']['regular_price'], wp_json_encode( $type ) );
+		}
+	}
+
+	public function test_a_declaring_branch_with_a_typeless_property_blocks_the_conversion(): void {
+		$schema = $this->wooShapedSchema();
+		$schema['oneOf'][1]['properties']['regular_price'] = array( 'description' => 'anything' );
+		$seen = $this->registerRecordingAbility( $schema );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18 ) );
+
+		$this->assertSame( 18, $seen['received']['regular_price'] );
+	}
+
+	public function test_a_property_level_one_of_of_string_and_null_converts(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'sale_price' => array(
+						'oneOf' => array( array( 'type' => 'string' ), array( 'type' => 'null' ) ),
+					),
+					'either'     => array(
+						'oneOf' => array( array( 'type' => 'string' ), array( 'type' => 'number' ) ),
+					),
+					'open'       => array(
+						'oneOf' => array( array( 'type' => 'string' ), array( 'minLength' => 1 ) ),
+					),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'sale_price' => 9,
+				'either'     => 9,
+				'open'       => 9,
+			)
+		);
+
+		$this->assertSame( '9', $seen['received']['sale_price'] );
+		$this->assertSame( 9, $seen['received']['either'] );
+		$this->assertSame( 9, $seen['received']['open'] );
+	}
+
+	public function test_differing_branch_declarations_narrow_to_the_union_of_their_types(): void {
+		$schema = $this->wooShapedSchema();
+		$schema['oneOf'][1]['properties']['regular_price'] = array(
+			'type'      => 'string',
+			'maxLength' => 8,
+		);
+		$seen = $this->registerRecordingAbility( $schema );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18 ) );
+
+		$this->assertSame( '18', $seen['received']['regular_price'] );
+	}
 }

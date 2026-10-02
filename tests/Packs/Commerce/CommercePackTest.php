@@ -70,6 +70,7 @@ final class CommercePackTest extends TestCase {
 				'commerce/price-change'         => 2,
 				'commerce/product-publish'      => 2,
 				'commerce/product-image'        => 1,
+				'commerce/media-search'         => 0,
 				'commerce/image-generate'       => 1,
 				'commerce/coupon-draft'         => 1,
 				'commerce/coupon-enable'        => 2,
@@ -227,6 +228,18 @@ final class CommercePackTest extends TestCase {
 			'commerce/product-image',
 			( new CommercePack() )->verbFor( 'senroflux/set-product-image', array( 'product_id' => 1 ) )
 		);
+	}
+
+	public function test_media_search_is_a_tier_zero_media_search_verb(): void {
+		$pack = new CommercePack();
+
+		$this->assertSame( 'media-search', $pack->roles()['search'] );
+		$this->assertSame( 'commerce/media-search', $pack->verbFor( 'senroflux/media-search', array( 'query' => 'mug' ) ) );
+		$this->assertSame( 0, $pack->verbMap()['commerce/media-search'] );
+		$this->assertSame( array( 'commerce/media-search' ), $pack->roleVerbs()['search'] );
+		$this->assertSame( 'senroflux/media-search', $pack->resolveAbilities()['search'] );
+		$this->assertSame( 'senroflux/media-search', $pack->gateVerbFor( 'commerce/media-search' ) );
+		$this->assertContains( 'senroflux/media-search', $pack->allowList() );
 	}
 
 	public function test_generate_image_is_image_generate(): void {
