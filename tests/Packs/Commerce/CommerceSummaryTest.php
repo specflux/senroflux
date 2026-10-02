@@ -349,15 +349,15 @@ final class CommerceSummaryTest extends TestCase {
 				'locations' => array( array( 'code' => 'country:CA' ) ),
 				'methods'   => array(
 					array(
-						'id'    => 'flat_rate',
-						'label' => 'Canada Shipping',
-						'cost'  => '12',
+						'method_id' => 'flat_rate',
+						'title'     => 'Canada Shipping',
+						'cost'      => '12',
 					),
 				),
 			)
 		);
 
-		$this->assertStringContainsString( 'current: name &quot;Old Zone&quot;; regions: United States; methods: free shipping', $sum );
+		$this->assertStringContainsString( 'current: name &quot;Old Zone&quot;; regions: United States; methods: Free shipping (free shipping)', $sum );
 		$this->assertStringContainsString( 'proposed: name &quot;North America&quot;; regions: Canada; methods: Canada Shipping (flat rate) 12.00', $sum );
 	}
 
@@ -372,14 +372,14 @@ final class CommerceSummaryTest extends TestCase {
 				'locations' => array( array( 'code' => 'country:CA' ) ),
 				'methods'   => array(
 					array(
-						'id'    => 'flat_rate',
-						'label' => 'Canada Shipping',
-						'cost'  => '12',
+						'method_id' => 'flat_rate',
+						'title'     => 'Canada Shipping',
+						'cost'      => '12',
 					),
 					array(
-						'id'    => 'local_pickup',
-						'label' => 'Pickup',
-						'cost'  => '0.5',
+						'method_id' => 'local_pickup',
+						'title'     => 'Pickup',
+						'cost'      => '0.5',
 					),
 				),
 			)
@@ -420,9 +420,9 @@ final class CommerceSummaryTest extends TestCase {
 				'locations' => array(),
 				'methods'   => array(
 					array(
-						'id'    => 'flat_rate',
-						'label' => '<b>Bold</b>',
-						'cost'  => '1',
+						'method_id' => 'flat_rate',
+						'title'     => '<b>Bold</b>',
+						'cost'      => '1',
 					),
 				),
 			)

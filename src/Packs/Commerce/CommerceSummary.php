@@ -363,7 +363,7 @@ final class CommerceSummary {
 	/**
 	 * Human labels for zone locations, from either the ability's input
 	 * (`{code,type?}` or a bare code string) or `WC_Shipping_Zone` (objects
-	 * with `code`/`type`).
+	 * with `code`/`type`), parsed exactly as the ability parses them.
 	 *
 	 * @param array<mixed> $locations Locations.
 	 * @return list<string>
@@ -375,27 +375,26 @@ final class CommerceSummary {
 			if ( is_object( $location ) ) {
 				$location = get_object_vars( $location );
 			}
-			$code = is_array( $location ) ? ( $location['code'] ?? '' ) : $location;
-			$type = is_array( $location ) && is_string( $location['type'] ?? null ) ? $location['type'] : '';
-			if ( ! is_scalar( $code ) || '' === (string) $code ) {
+			$parsed = ShippingZoneInput::location( $location );
+			if ( is_wp_error( $parsed ) ) {
+				$code = is_array( $location ) ? ( $location['code'] ?? '' ) : $location;
+				if ( is_scalar( $code ) && '' !== (string) $code ) {
+					$labels[] = (string) $code;
+				}
 				continue;
 			}
-			$labels[] = self::regionLabel( (string) $code, $type );
+			$labels[] = self::regionLabel( $parsed['code'], $parsed['type'] );
 		}
 
 		return $labels;
 	}
 
 	/**
-	 * `country:CA`, `state:CA:ON`, `continent:NA` and `postcode:...` all
-	 * resolve to a name when WooCommerce can supply one, else stay as given.
+	 * A parsed location resolves to a name when WooCommerce can supply one,
+	 * else stays as given.
 	 */
 	private static function regionLabel( string $code, string $type ): string {
-		if ( preg_match( '/^(country|state|continent|postcode):(.+)$/', $code, $m ) ) {
-			$type = $m[1];
-			$code = $m[2];
-		}
-		$raw = '' === $type || 'country' === $type ? $code : $type . ':' . $code;
+		$raw = 'country' === $type ? $code : $type . ':' . $code;
 
 		if ( ! function_exists( 'WC' ) ) {
 			return $raw;
@@ -423,7 +422,7 @@ final class CommerceSummary {
 			}
 			return $raw;
 		}
-		if ( '' === $type || 'country' === $type ) {
+		if ( 'country' === $type ) {
 			return is_string( $countries[ $code ] ?? null ) ? $countries[ $code ] : $raw;
 		}
 
@@ -431,8 +430,8 @@ final class CommerceSummary {
 	}
 
 	/**
-	 * `Label (method id) cost` for each shipping method, from either the
-	 * ability's input (`{id,label,cost}` or a bare id) or `WC_Shipping_Zone`
+	 * `Title (method id) cost` for each shipping method, from either the
+	 * ability's input (`{method_id,title,cost}`) or `WC_Shipping_Zone`
 	 * (method objects).
 	 *
 	 * @param array<mixed> $methods Methods.
@@ -453,8 +452,8 @@ final class CommerceSummary {
 				$settings = $method->instance_settings ?? null;
 				$cost     = is_array( $settings ) ? ( $settings['cost'] ?? null ) : null;
 			} elseif ( is_array( $method ) ) {
-				$id    = is_scalar( $method['id'] ?? $method['method_id'] ?? null ) ? (string) ( $method['id'] ?? $method['method_id'] ) : '';
-				$label = is_string( $method['label'] ?? null ) ? $method['label'] : '';
+				$id    = is_scalar( $method['method_id'] ?? null ) ? (string) $method['method_id'] : '';
+				$label = is_string( $method['title'] ?? null ) ? $method['title'] : '';
 				$cost  = $method['cost'] ?? null;
 			} elseif ( is_scalar( $method ) ) {
 				$id = (string) $method;
