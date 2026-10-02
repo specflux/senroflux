@@ -280,29 +280,40 @@ final class SitePack extends Pack {
 	}
 
 	/**
-	 * S12 (defect fix, mirrors PostsPack/PagesPack): `update-alt`'s output
-	 * and `read-media`'s input both carry the attachment id as
-	 * `attachment_id`, never `id`.
+	 * S12 (defect fix, mirrors PostsPack): `update-alt`, `read-media` and the
+	 * three attachment-producing media verbs carry the attachment id as
+	 * `attachment_id`, never `id`; `set-featured-image` answers the `post_id`
+	 * it changed. The base's default would silently track/verify nothing for
+	 * any of them.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdKey( string $verb ): string {
 		return match ( $verb ) {
-			'site/update-alt', 'site/read-media' => 'attachment_id',
+			'site/update-alt',
+			'site/read-media',
+			'site/media-upload',
+			'site/media-generate',
+			'site/media-stock-import' => 'attachment_id',
+			'site/set-featured-image' => 'post_id',
 			default => parent::objectIdKey( $verb ),
 		};
 	}
 
 	/**
 	 * S12 (defect fix, mirrors PostsPack/PagesPack): an attachment and a post
-	 * can share the same numeric id, so the two verbs above qualify it with
+	 * can share the same numeric id, so the verbs above qualify it with
 	 * {@see Media::OBJECT_ID_PREFIX}.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdPrefix( string $verb ): string {
 		return match ( $verb ) {
-			'site/update-alt', 'site/read-media' => Media::OBJECT_ID_PREFIX,
+			'site/update-alt',
+			'site/read-media',
+			'site/media-upload',
+			'site/media-generate',
+			'site/media-stock-import' => Media::OBJECT_ID_PREFIX,
 			default => parent::objectIdPrefix( $verb ),
 		};
 	}

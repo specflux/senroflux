@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from '@wordpress/element';
 import { __, _n, sprintf } from '@wordpress/i18n';
 import TierBadge from './TierBadge';
+import ApprovalSummary from './ApprovalSummary';
 import { planApprovalCount } from '../utils';
 
 const HEADINGS = {
@@ -313,6 +314,7 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 	const args = payload.args && 'object' === typeof payload.args ? payload.args : {};
 	const hasArgs = Object.keys( args ).length > 0;
+	const hasSummary = 'string' === typeof payload.summary && '' !== payload.summary;
 
 	return (
 		<div className="senroflux-park-body">
@@ -320,11 +322,25 @@ function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 				<strong>{ __( 'Requested action', 'senroflux' ) }:</strong> <code>{ payload.verb }</code>
 			</p>
 			<TierBadge gateMode={ gateMode } tier={ payload.tier } />
-			{ hasArgs && (
-				<>
+			{ hasSummary && (
+				<div className="senroflux-approval-summary-block">
 					<p>
-						<strong>{ __( 'Arguments', 'senroflux' ) }:</strong>
+						<strong>{ __( 'What will change', 'senroflux' ) }:</strong>
 					</p>
+					{ /*
+					 * The pack's own summary is model-influenced DATA (titles,
+					 * prices, notes), so it carries the pseudo-locale data
+					 * marker; the labels around it stay translatable chrome.
+					 * Plain text, so it reads without colour.
+					 */ }
+					<p className="senroflux-approval-summary" data-senroflux-content>
+						<ApprovalSummary html={ payload.summary } />
+					</p>
+				</div>
+			) }
+			{ hasArgs && (
+				<details className="senroflux-approval-args" open={ ! hasSummary }>
+					<summary>{ __( 'Arguments', 'senroflux' ) }</summary>
 					{ /*
 					 * Live-review finding: approval-card arguments must wrap and
 					 * show in full. No `overflow: hidden`, no `text-overflow:
@@ -335,7 +351,7 @@ function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 					<pre className="senroflux-args" tabIndex={ 0 }>
 						{ JSON.stringify( args, null, 2 ) }
 					</pre>
-				</>
+				</details>
 			) }
 			<div className="senroflux-park-actions">
 				<button

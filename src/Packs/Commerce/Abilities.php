@@ -22,7 +22,8 @@ defined( 'ABSPATH' ) || exit;
  *
  * `set-product-image`, `coupon-create`, `coupon-enable`) and operations (S19
  * stage 13 — `orders-refund`, `shipping-zone-save`, `tax-rate-save`,
- * `store-report`, `save-store-report`).
+ * `store-report`, `save-store-report`) — plus the Tier-0 read
+ * `products-catalogue`.
  *
  * TARGET REPO PATH: src/Packs/Commerce/Abilities.php
  *
@@ -82,6 +83,15 @@ final class Abilities {
 
 	/** The ability category for the commerce polyfills. */
 	public const CATEGORY = 'senroflux-commerce';
+
+	/** `products-catalogue` page size when the caller names none. */
+	private const CATALOGUE_DEFAULT_PER_PAGE = 20;
+
+	/** `products-catalogue` page-size cap (WooCommerce's own `products-query` caps at 100 too). */
+	private const CATALOGUE_MAX_PER_PAGE = 100;
+
+	/** Most products `missing_description` scans: description text cannot be filtered in the query. */
+	private const CATALOGUE_MAX_SCAN = 2000;
 
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
@@ -162,6 +172,7 @@ final class Abilities {
 		self::registerOrdersRefund();
 		self::registerShippingZoneSave();
 		self::registerTaxRateSave();
+		self::registerProductsCatalogue();
 		self::registerStoreReport();
 		self::registerSaveStoreReport();
 	}
@@ -487,6 +498,128 @@ final class Abilities {
 				'meta'                => self::meta(
 					array(
 						'readonly'    => false,
+						'destructive' => false,
+						'idempotent'  => true,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * `senroflux/products-catalogue` — upstream ask: a category filter and
+	 * category/description fields on WooCommerce's `products-query` (live
+	 * journeys J10/J11: the model could not read category assignments or tell
+	 * which products lack a description, asked the human, and guessed).
+	 * Read-only: products via `wc_get_products()` with their categories and
+	 * whether each has description text, plus the category list with product
+	 * counts when no product filter is given.
+	 *
+	 * PERMISSION DECISION: `manage_woocommerce` only — a read, the pack's run
+	 * capability (WooCommerce's own `products-query` asks for the product
+	 * read capability, which every holder of this one also has).
+	 */
+	private static function registerProductsCatalogue(): void {
+		$category = array(
+			'type'                 => 'object',
+			'additionalProperties' => false,
+			'properties'           => array(
+				'id'   => array( 'type' => 'integer' ),
+				'name' => array( 'type' => 'string' ),
+				'slug' => array( 'type' => 'string' ),
+			),
+		);
+
+		wp_register_ability(
+			'senroflux/products-catalogue',
+			array(
+				'label'               => __( 'Products catalogue', 'senroflux' ),
+				'description'         => __( 'A read-only product listing that shows each product\'s categories and whether it has a description (with a short excerpt), filterable by category and by missing description. Without a filter it also returns the category list with product counts.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'additionalProperties' => false,
+					'properties'           => array(
+						'category'            => array(
+							'type'        => 'string',
+							'description' => 'Only products in this product category: its slug or its name, case-insensitive.',
+						),
+						'missing_description' => array(
+							'type'        => 'boolean',
+							'description' => 'Only products whose description has no text.',
+						),
+						'search'              => array( 'type' => 'string' ),
+						'page'                => array(
+							'type'    => 'integer',
+							'default' => 1,
+							'minimum' => 1,
+						),
+						'per_page'            => array(
+							'type'    => 'integer',
+							'default' => self::CATALOGUE_DEFAULT_PER_PAGE,
+							'minimum' => 1,
+							'maximum' => self::CATALOGUE_MAX_PER_PAGE,
+						),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'products', 'total', 'total_pages', 'page', 'per_page' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'products'    => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'       => 'object',
+								'properties' => array(
+									'id'                  => array( 'type' => 'integer' ),
+									'name'                => array( 'type' => 'string' ),
+									'sku'                 => array( 'type' => 'string' ),
+									'status'              => array( 'type' => 'string' ),
+									'type'                => array( 'type' => 'string' ),
+									'regular_price'       => array( 'type' => 'string' ),
+									'sale_price'          => array( 'type' => 'string' ),
+									'stock_status'        => array( 'type' => 'string' ),
+									'categories'          => array(
+										'type'  => 'array',
+										'items' => $category,
+									),
+									'has_description'     => array( 'type' => 'boolean' ),
+									'description_excerpt' => array( 'type' => 'string' ),
+									'has_short_description' => array( 'type' => 'boolean' ),
+								),
+							),
+						),
+						'total'       => array( 'type' => 'integer' ),
+						'total_pages' => array( 'type' => 'integer' ),
+						'page'        => array( 'type' => 'integer' ),
+						'per_page'    => array( 'type' => 'integer' ),
+						'categories'  => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'       => 'object',
+								'properties' => array(
+									'id'    => array( 'type' => 'integer' ),
+									'name'  => array( 'type' => 'string' ),
+									'slug'  => array( 'type' => 'string' ),
+									'count' => array( 'type' => 'integer' ),
+								),
+							),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeProductsCatalogue( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					unset( $input );
+
+					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
+					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
 						'destructive' => false,
 						'idempotent'  => true,
 					)
@@ -918,6 +1051,206 @@ final class Abilities {
 	 * @param array<string,mixed> $input Call input.
 	 * @return array<string,mixed>|WP_Error
 	 */
+	private static function executeProductsCatalogue( array $input ): array|WP_Error {
+		if ( ! function_exists( 'wc_get_products' ) ) {
+			return new WP_Error( 'woocommerce_unavailable', __( 'Products are not available.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$page     = max( 1, is_numeric( $input['page'] ?? null ) ? (int) $input['page'] : 1 );
+		$per_page = is_numeric( $input['per_page'] ?? null ) ? (int) $input['per_page'] : self::CATALOGUE_DEFAULT_PER_PAGE;
+		$per_page = min( self::CATALOGUE_MAX_PER_PAGE, max( 1, $per_page ) );
+		$wanted   = is_string( $input['category'] ?? null ) ? trim( $input['category'] ) : '';
+		$search   = is_string( $input['search'] ?? null ) ? trim( $input['search'] ) : '';
+		$missing  = true === ( $input['missing_description'] ?? false );
+
+		$categories = self::productCategories();
+		$args       = array(
+			'return'  => 'objects',
+			'orderby' => 'id',
+			'order'   => 'ASC',
+		);
+
+		if ( '' !== $wanted ) {
+			$slug = self::categorySlug( $categories, $wanted );
+			if ( null === $slug ) {
+				return new WP_Error(
+					'unknown_category',
+					sprintf(
+						/* translators: %s: comma-separated list of product category slugs. */
+						__( 'No product category matches that. Known category slugs: %s', 'senroflux' ),
+						implode( ', ', array_column( $categories, 'slug' ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+			$args['category'] = array( $slug );
+		}
+
+		if ( '' !== $search ) {
+			$args['s'] = $search;
+		}
+
+		if ( $missing ) {
+			// Description text is not queryable: scan, filter, then page.
+			$args['limit'] = self::CATALOGUE_MAX_SCAN;
+			$matches       = array();
+			foreach ( (array) wc_get_products( $args ) as $product ) {
+				if ( is_object( $product ) && '' === self::descriptionText( $product ) ) {
+					$matches[] = $product;
+				}
+			}
+			$total    = count( $matches );
+			$products = array_slice( $matches, ( $page - 1 ) * $per_page, $per_page );
+		} else {
+			$args['limit']    = $per_page;
+			$args['page']     = $page;
+			$args['paginate'] = true;
+			$results          = wc_get_products( $args );
+			$products         = is_object( $results ) && isset( $results->products ) ? (array) $results->products : array();
+			$total            = is_object( $results ) && isset( $results->total ) ? (int) $results->total : count( $products );
+		}
+
+		$by_id = array();
+		foreach ( $categories as $category ) {
+			$by_id[ $category['id'] ] = array(
+				'id'   => $category['id'],
+				'name' => $category['name'],
+				'slug' => $category['slug'],
+			);
+		}
+
+		$rows = array();
+		foreach ( $products as $product ) {
+			if ( is_object( $product ) ) {
+				$rows[] = self::catalogueRow( $product, $by_id );
+			}
+		}
+
+		$result = array(
+			'products'    => $rows,
+			'total'       => $total,
+			'total_pages' => (int) ceil( $total / $per_page ),
+			'page'        => $page,
+			'per_page'    => $per_page,
+		);
+
+		if ( '' === $wanted && '' === $search && ! $missing ) {
+			$result['categories'] = $categories;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Every product category, with its product count (WooCommerce's own term
+	 * count: published products only).
+	 *
+	 * @return list<array{id:int,name:string,slug:string,count:int}>
+	 */
+	private static function productCategories(): array {
+		if ( ! function_exists( 'get_terms' ) ) {
+			return array();
+		}
+
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'product_cat',
+				'hide_empty' => false,
+			)
+		);
+
+		$categories = array();
+		foreach ( is_array( $terms ) ? $terms : array() as $term ) {
+			// Cast: a duck-typed term (WP_Term in WordPress, a plain object in tests).
+			$row = is_object( $term ) ? get_object_vars( $term ) : array();
+			if ( ! isset( $row['term_id'], $row['name'], $row['slug'] ) ) {
+				continue;
+			}
+			$categories[] = array(
+				'id'    => (int) $row['term_id'],
+				'name'  => html_entity_decode( (string) $row['name'], ENT_QUOTES ),
+				'slug'  => (string) $row['slug'],
+				'count' => (int) ( $row['count'] ?? 0 ),
+			);
+		}
+
+		return $categories;
+	}
+
+	/**
+	 * The slug of the category a model-supplied slug or name points at
+	 * (case-insensitive), or null when none does.
+	 *
+	 * @param list<array{id:int,name:string,slug:string,count:int}> $categories {@see productCategories()}.
+	 */
+	private static function categorySlug( array $categories, string $wanted ): ?string {
+		$needle = mb_strtolower( $wanted );
+		$titled = function_exists( 'sanitize_title' ) ? sanitize_title( $wanted ) : $needle;
+
+		foreach ( $categories as $category ) {
+			if ( mb_strtolower( $category['slug'] ) === $needle || mb_strtolower( $category['name'] ) === $needle ) {
+				return $category['slug'];
+			}
+		}
+		foreach ( $categories as $category ) {
+			if ( $category['slug'] === $titled ) {
+				return $category['slug'];
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * A product's description as plain text, whitespace-collapsed ('' when it
+	 * has none; markup with no text counts as none).
+	 */
+	private static function descriptionText( object $product ): string {
+		$html = method_exists( $product, 'get_description' ) ? (string) $product->get_description() : '';
+		$text = function_exists( 'wp_strip_all_tags' ) ? wp_strip_all_tags( $html ) : strip_tags( $html ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
+
+		return trim( (string) preg_replace( '/\s+/u', ' ', html_entity_decode( $text, ENT_QUOTES ) ) );
+	}
+
+	/**
+	 * @param array<int,array{id:int,name:string,slug:string}> $category_index Categories by term id.
+	 * @return array<string,mixed>
+	 */
+	private static function catalogueRow( object $product, array $category_index ): array {
+		$text         = self::descriptionText( $product );
+		$category_ids = method_exists( $product, 'get_category_ids' ) ? (array) $product->get_category_ids() : array();
+		$categories   = array();
+		foreach ( $category_ids as $category_id ) {
+			if ( isset( $category_index[ (int) $category_id ] ) ) {
+				$categories[] = $category_index[ (int) $category_id ];
+			}
+		}
+
+		$short = method_exists( $product, 'get_short_description' ) ? (string) $product->get_short_description() : '';
+		$short = function_exists( 'wp_strip_all_tags' ) ? wp_strip_all_tags( $short ) : strip_tags( $short ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
+
+		$read = static fn ( string $method ): string => method_exists( $product, $method ) ? (string) $product->$method() : '';
+
+		return array(
+			'id'                    => method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0,
+			'name'                  => $read( 'get_name' ),
+			'sku'                   => $read( 'get_sku' ),
+			'status'                => $read( 'get_status' ),
+			'type'                  => $read( 'get_type' ),
+			'regular_price'         => $read( 'get_regular_price' ),
+			'sale_price'            => $read( 'get_sale_price' ),
+			'stock_status'          => $read( 'get_stock_status' ),
+			'categories'            => $categories,
+			'has_description'       => '' !== $text,
+			'description_excerpt'   => mb_strlen( $text ) > 160 ? rtrim( mb_substr( $text, 0, 160 ) ) . '…' : $text,
+			'has_short_description' => '' !== trim( $short ),
+		);
+	}
+
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
 	private static function executeStoreReport( array $input ): array|WP_Error {
 		$from = is_string( $input['from'] ?? null ) ? $input['from'] : '';
 		$to   = is_string( $input['to'] ?? null ) ? $input['to'] : '';
@@ -963,8 +1296,7 @@ final class Abilities {
 			$refunds_total += self::orderTotalRefunded( $order );
 		}
 
-		$currency         = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
-		$low_stock_amount = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount() : 2;
+		$currency = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
 
 		return array(
 			'from'               => $from,
@@ -974,7 +1306,7 @@ final class Abilities {
 			'net_sales'          => round( $gross - $refunds_total, 2 ),
 			'refunds_total'      => round( $refunds_total, 2 ),
 			'currency'           => $currency,
-			'low_stock_products' => self::lowStockProductIds( $low_stock_amount ),
+			'low_stock_products' => self::lowStockProductIds(),
 		);
 	}
 
@@ -1170,12 +1502,12 @@ final class Abilities {
 	}
 
 	/**
-	 * Product ids at or below `$threshold` stock. Read-only (S19
+	 * Product ids at or below their own low-stock threshold. Read-only (S19
 	 * `store-report`): only ever calls `wc_get_products()`, never a writer.
 	 *
 	 * @return list<int>
 	 */
-	private static function lowStockProductIds( int $threshold ): array {
+	private static function lowStockProductIds(): array {
 		if ( ! function_exists( 'wc_get_products' ) ) {
 			return array();
 		}
@@ -1187,6 +1519,8 @@ final class Abilities {
 				continue;
 			}
 			$quantity = $product->get_stock_quantity();
+			// WooCommerce's own threshold: the product-level amount, else the store setting.
+			$threshold = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount( $product ) : 2;
 			if ( null !== $quantity && (int) $quantity <= $threshold ) {
 				$ids[] = method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0;
 			}

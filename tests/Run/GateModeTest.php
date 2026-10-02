@@ -186,6 +186,27 @@ final class GateModeTest extends TestCase {
 		$this->assertNotSame( 'awaiting_approval', $result['run']['status'], 'the approved call must not re-park itself' );
 	}
 
+	public function test_the_park_tick_carries_the_packs_approval_summary(): void {
+		add_filter(
+			'agent_safety_approval_summary',
+			static fn ( string $summary, string $verb ): string => 'agsafe-smoke/write' === $verb ? 'Write it &quot;now&quot;' : $summary,
+			10,
+			2
+		);
+		$run_id = $this->createRun( GateMode::BuiltIn );
+
+		$this->gateway->script[] = self::planTurn( 'call_p', array( 'agsafe-smoke/write' ) );
+		$this->runner->tick( $run_id, 0, null );
+		$run                     = $this->store->getRun( $run_id );
+		$this->gateway->script[] = self::callTurn( 'call_w', 'agsafe-smoke/write', array( 'x' => 1 ) );
+		$result                  = $this->runner->tick( $run_id, (int) $run->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+		remove_all_filters( 'agent_safety_approval_summary' );
+
+		$this->assertSame( 'awaiting_approval', $result['run']['status'] );
+		$this->assertSame( 'Write it &quot;now&quot;', $result['ui']['approval']['summary'] );
+		$this->assertSame( array( 'x' => 1 ), $result['ui']['approval']['args_preview'] );
+	}
+
 	public function test_an_unmapped_verb_parks_in_built_in_mode(): void {
 		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/unmapped'] = new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/unmapped' );
 

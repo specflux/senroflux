@@ -216,7 +216,8 @@
 	color: #646970;
 }
 
-.senroflux-action-error {
+.senroflux-action-error,
+.senroflux-run-error {
 	margin: 0 20px;
 	color: #b32d2e;
 }
@@ -509,6 +510,24 @@
 	overflow-wrap: anywhere;
 	overflow-y: auto;
 	max-height: 320px;
+}
+
+.senroflux-approval-summary-block {
+	margin: 8px 0;
+}
+
+.senroflux-approval-summary {
+	margin: 0 0 12px;
+	padding: 8px 10px;
+	border-left: 4px solid #1d2327;
+	background: #f6f7f7;
+	overflow-wrap: anywhere;
+}
+
+.senroflux-approval-args > summary {
+	cursor: pointer;
+	font-weight: 600;
+	margin-bottom: 6px;
 }
 
 .senroflux-args:focus-visible {

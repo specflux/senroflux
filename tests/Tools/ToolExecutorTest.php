@@ -351,4 +351,237 @@ final class ToolExecutorTest extends TestCase {
 			$received['sections']
 		);
 	}
+
+	/**
+	 * Register a fake ability that records what reached execute() and, like
+	 * the real Abilities API, refuses a value the string schema still rejects.
+	 *
+	 * @param array<string,mixed> $schema Input schema.
+	 * @return \ArrayObject<string,mixed> Holder: 'received' input, 'executed' bool.
+	 */
+	private function registerRecordingAbility( array $schema ): \ArrayObject {
+		$seen = new \ArrayObject(
+			array(
+				'received' => null,
+				'executed' => false,
+			)
+		);
+
+		$GLOBALS['senroflux_test_abilities']['woocommerce/product-create'] = new SenroFlux_Test_Fake_Ability(
+			'woocommerce/product-create',
+			execute_result: function ( $input ) use ( $seen ) {
+				$seen['received'] = $input;
+				$seen['executed'] = true;
+				$price            = $input['regular_price'] ?? '';
+
+				if ( is_string( $price ) && 1 !== preg_match( '/^\d+(\.\d+)?$/', $price ) ) {
+					return new WP_Error( 'ability_invalid_input', 'input[regular_price] does not match pattern.' );
+				}
+
+				return array( 'ok' => true );
+			},
+			input_schema: $schema
+		);
+
+		return $seen;
+	}
+
+	/**
+	 * Live journey J9: the model sent regular_price 18 (an integer) nine times
+	 * for a string+pattern property and the run ended with nothing created.
+	 */
+	public function test_an_integer_sent_for_a_string_property_reaches_the_ability_as_a_string(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'regular_price' => array(
+						'type'    => 'string',
+						'pattern' => '^\d+(\.\d+)?$',
+					),
+				),
+			)
+		);
+
+		$outcome = $this->executor->call( 'woocommerce/product-create', array( 'regular_price' => 18 ) );
+
+		$this->assertSame( '18', $seen['received']['regular_price'] );
+		$this->assertSame( 'result', $outcome->kind );
+	}
+
+	public function test_a_float_sent_for_a_string_property_becomes_a_plain_decimal_string(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'regular_price' => array( 'type' => 'string' ),
+					'sale_price'    => array( 'type' => array( 'string', 'null' ) ),
+					'big'           => array( 'type' => 'string' ),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'regular_price' => 18.5,
+				'sale_price'    => 18.0,
+				'big'           => 1.0E+20,
+			)
+		);
+
+		$this->assertSame( '18.5', $seen['received']['regular_price'] );
+		$this->assertSame( '18', $seen['received']['sale_price'] );
+		$this->assertSame( '100000000000000000000', $seen['received']['big'] );
+	}
+
+	public function test_numbers_are_untouched_where_the_schema_allows_numbers(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'a' => array( 'type' => 'number' ),
+					'b' => array( 'type' => 'integer' ),
+					'c' => array( 'type' => array( 'string', 'number' ) ),
+					'd' => array( 'type' => array( 'string', 'integer' ) ),
+					'e' => array(),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'a' => 1.5,
+				'b' => 3,
+				'c' => 4,
+				'd' => 5,
+				'e' => 6,
+			)
+		);
+
+		$this->assertSame(
+			array(
+				'a' => 1.5,
+				'b' => 3,
+				'c' => 4,
+				'd' => 5,
+				'e' => 6,
+			),
+			$seen['received']
+		);
+	}
+
+	public function test_booleans_nulls_and_arrays_are_left_alone_for_string_properties(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'flag' => array( 'type' => 'string' ),
+					'nope' => array( 'type' => 'string' ),
+					'list' => array( 'type' => 'string' ),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'flag' => true,
+				'nope' => null,
+				'list' => array( 1 ),
+			)
+		);
+
+		$this->assertSame(
+			array(
+				'flag' => true,
+				'nope' => null,
+				'list' => array( 1 ),
+			),
+			$seen['received']
+		);
+	}
+
+	public function test_numbers_are_converted_inside_nested_objects_and_array_items(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'dimensions' => array(
+						'type'       => 'object',
+						'properties' => array( 'length' => array( 'type' => 'string' ) ),
+					),
+					'variations' => array(
+						'type'  => 'array',
+						'items' => array(
+							'type'       => 'object',
+							'properties' => array(
+								'price' => array( 'type' => 'string' ),
+								'stock' => array( 'type' => 'integer' ),
+							),
+						),
+					),
+					'skus'       => array(
+						'type'  => 'array',
+						'items' => array( 'type' => 'string' ),
+					),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'dimensions' => array( 'length' => 12.25 ),
+				'variations' => array(
+					array(
+						'price' => 9,
+						'stock' => 4,
+					),
+					array(
+						'price' => 7.5,
+						'stock' => 1,
+					),
+				),
+				'skus'       => array( 101, 'abc' ),
+			)
+		);
+
+		$this->assertSame( '12.25', $seen['received']['dimensions']['length'] );
+		$this->assertSame(
+			array(
+				'price' => '9',
+				'stock' => 4,
+			),
+			$seen['received']['variations'][0]
+		);
+		$this->assertSame(
+			array(
+				'price' => '7.5',
+				'stock' => 1,
+			),
+			$seen['received']['variations'][1]
+		);
+		$this->assertSame( array( '101', 'abc' ), $seen['received']['skus'] );
+	}
+
+	public function test_a_converted_value_that_still_fails_the_pattern_is_refused_by_the_ability(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'regular_price' => array(
+						'type'    => 'string',
+						'pattern' => '^\d+(\.\d+)?$',
+					),
+				),
+			)
+		);
+
+		$outcome = $this->executor->call( 'woocommerce/product-create', array( 'regular_price' => -5 ) );
+
+		$this->assertSame( '-5', $seen['received']['regular_price'] );
+		$this->assertSame( 'error', $outcome->kind );
+	}
 }

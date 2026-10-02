@@ -13,11 +13,9 @@ use Specflux\SenroFlux\Approval\ApprovalBridge;
 use Specflux\SenroFlux\Http\Ajax;
 use Specflux\SenroFlux\Http\Rest;
 use Specflux\SenroFlux\Model\AiClientGateway;
+use Specflux\SenroFlux\Model\ImageCapability;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
-use Specflux\SenroFlux\Packs\Content\Media;
-use Specflux\SenroFlux\Packs\Site\FrontPage;
-use Specflux\SenroFlux\Packs\Site\Navigation;
-use Specflux\SenroFlux\Packs\Site\Style;
+use Specflux\SenroFlux\Packs\ObjectLookup;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Report;
@@ -581,13 +579,23 @@ final class Plugin {
 		// installed/removed while the run is in flight (S3's mismatch check).
 		$gate_mode = self::currentGateMode();
 
+		$run_budget = Budget::sanitize( $budget, null !== $pack_obj ? $pack_obj->defaultBudget() : array() );
+		if ( ! ImageCapability::available() ) {
+			// Proof-run defect fix: a site whose configured models cannot
+			// output images must not offer generate-image — a zero images
+			// budget withholds the tool, drops the verb from the plan's
+			// vocabulary and steers the pack's guidance to stock search, so
+			// no approval is ever parked for a call that can only fail.
+			$run_budget[ Budget::IMAGES ] = 0;
+		}
+
 		$store  = $this->runner()->store();
 		$run_id = $store->createRun(
 			$user_id,
 			$consumer,
 			$goal,
 			$allow,
-			Budget::sanitize( $budget, null !== $pack_obj ? $pack_obj->defaultBudget() : array() ),
+			$run_budget,
 			$pack,
 			$conversation_locale,
 			$content_locale,
@@ -865,6 +873,9 @@ final class Plugin {
 			}
 		}
 
+		$plan_ui     = $this->runner()->parkedPlanUi( $run );
+		$approval_ui = $this->runner()->parkedApprovalUi( $run );
+
 		return array(
 			'run'         => array(
 				'id'                  => $run->id,
@@ -909,7 +920,16 @@ final class Plugin {
 			'steps'       => $steps,
 			// 0.3 S20: keyed by seq in $suggestions above; re-indexed for the caller.
 			'suggestions' => array_values( $suggestions ),
-			'ui'          => array(),
+			// A run parked on a plan carries the plan card's UI facts (e.g.
+			// `preapprove_available`), fresh, so the card survives a reload.
+			// Likewise a run parked on an approval carries the pack's summary.
+			'ui'          => array_filter(
+				array(
+					'plan'     => $plan_ui,
+					'approval' => $approval_ui,
+				),
+				static fn ( ?array $facts ): bool => null !== $facts
+			),
 		);
 	}
 
@@ -1067,35 +1087,11 @@ final class Plugin {
 			$gateway,
 			new ApprovalBridge(),
 			// S12 (defect fix): a report row for a type-qualified id (an
-			// attachment written by the posts pack, {@see Media::OBJECT_ID_PREFIX})
-			// is resolved through the pack's OWN lookup; every other id falls
-			// back to the pre-existing post/page lookup. The composition
-			// root is the one place allowed to know both.
-			static function ( string|int $object_id ): array {
-				$object_id = (string) $object_id;
-				if ( str_starts_with( $object_id, Media::OBJECT_ID_PREFIX ) ) {
-					$attachment_id = substr( $object_id, strlen( Media::OBJECT_ID_PREFIX ) );
-
-					return Media::attachmentLookup( (int) $attachment_id );
-				}
-
-				// S12 (defect fix): the site pack's two singleton objects —
-				// neither is a post, so wpPostLookup() would resolve them
-				// "unknown".
-				if ( Navigation::OBJECT_ID === $object_id ) {
-					return Navigation::reportLookup();
-				}
-
-				if ( FrontPage::OBJECT_ID === $object_id ) {
-					return FrontPage::reportLookup();
-				}
-
-				if ( Style::OBJECT_ID === $object_id ) {
-					return Style::reportLookup();
-				}
-
-				return ( Report::wpPostLookup() )( $object_id );
-			},
+			// attachment, a term, a coupon…) is resolved through the pack's
+			// OWN lookup; every other id falls back to the post/page lookup.
+			// The composition root is the one place allowed to know all of
+			// them.
+			static fn ( string|int $object_id ): array => ObjectLookup::resolve( $object_id ),
 			// S9: a run started with a pack is fenced/annotated by the PACK's
 			// verb map; direct-allow runs keep the site-wide filter seam. The
 			// composition root is the one place that may reference Packs.

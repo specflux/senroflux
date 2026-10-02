@@ -267,30 +267,40 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * S12 (defect fix, mirrors PostsPack): `update-alt`'s output and
-	 * `read-media`'s input both carry the attachment id as `attachment_id`,
-	 * never `id` — the base's default would silently track/verify nothing
-	 * for either.
+	 * S12 (defect fix, mirrors PostsPack): `update-alt`, `read-media` and the
+	 * three attachment-producing media verbs carry the attachment id as
+	 * `attachment_id`, never `id`; `set-featured-image` answers the `post_id`
+	 * it changed. The base's default would silently track/verify nothing for
+	 * any of them.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdKey( string $verb ): string {
 		return match ( $verb ) {
-			'pages/update-alt', 'pages/read-media' => 'attachment_id',
+			'pages/update-alt',
+			'pages/read-media',
+			'pages/media-upload',
+			'pages/media-generate',
+			'pages/media-stock-import' => 'attachment_id',
+			'pages/set-featured-image' => 'post_id',
 			default => parent::objectIdKey( $verb ),
 		};
 	}
 
 	/**
 	 * S12 (defect fix, mirrors PostsPack): an attachment and a page can share
-	 * the same numeric id, so the two verbs above qualify it with
+	 * the same numeric id, so the verbs above qualify it with
 	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdPrefix( string $verb ): string {
 		return match ( $verb ) {
-			'pages/update-alt', 'pages/read-media' => Media::OBJECT_ID_PREFIX,
+			'pages/update-alt',
+			'pages/read-media',
+			'pages/media-upload',
+			'pages/media-generate',
+			'pages/media-stock-import' => Media::OBJECT_ID_PREFIX,
 			default => parent::objectIdPrefix( $verb ),
 		};
 	}
@@ -442,7 +452,7 @@ final class PagesPack extends Pack {
 			return implode(
 				"\n",
 				array(
-					'A page image lives ONLY in a layout\'s image slot (or a cover-hero or media-text you write), and each slot needs a different image. This run has no image-generation budget left: search the media library first, then stock-image-search and stock-image-import; else no_image_reason.',
+					'A page image lives ONLY in a layout\'s image slot (or a cover-hero or media-text you write), and each slot needs a different image. Image generation is not available in this run: search the media library first, then stock-image-search and stock-image-import; else no_image_reason.',
 					'Write each image\'s alt text yourself and put it in the slot with the URL (a layout\'s image.alt). No update-alt call is needed for that.',
 					'After update-alt, media-upload or stock-image-import, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
 				)

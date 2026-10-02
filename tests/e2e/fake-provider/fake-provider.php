@@ -339,8 +339,44 @@ add_action(
 				),
 			)
 		);
+
+		wp_register_ability(
+			'senroflux-e2e/publish-thing',
+			array(
+				'label'               => 'Publish thing',
+				'description'         => 'Fixture: publishes a synthetic record. Tier 2 (the only tier a pre-approval grant covers), so it exercises "Accept and pre-approve".',
+				'category'            => 'senroflux-e2e',
+				'input_schema'        => array(
+					'type'       => 'object',
+					'properties' => array( 'title' => array( 'type' => 'string' ) ),
+				),
+				'output_schema'       => array( 'type' => 'object' ),
+				'execute_callback'    => static function ( $input = array() ): array {
+					$n = (int) get_option( 'senroflux_e2e_things_created', 0 );
+					update_option( 'senroflux_e2e_things_created', $n + 1, false );
+					return array(
+						'ok'    => true,
+						'id'    => 'thing-' . ( $n + 3 ),
+						'title' => (string) ( is_array( $input ) ? ( $input['title'] ?? '' ) : '' ),
+					);
+				},
+				'permission_callback' => static fn (): bool => current_user_can( 'edit_posts' ),
+				'meta'                => array(
+					'show_in_rest' => true,
+					'destructive'  => false,
+					'idempotent'   => false,
+				),
+			)
+		);
 	}
 );
+
+// Pre-approval switches for the "Accept and pre-approve" spec: off unless a
+// spec sets the option, so every other spec keeps seeing Accept / Veto only.
+if ( '1' === get_option( 'senroflux_e2e_preapproval', '0' ) ) {
+	add_filter( 'senroflux_enable_preapproval', '__return_true' );
+	add_filter( 'agent_safety_enable_grants', '__return_true' );
+}
 
 // SenroFlux's OWN tier map (used for the tier badge AND the built-in gate,
 // in BOTH gate modes — {@see \Specflux\SenroFlux\Tools\VerbTier}). This is
@@ -361,6 +397,7 @@ if ( '1' !== get_option( 'senroflux_e2e_no_global_verb_map', '0' ) ) {
 			$map['senroflux-e2e/list-things']   = 0;
 			$map['senroflux-e2e/search-things'] = 0;
 			$map['senroflux-e2e/create-thing']  = 1;
+			$map['senroflux-e2e/publish-thing'] = 2;
 			return $map;
 		}
 	);
@@ -402,6 +439,7 @@ add_action(
 					'senroflux-e2e/list-things',
 					'senroflux-e2e/search-things',
 					'senroflux-e2e/create-thing',
+					'senroflux-e2e/publish-thing',
 				);
 			}
 
@@ -412,6 +450,7 @@ add_action(
 					'senroflux-e2e/list-things'   => 0,
 					'senroflux-e2e/search-things' => 0,
 					'senroflux-e2e/create-thing'  => 1,
+					'senroflux-e2e/publish-thing' => 2,
 				);
 			}
 
@@ -459,6 +498,7 @@ add_filter(
 		$map['senroflux-e2e/list-things']   = 0;
 		$map['senroflux-e2e/search-things'] = 0;
 		$map['senroflux-e2e/create-thing']  = 1;
+		$map['senroflux-e2e/publish-thing'] = 2;
 		return $map;
 	}
 );

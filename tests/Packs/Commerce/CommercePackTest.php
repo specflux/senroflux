@@ -64,6 +64,7 @@ final class CommercePackTest extends TestCase {
 		$this->assertSame(
 			array(
 				'commerce/product-read'         => 0,
+				'commerce/catalogue-read'       => 0,
 				'commerce/product-create-draft' => 1,
 				'commerce/product-update'       => 1,
 				'commerce/price-change'         => 2,

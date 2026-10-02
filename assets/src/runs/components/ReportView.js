@@ -6,9 +6,29 @@ function safeUrl( url ) {
 	return 'string' === typeof url && /^https?:\/\//i.test( url ) ? url : null;
 }
 
-/** The object's own name: its title, else `#id`. */
+/**
+ * The words for an object type. Posts and pages report their post type, a
+ * term its taxonomy, the rest a fixed kind; a type with no entry (a custom
+ * post type, say) is shown as the site reports it.
+ */
+function typeLabels() {
+	return {
+		post: __( 'Post', 'senroflux' ),
+		page: __( 'Page', 'senroflux' ),
+		attachment: __( 'Media', 'senroflux' ),
+		category: __( 'Category', 'senroflux' ),
+		post_tag: __( 'Tag', 'senroflux' ),
+		product: __( 'Product', 'senroflux' ),
+		shop_coupon: __( 'Coupon', 'senroflux' ),
+		shop_order: __( 'Order', 'senroflux' ),
+		shipping_zone: __( 'Shipping zone', 'senroflux' ),
+		tax_rate: __( 'Tax rate', 'senroflux' ),
+	};
+}
+
+/** The object's own name: its title, else `#id` (without the pack's `term:`-style qualifier). */
 function objectName( object ) {
-	return object.title ? object.title : `#${ object.object_id }`;
+	return object.title ? object.title : `#${ String( object.object_id ).replace( /^[a-z]+:/, '' ) }`;
 }
 
 /** "Edit <name>" link for a row, or nothing when there is no usable url. */
@@ -79,7 +99,8 @@ function summaryLine( counts ) {
 function ChangeRow( { change } ) {
 	const verified = Boolean( change.verified );
 	// `unknown` is Report's fail-closed placeholder, not something to show.
-	const type = 'unknown' === change.object_type ? '' : change.object_type;
+	const labels = typeLabels();
+	const type = 'unknown' === change.object_type ? '' : labels[ change.object_type ] || change.object_type;
 	return (
 		<li className={ `senroflux-report-change ${ verified ? 'is-verified' : 'is-unchecked' }` }>
 			<span className="senroflux-report-mark" aria-hidden="true">

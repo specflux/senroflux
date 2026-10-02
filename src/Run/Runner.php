@@ -671,6 +671,33 @@ final class Runner {
 				$pending_calls = $this->extractCalls( $turn->message );
 
 				if ( array() === $pending_calls ) {
+					// An EMPTY turn (no text, no calls) is never the model
+					// finishing (live proof J6: it followed a refused plan and
+					// the run "completed" with nothing written). Nudge once;
+					// a second one fails the run.
+					if ( '' === $this->joinedText( $turn->message->toArray() ) ) {
+						if ( $this->emptyTurnAlreadyNudged( $run ) ) {
+							$report = $this->failError(
+								$run,
+								'empty_model_turn',
+								__( 'The model returned an empty reply twice in a row, so the run was stopped before it changed anything further. Start the run again or try a different model.', 'senroflux' )
+							);
+
+							return array(
+								'run' => $this->refresh( $run ),
+								'ui'  => array( 'report' => $report ),
+							);
+						}
+
+						$this->appendEmptyTurnNudge( $run, $new_steps );
+						$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+
+						return array(
+							'run' => $this->refresh( $run ),
+							'ui'  => null,
+						);
+					}
+
 					// S12: a finish attempt may be parked by a verify nudge.
 					if ( $this->finishAttempt( $run, $new_steps ) ) {
 						// Nudged: S12 says KEEP RUNNING. Saying so explicitly
@@ -1010,11 +1037,83 @@ final class Runner {
 				'verb'         => $outcome->verb ?? $call['name'],
 				'tier'         => $built_in ? null : $outcome->tier,
 				'args_preview' => $call['args'] ?? array(),
+				// The packs' human summary (current beside proposed, server-
+				// read totals, ...) — the same text Agent Safety's own
+				// Pending Actions page shows, so the Runs card reads alike.
+				'summary'      => $this->approvalSummary( $call ),
 				'review_url'   => ( ! $built_in && function_exists( 'admin_url' ) )
 					? admin_url( 'tools.php?page=agent-safety-pending' )
 					: '',
 			),
 		);
+	}
+
+	/**
+	 * The human approval summary for a parked call, through the same
+	 * `agent_safety_approval_summary` filter Agent Safety applies. SenroFlux
+	 * registers its pack builders on it at boot, so this works with Agent
+	 * Safety absent (built-in gate mode). The result is HOST markup built by
+	 * the packs (escaped fragments plus `<a href>` preview/edit links), so it
+	 * is reduced to an anchor-only allow-list before leaving the server; ''
+	 * means no pack summarises this verb.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Parked call.
+	 */
+	private function approvalSummary( array $call ): string {
+		$args = is_array( $call['args'] ?? null ) ? $call['args'] : array();
+
+		try {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Agent Safety's own filter, applied here so the Runs card matches its queue.
+			$summary = apply_filters( 'agent_safety_approval_summary', '', ToolRegistry::abilityName( (string) $call['name'] ), $args );
+		} catch ( \Throwable ) {
+			// A summary builder reads store state; its failure must never
+			// block the park the human is about to resolve.
+			return '';
+		}
+
+		if ( ! is_string( $summary ) || '' === $summary ) {
+			return '';
+		}
+
+		return wp_kses( $summary, array( 'a' => array( 'href' => true ) ), array( 'http', 'https' ) );
+	}
+
+	/**
+	 * The approval card's UI facts for a run currently parked on an approval,
+	 * computed fresh (same {@see approvalUi()} the tick response uses), or
+	 * null when the run is not `awaiting_approval`. The run-detail read
+	 * carries this so the card's summary survives a reload: the stored
+	 * approval step has only the raw arguments.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function parkedApprovalUi( Run $run ): ?array {
+		if ( RunStatus::AwaitingApproval !== $run->status ) {
+			return null;
+		}
+
+		foreach ( array_reverse( $this->store->getSteps( $run->id ) ) as $step ) {
+			if ( StepKind::Approval !== $step->kind || ! is_array( $step->messageArray ) || true !== ( $step->messageArray['parked'] ?? false ) ) {
+				continue;
+			}
+			$parked  = $step->messageArray;
+			$outcome = ToolOutcome::approvalRequired(
+				(string) ( $parked['approval_id'] ?? '' ),
+				(string) ( $parked['tool_name'] ?? '' ),
+				is_string( $parked['tier'] ?? null ) ? $parked['tier'] : null
+			);
+
+			return $this->approvalUi(
+				$outcome,
+				array(
+					'id'   => (string) ( $parked['function_call_id'] ?? '' ),
+					'name' => (string) ( $parked['tool_name'] ?? '' ),
+					'args' => $parked['args'] ?? array(),
+				)
+			)['approval'];
+		}
+
+		return null;
 	}
 
 	// ------------------------------------------------------------------
@@ -1590,7 +1689,10 @@ final class Runner {
 		$steps = array_values(
 			array_filter(
 				$this->store->getSteps( $run->id ),
+				// A zero-part model turn (see the empty-turn nudge) stays in the
+				// audit trail but is never resent: providers reject it.
 				static fn ( Step $step ): bool => in_array( $step->kind, StepKind::historyKinds(), true ) && null !== $step->messageArray
+					&& ! ( StepKind::Model === $step->kind && self::isEmptyModelMessage( $step->messageArray ) )
 			)
 		);
 
@@ -3706,6 +3808,27 @@ final class Runner {
 	}
 
 	/**
+	 * The plan card's UI facts for a run currently parked on a plan, computed
+	 * fresh (same {@see planUi()} the tick response uses), or null when the
+	 * run is not `awaiting_plan`. The run-detail read carries this so the
+	 * card survives a page reload: the stored plan step has only the plan.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function parkedPlanUi( Run $run ): ?array {
+		if ( RunStatus::AwaitingPlan !== $run->status ) {
+			return null;
+		}
+
+		$context = $this->latestPlanContext( $run->id );
+		if ( null === $context ) {
+			return null;
+		}
+
+		return $this->planUi( $context['payload'], $context['step_id'], $this->remainingPlans( $run ), $run->id );
+	}
+
+	/**
 	 * Latest parked plan context (validated payload + step seq + the
 	 * originating propose-plan call id).
 	 *
@@ -3884,7 +4007,7 @@ final class Runner {
 			$write_id = $this->writeObjectIdFor( $run, $verb, is_array( $args ) ? $args : array(), $outcome->output ?? array() )
 				?? self::objectIdIn( $outcome->output ?? array(), $key );
 			if ( null !== $write_id ) {
-				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq );
+				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq, $this->hasReadBack( $run, $prefix ) );
 			}
 		} elseif ( VerbTier::TIER_0 === $tier ) {
 			$args    = $call['args'] ?? null;
@@ -3958,6 +4081,28 @@ final class Runner {
 		$id = ( $this->read_object_id_resolver )( $run, $verb, $args );
 
 		return ( is_string( $id ) && '' !== $id ) ? $id : null;
+	}
+
+	/**
+	 * Whether any Tier-0 verb of the run's pack reads objects carrying
+	 * `$prefix` — i.e. whether a write to such an object could ever be
+	 * verified. A term or a coupon has no read verb, so the tracker must not
+	 * ask the model to re-read it. A direct-allow run (no verb map) keeps the
+	 * pre-existing assumption that everything is readable.
+	 */
+	private function hasReadBack( Run $run, string $prefix ): bool {
+		$map = $this->packVerbMap( $run );
+		if ( null === $map ) {
+			return true;
+		}
+
+		foreach ( $map as $verb => $tier ) {
+			if ( VerbTier::TIER_0 === $tier && $prefix === $this->objectIdPrefixFor( $run, (string) $verb ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**
@@ -4187,6 +4332,72 @@ final class Runner {
 		);
 
 		return true;
+	}
+
+	/**
+	 * Has an empty-turn nudge already been sent since the model last said or
+	 * did anything? Walks the steps in order: the nudge note sets the flag, a
+	 * model turn with text or calls clears it, an empty one leaves it alone
+	 * (so the empty turn just appended counts as the repeat, not a reset).
+	 */
+	private function emptyTurnAlreadyNudged( Run $run ): bool {
+		$nudged = false;
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::System === $step->kind && 'empty_turn_nudge' === ( $step->messageArray['note'] ?? null ) ) {
+				$nudged = true;
+			} elseif ( StepKind::Model === $step->kind && null !== $step->messageArray && ! self::isEmptyModelMessage( $step->messageArray ) ) {
+				$nudged = false;
+			}
+		}
+
+		return $nudged;
+	}
+
+	/**
+	 * Whether a stored model message carries neither text nor a function call.
+	 *
+	 * @param array<string,mixed> $message_array The stored message.
+	 */
+	private static function isEmptyModelMessage( array $message_array ): bool {
+		foreach ( (array) ( $message_array['parts'] ?? array() ) as $part ) {
+			if ( ! is_array( $part ) ) {
+				continue;
+			}
+			if ( isset( $part['functionCall'] ) || ( is_string( $part['text'] ?? null ) && '' !== $part['text'] ) ) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Append the empty-turn nudge: an audit-only system note plus a real
+	 * history-bearing user turn (the same pairing as the verify nudge, for
+	 * the same wire-validity reason — the prompt must end on a user turn).
+	 *
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 */
+	private function appendEmptyTurnNudge( Run $run, array &$new_steps ): void {
+		$payload = array( 'note' => 'empty_turn_nudge' );
+
+		$new_steps[] = array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+		$new_steps[] = $this->appendStep(
+			$run->id,
+			StepKind::User,
+			new UserMessage(
+				array(
+					new MessagePart( 'Your last reply was empty. Continue: call the next tool, or say what you finished.' ),
+				)
+			)
+		);
 	}
 
 	/**

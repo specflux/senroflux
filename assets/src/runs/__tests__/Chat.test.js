@@ -77,3 +77,52 @@ describe( 'the "Start a follow-up" affordance (stage 22b, S20)', () => {
 		expect( screen.queryByRole( 'button', { name: 'Start a follow-up' } ) ).not.toBeInTheDocument();
 	} );
 } );
+
+describe( 'the plan card offers pre-approval from the run-detail plan UI (proof shakedown)', () => {
+	// What a page reload gives the client: the stored plan step (goal, steps,
+	// assumptions only) plus `ui.plan` from the run-detail read.
+	const planStep = {
+		seq: 3,
+		kind: 'plan',
+		message: { goal: 'Schedule three posts', steps: [ { text: 'Draft', verbs: [ 'senroflux/read-content' ], tier: 0 } ], assumptions: [] },
+	};
+	const parkedRun = { ...baseRun, status: 'awaiting_plan' };
+
+	it( 'renders "Accept and pre-approve" when ui.plan says it is available', () => {
+		render( <Chat run={ parkedRun } steps={ [ planStep ] } planUi={ { step_id: 3, preapprove_available: true } } /> );
+
+		expect( screen.getByRole( 'radio', { name: /accept and pre-approve/i } ) ).toBeInTheDocument();
+	} );
+
+	it( 'renders only Accept / Veto when ui.plan says it is off', () => {
+		render( <Chat run={ parkedRun } steps={ [ planStep ] } planUi={ { step_id: 3, preapprove_available: false } } /> );
+
+		expect( screen.getByRole( 'radio', { name: 'Accept' } ) ).toBeInTheDocument();
+		expect( screen.queryByRole( 'radio', { name: /pre-approve/i } ) ).not.toBeInTheDocument();
+	} );
+
+	it( 'renders no pre-approve option without ui.plan, or when it describes another plan step', () => {
+		const { rerender } = render( <Chat run={ parkedRun } steps={ [ planStep ] } /> );
+		expect( screen.queryByRole( 'radio', { name: /pre-approve/i } ) ).not.toBeInTheDocument();
+
+		rerender( <Chat run={ parkedRun } steps={ [ planStep ] } planUi={ { step_id: 2, preapprove_available: true } } /> );
+		expect( screen.queryByRole( 'radio', { name: /pre-approve/i } ) ).not.toBeInTheDocument();
+	} );
+} );
+
+describe( 'a failed run says why (empty-model-turn shakedown)', () => {
+	it( 'shows the run error message on a failed run', () => {
+		const run = { ...baseRun, status: 'failed', error: { code: 'empty_model_turn', message: 'The model returned an empty reply twice in a row.' } };
+		render( <Chat run={ run } steps={ [] } /> );
+
+		expect( screen.getByRole( 'alert' ) ).toHaveTextContent( 'The model returned an empty reply twice in a row.' );
+	} );
+
+	it( 'shows nothing extra when the failure carries no message, or the run is not failed', () => {
+		const { rerender } = render( <Chat run={ { ...baseRun, status: 'failed', error: { code: 'budget_exceeded', which: 'max_steps' } } } steps={ [] } /> );
+		expect( screen.queryByRole( 'alert' ) ).not.toBeInTheDocument();
+
+		rerender( <Chat run={ { ...baseRun, status: 'completed', error: { message: 'stale' } } } steps={ [] } /> );
+		expect( screen.queryByRole( 'alert' ) ).not.toBeInTheDocument();
+	} );
+} );

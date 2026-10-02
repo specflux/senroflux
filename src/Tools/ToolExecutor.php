@@ -87,7 +87,7 @@ final class ToolExecutor {
 			return ToolOutcome::unknownTool( $ability_name );
 		}
 
-		$args = self::decodeStringifiedJson( $args, (array) $ability->get_input_schema() );
+		$args = self::repairModelSlips( $args, (array) $ability->get_input_schema() );
 
 		$placeholder_refusal = self::refuseHistoryPlaceholder( $args );
 		if ( null !== $placeholder_refusal ) {
@@ -188,15 +188,22 @@ final class ToolExecutor {
 	}
 
 	/**
-	 * Where the input schema expects an object or array and the model sent a
-	 * JSON string of one, use the decoded value. Models double-encode nested
+	 * Repair two narrow model slips against the input schema; the ability's
+	 * own validation (patterns, enums) still runs afterwards.
+	 *
+	 * Where the schema expects an object or array and the model sent a JSON
+	 * string of one, use the decoded value. Models double-encode nested
 	 * arguments (live batches 2026-09-29-final/final3: "input[sections][0] is
 	 * not of type object"), and every schema refusal costs a full turn.
+	 *
+	 * Where the schema allows a string but no number and the model sent an int
+	 * or float, use its string form. Live journey J9: regular_price 18 was
+	 * refused nine times for a {"type":"string"} property.
 	 *
 	 * @param mixed               $value  An argument value.
 	 * @param array<string,mixed> $schema Its JSON schema.
 	 */
-	private static function decodeStringifiedJson( mixed $value, array $schema ): mixed {
+	private static function repairModelSlips( mixed $value, array $schema ): mixed {
 		$types = (array) ( $schema['type'] ?? array() );
 
 		if ( is_string( $value )
@@ -210,6 +217,15 @@ final class ToolExecutor {
 			}
 		}
 
+		if ( ( is_int( $value ) || ( is_float( $value ) && is_finite( $value ) ) )
+			&& in_array( 'string', $types, true )
+			&& ! in_array( 'number', $types, true )
+			&& ! in_array( 'integer', $types, true )
+		) {
+			// Floats as a plain decimal, never an exponent (18.0 => "18").
+			return is_int( $value ) ? (string) $value : rtrim( rtrim( sprintf( '%.15F', $value ), '0' ), '.' );
+		}
+
 		if ( ! is_array( $value ) ) {
 			return $value;
 		}
@@ -217,14 +233,14 @@ final class ToolExecutor {
 		if ( is_array( $schema['properties'] ?? null ) ) {
 			foreach ( $schema['properties'] as $key => $property ) {
 				if ( array_key_exists( $key, $value ) && is_array( $property ) ) {
-					$value[ $key ] = self::decodeStringifiedJson( $value[ $key ], $property );
+					$value[ $key ] = self::repairModelSlips( $value[ $key ], $property );
 				}
 			}
 		}
 
 		if ( is_array( $schema['items'] ?? null ) && array_is_list( $value ) ) {
 			foreach ( $value as $index => $item ) {
-				$value[ $index ] = self::decodeStringifiedJson( $item, $schema['items'] );
+				$value[ $index ] = self::repairModelSlips( $item, $schema['items'] );
 			}
 		}
 

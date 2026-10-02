@@ -388,6 +388,30 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertEquals( $products_before, $GLOBALS['senroflux_test_products'] );
 	}
 
+	public function test_store_report_uses_each_products_own_low_stock_threshold(): void {
+		$GLOBALS['senroflux_test_products']             = array(
+			501 => 4, // Above the store amount (2) but at its own threshold (5).
+			502 => 4, // Above the store amount and its own threshold (3).
+			503 => 2, // At the store amount, no product-level override.
+		);
+		$GLOBALS['senroflux_test_low_stock_by_product'] = array(
+			501 => 5,
+			502 => 3,
+		);
+
+		$result = $this->callAbility(
+			'senroflux/store-report',
+			array(
+				'from' => '2026-01-01',
+				'to'   => '2026-01-31',
+			)
+		);
+		unset( $GLOBALS['senroflux_test_low_stock_by_product'] );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 501, 503 ), $result['low_stock_products'] );
+	}
+
 	public function test_a_window_over_92_days_is_refused(): void {
 		$result = $this->callAbility(
 			'senroflux/store-report',
