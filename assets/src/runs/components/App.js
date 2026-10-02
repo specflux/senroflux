@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
-import { listRuns, getRun, startRun, tickRun, cancelRun, resolveSuggestion, fetchSetupState } from '../api';
+import { listRuns, getRun, startRun, tickRun, cancelRun, resolveSuggestion, fetchSetupState, dismissAdvisory } from '../api';
 import { isParkedStatus, isTerminalStatus, runsForTab, sameRunId } from '../utils';
 import RunList from './RunList';
 import Chat from './Chat';
@@ -102,6 +102,38 @@ export default function App( { config } ) {
 			document.removeEventListener( 'visibilitychange', onVisible );
 		};
 	}, [ refreshSetup ] );
+
+	// The Agent Safety advisory's Dismiss button lives in the server-rendered
+	// panel, which is swapped wholesale on refresh — so the listener is
+	// delegated on `document`. The server records the dismissal per user, and
+	// every later refresh renders the panel without it.
+	useEffect( () => {
+		const onClick = ( event ) => {
+			const button = event.target.closest && event.target.closest( '.senroflux-dismiss-check' );
+			if ( ! button ) {
+				return;
+			}
+			dismissAdvisory( { nonce: button.getAttribute( 'data-nonce' ) || '', ajaxUrl: window.ajaxurl } )
+				.then( ( result ) => {
+					const panel = document.getElementById( 'senroflux-setup-panel' );
+					if ( panel && result && 'string' === typeof result.html ) {
+						panel.outerHTML = result.html;
+					}
+					// The focused button just vanished: move focus to the next
+					// focusable thing in the panel (a "Fix this" link), else the goal box.
+					const next =
+						document.querySelector( '#senroflux-setup-panel a[href], #senroflux-setup-panel button' ) ||
+						document.querySelector( '.senroflux-message-box-input:not([disabled])' );
+					if ( next ) {
+						next.focus();
+					}
+				} )
+				// Silent: worst case the notice stays until the next try.
+				.catch( () => {} );
+		};
+		document.addEventListener( 'click', onClick );
+		return () => document.removeEventListener( 'click', onClick );
+	}, [] );
 
 	const refreshList = useCallback( () => {
 		listRuns().then( ( result ) => {

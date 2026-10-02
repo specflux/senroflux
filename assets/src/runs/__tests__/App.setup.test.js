@@ -7,7 +7,7 @@
 
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import App from '../components/App';
-import { listRuns, getRun, startRun, tickRun, fetchSetupState } from '../api';
+import { listRuns, getRun, startRun, tickRun, fetchSetupState, dismissAdvisory } from '../api';
 
 jest.mock( '../api' );
 
@@ -191,5 +191,65 @@ describe( 'the report arrives with the terminal tick', () => {
 		// The fields the thin ajax row lacks survive the merge.
 		expect( document.querySelector( '.senroflux-withheld-roles' ) ).toHaveTextContent( /Images are off/ );
 		expect( screen.getByRole( 'button', { name: 'Start a follow-up' } ) ).toBeInTheDocument();
+	} );
+} );
+
+describe( 'the Agent Safety advisory Dismiss button (J1)', () => {
+	const advisory =
+		'<div id="senroflux-setup-panel"><div class="notice" data-check-id="senroflux/agent-safety"><p>Install Agent Safety.</p>' +
+		'<p><button type="button" class="button senroflux-dismiss-check" data-nonce="dn1">Dismiss</button></p></div></div>';
+
+	beforeEach( () => {
+		jest.clearAllMocks();
+		listRuns.mockResolvedValue( [] );
+		document.body.insertAdjacentHTML( 'afterbegin', advisory );
+	} );
+
+	afterEach( () => {
+		const panel = document.getElementById( 'senroflux-setup-panel' );
+		if ( panel ) {
+			panel.remove();
+		}
+	} );
+
+	const config = { nonce: 'n', consumer: 'c', gateMode: 'built_in', packs, examples: [] };
+
+	it( 'posts the dismissal with the button\'s own nonce, removes the advisory, and focuses the goal box', async () => {
+		dismissAdvisory.mockResolvedValue( { html: '<div id="senroflux-setup-panel"></div>' } );
+		render( <App config={ config } /> );
+		const box = await screen.findByPlaceholderText( 'Describe what you want done…' );
+
+		fireEvent.click( document.querySelector( '.senroflux-dismiss-check' ) );
+
+		await waitFor( () => expect( document.querySelector( '.senroflux-dismiss-check' ) ).toBeNull() );
+		expect( dismissAdvisory ).toHaveBeenCalledWith( expect.objectContaining( { nonce: 'dn1' } ) );
+		expect( document.activeElement ).toBe( box );
+	} );
+
+	it( 'stays hidden after a later setup refresh, which carries the server\'s dismissed state', async () => {
+		dismissAdvisory.mockResolvedValue( { html: '<div id="senroflux-setup-panel"></div>' } );
+		fetchSetupState.mockResolvedValue( { html: '<div id="senroflux-setup-panel"></div>', start_enabled: true, packs, unavailable_packs: [] } );
+		render( <App config={ config } /> );
+		await screen.findByPlaceholderText( 'Describe what you want done…' );
+
+		fireEvent.click( document.querySelector( '.senroflux-dismiss-check' ) );
+		await waitFor( () => expect( document.querySelector( '.senroflux-dismiss-check' ) ).toBeNull() );
+		await act( async () => {
+			window.dispatchEvent( new Event( 'focus' ) );
+		} );
+
+		await waitFor( () => expect( fetchSetupState ).toHaveBeenCalled() );
+		expect( document.querySelector( '.senroflux-dismiss-check' ) ).toBeNull();
+	} );
+
+	it( 'keeps the advisory when the request fails', async () => {
+		dismissAdvisory.mockRejectedValue( new Error( 'offline' ) );
+		render( <App config={ config } /> );
+		await screen.findByPlaceholderText( 'Describe what you want done…' );
+
+		fireEvent.click( document.querySelector( '.senroflux-dismiss-check' ) );
+
+		await act( async () => {} );
+		expect( document.querySelector( '.senroflux-dismiss-check' ) ).not.toBeNull();
 	} );
 } );

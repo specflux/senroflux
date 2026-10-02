@@ -104,6 +104,17 @@ export function fetchSetupState( config ) {
 	return postAjax( 'senroflux_setup_panel', {}, config );
 }
 
+/**
+ * admin-ajax `senroflux_dismiss_agent_safety_check` (0.3 S11): record the
+ * current user's dismissal of the Agent Safety advisory (user meta, never
+ * re-armed). The nonce is the one the panel's own Dismiss button carries
+ * (`data-nonce`), not the screen's run nonce. Returns `{ html }`, the panel
+ * without the advisory.
+ */
+export function dismissAdvisory( config ) {
+	return postAjax( 'senroflux_dismiss_agent_safety_check', {}, config );
+}
+
 /** admin-ajax `senroflux_tick`: {run_id, step_count, resume?} -> RunState. */
 export function tickRun( runId, stepCount, resume, config ) {
 	return postAjax( 'senroflux_tick', { run_id: runId, step_count: stepCount, resume: resume || undefined }, config );

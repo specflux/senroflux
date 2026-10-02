@@ -811,3 +811,8 @@
 .senroflux-setup-panel {
 	margin-block-end: 8px;
 }
+
+/* The advisory's Dismiss button (server-rendered inside the setup panel). */
+.senroflux-dismiss-check {
+	margin-block-start: 4px;
+}
