@@ -531,6 +531,32 @@ if ( ! class_exists( 'WC_Product', false ) ) {
 		public function get_status(): string {
 			return (string) ( $this->row()->status ?? 'publish' );
 		}
+
+		// Catalogue-read surface (`senroflux/products-catalogue`).
+		public function get_type(): string {
+			return (string) ( $this->row()->type ?? 'simple' );
+		}
+
+		public function get_sku(): string {
+			return (string) ( $this->row()->sku ?? '' );
+		}
+
+		public function get_stock_status(): string {
+			return (string) ( $this->row()->stock_status ?? 'instock' );
+		}
+
+		/** @return list<int> */
+		public function get_category_ids(): array {
+			return array_map( 'intval', (array) ( $this->row()->category_ids ?? array() ) );
+		}
+
+		public function get_description(): string {
+			return (string) ( $this->row()->description ?? '' );
+		}
+
+		public function get_short_description(): string {
+			return (string) ( $this->row()->short_description ?? '' );
+		}
 	}
 }
 
@@ -546,16 +572,86 @@ if ( ! function_exists( 'wc_get_product' ) ) {
 	}
 }
 
+// `product_cat` terms a catalogue test seeds: id => array( name, slug, count ).
+if ( ! isset( $GLOBALS['senroflux_test_product_cats'] ) ) {
+	$GLOBALS['senroflux_test_product_cats'] = array();
+}
+
+if ( ! function_exists( 'get_terms' ) ) {
+	/**
+	 * Only the `product_cat` taxonomy is modelled.
+	 *
+	 * @param array<string,mixed> $args
+	 * @return list<object>
+	 */
+	function get_terms( array $args = array() ): array {
+		unset( $args );
+		$terms = array();
+		foreach ( $GLOBALS['senroflux_test_product_cats'] as $id => $row ) {
+			$terms[] = (object) array(
+				'term_id' => (int) $id,
+				'name'    => (string) $row['name'],
+				'slug'    => (string) $row['slug'],
+				'count'   => (int) ( $row['count'] ?? 0 ),
+			);
+		}
+
+		return $terms;
+	}
+}
+
 if ( ! function_exists( 'wc_get_products' ) ) {
 	/**
+	 * Honours `category` (slugs), `s`, `limit`, `page` and `paginate` like
+	 * WC_Product_Query; every other arg is ignored. No `limit` (or -1) means
+	 * all, which is what the store-report low-stock scan relies on.
+	 *
 	 * @param array<string,mixed> $args
-	 * @return list<WC_Product>
+	 * @return list<WC_Product>|object
 	 */
-	function wc_get_products( array $args ): array {
-		unset( $args );
+	function wc_get_products( array $args ): array|object {
 		$products = array();
 		foreach ( $GLOBALS['senroflux_test_products'] as $id => $stock ) {
 			$products[] = new WC_Product( (int) $id, null === $stock ? null : (int) $stock );
+		}
+
+		if ( ! empty( $args['category'] ) ) {
+			$ids = array();
+			foreach ( $GLOBALS['senroflux_test_product_cats'] as $term_id => $row ) {
+				if ( in_array( $row['slug'], (array) $args['category'], true ) ) {
+					$ids[] = (int) $term_id;
+				}
+			}
+			$products = array_values(
+				array_filter(
+					$products,
+					static fn ( WC_Product $p ): bool => array() !== array_intersect( $p->get_category_ids(), $ids )
+				)
+			);
+		}
+
+		if ( ! empty( $args['s'] ) ) {
+			$products = array_values(
+				array_filter(
+					$products,
+					static fn ( WC_Product $p ): bool => false !== stripos( $p->get_name(), (string) $args['s'] )
+				)
+			);
+		}
+
+		$total = count( $products );
+		$limit = (int) ( $args['limit'] ?? -1 );
+		if ( $limit > 0 ) {
+			$page     = max( 1, (int) ( $args['page'] ?? 1 ) );
+			$products = array_slice( $products, ( $page - 1 ) * $limit, $limit );
+		}
+
+		if ( ! empty( $args['paginate'] ) ) {
+			return (object) array(
+				'products'      => $products,
+				'total'         => $total,
+				'max_num_pages' => $limit > 0 ? (int) ceil( $total / $limit ) : 1,
+			);
 		}
 
 		return $products;

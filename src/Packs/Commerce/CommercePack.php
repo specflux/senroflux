@@ -47,6 +47,7 @@ final class CommercePack extends Pack {
 		parent::__construct(
 			array(
 				'read'           => 'products-query',
+				'catalogue'      => 'products-catalogue',
 				'create'         => 'product-create',
 				'update'         => 'product-update',
 				'image'          => 'set-product-image',
@@ -122,6 +123,7 @@ final class CommercePack extends Pack {
 	public function verbFor( string $ability, array $input ): string {
 		return match ( $this->baseName( $ability ) ) {
 			'products-query'     => 'commerce/product-read',
+			'products-catalogue' => 'commerce/catalogue-read',
 			'product-create'     => $this->createVerb( $input ),
 			'product-update'     => $this->updateVerb( $input ),
 			'set-product-image'  => 'commerce/product-image',
@@ -238,6 +240,7 @@ final class CommercePack extends Pack {
 	public function verbMap(): array {
 		return array(
 			'commerce/product-read'         => 0,
+			'commerce/catalogue-read'       => 0,
 			'commerce/product-create-draft' => 1,
 			'commerce/product-update'       => 1,
 			'commerce/price-change'         => 2,
@@ -265,6 +268,7 @@ final class CommercePack extends Pack {
 	public function roleVerbs(): array {
 		return array(
 			'read'           => array( 'commerce/product-read' ),
+			'catalogue'      => array( 'commerce/catalogue-read' ),
 			'create'         => array( 'commerce/product-create-draft', 'commerce/product-publish' ),
 			'update'         => array( 'commerce/product-update', 'commerce/price-change', 'commerce/product-publish' ),
 			'image'          => array( 'commerce/product-image' ),
@@ -430,6 +434,7 @@ final class CommercePack extends Pack {
 			"\n",
 			array(
 				'Products, prices and descriptions: a new product is created as a draft unless you are explicitly asked to publish it. Publishing a product, or changing its regular or sale price, always asks a human first.',
+				'To work from a product category or find products with no description, call products-catalogue — it shows each product\'s categories and whether it has a description; the other product read cannot.',
 				'State every price in the store\'s own currency, with its own number of decimal places — never invent a currency or round differently from what the store already shows.',
 				'Product descriptions and short descriptions may use ONLY these HTML tags: p, ul, ol, li, strong, em, a, h3. A description is at most 1,500 words. Anything outside that tag list, or an unsafe link scheme, is refused whole — it is never trimmed or rewritten for you, so write within the rule the first time.',
 				'To add or replace a product\'s image, use an existing media library attachment that already has alt text — an attachment with no alt text, or one that is not an image, is refused.',
