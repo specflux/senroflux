@@ -1370,6 +1370,22 @@ final class PlanParkTest extends TestCase {
 		$this->assertStringContainsString( 'media-generate', $text_desc );
 	}
 
+	/**
+	 * Live J3/J4: one "schedule all three" step gave a grant for one publish
+	 * and a card saying "approve 1 change" — the model was never told that
+	 * counts come from steps. Both description variants must say so.
+	 */
+	public function test_propose_plan_declaration_asks_for_one_step_per_approvable_write(): void {
+		foreach ( array( array( 'pages/media-search', 'pages/media-generate' ), array( 'pages/media-search' ) ) as $known ) {
+			$declaration = PlanTools::proposePlanDeclaration( $known );
+			$schema      = $declaration instanceof FunctionDeclaration ? $declaration->getParameters() : $declaration['inputSchema'];
+			$text_desc   = (string) ( $schema['properties']['steps']['items']['properties']['text']['description'] ?? '' );
+
+			$this->assertStringContainsString( 'never one step for several', $text_desc );
+			$this->assertStringContainsString( 'counted from the steps', $text_desc );
+		}
+	}
+
 	public function test_a_page_plan_naming_media_generate_is_unknown_verb_when_images_budget_is_zero(): void {
 		$this->seedPagesAbilities();
 		$run_id                  = $this->createPagesRunWithBudget( array( Budget::IMAGES => 0 ) );
