@@ -151,6 +151,20 @@ final class PostsPackTest extends TestCase {
 		$this->assertStringContainsString( 'above the post', $media[0]->body );
 	}
 
+	/**
+	 * Live J1: four runs, never a category or tag — nothing told the model a
+	 * finished post has them, or how to get a term id.
+	 */
+	public function test_prose_rules_ask_for_a_category_and_tags_via_create_term_and_set_terms(): void {
+		$skills = ( new PostsPack() )->skills();
+		$prose  = array_values( array_filter( $skills, static fn ( $s ) => 'posts/prose-rules' === $s->id ) );
+
+		$this->assertCount( 1, $prose );
+		$this->assertStringContainsString( 'category other than Uncategorized', $prose[0]->body );
+		$this->assertStringContainsString( 'create-term', $prose[0]->body );
+		$this->assertStringContainsString( 'set-terms', $prose[0]->body );
+	}
+
 	public function test_skills_returns_three_pack_skills_never_content_language(): void {
 		$skills = ( new PostsPack() )->skills();
 
