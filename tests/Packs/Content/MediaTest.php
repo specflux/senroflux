@@ -16,6 +16,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Tests\Packs\Content;
 
 use PHPUnit\Framework\TestCase;
+use Specflux\SenroFlux\Model\ImageCapability;
 use Specflux\SenroFlux\Model\MediaGatewayInterface;
 use Specflux\SenroFlux\Model\StockImageGatewayInterface;
 use Specflux\SenroFlux\Packs\Content\Media;
@@ -47,6 +48,8 @@ final class MediaTest extends TestCase {
 		$GLOBALS['senroflux_test_postmeta']           = array();
 		$GLOBALS['senroflux_test_terms']              = array();
 		$GLOBALS['senroflux_test_post_terms']         = array();
+
+		$GLOBALS['senroflux_test_transients'] = array();
 
 		Media::reset();
 		Media::registerCategory();
@@ -365,6 +368,73 @@ final class MediaTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'budget_exhausted', $result->get_error_code() );
+	}
+
+	public function test_a_no_model_failure_tells_the_model_to_use_stock_and_blocks_later_calls_and_runs(): void {
+		$gateway = new class() implements MediaGatewayInterface {
+			public int $calls = 0;
+
+			public function generateImage( string $prompt ): array|WP_Error {
+				unset( $prompt );
+				++$this->calls;
+
+				return new WP_Error( 'image_generation_unavailable', 'No models found that support image_generation for this prompt.' );
+			}
+
+			public function generateAltText( string $image_url ): string|WP_Error {
+				unset( $image_url );
+
+				return 'alt';
+			}
+		};
+		Media::setGateway( $gateway );
+		$ability = $this->ability( 'senroflux/generate-image' );
+
+		$first = $ability->execute( array( 'prompt' => 'a red bicycle' ) );
+		$this->assertInstanceOf( WP_Error::class, $first );
+		$this->assertSame( 'image_generation_unavailable', $first->get_error_code() );
+		$this->assertStringContainsString( 'stock-image-search then stock-image-import', $first->get_error_message() );
+		$this->assertSame( 1, $gateway->calls );
+
+		// Same run, second call: refused with the same message, provider untouched.
+		$second = $ability->execute( array( 'prompt' => 'a blue bicycle' ) );
+		$this->assertInstanceOf( WP_Error::class, $second );
+		$this->assertSame( $first->get_error_message(), $second->get_error_message() );
+		$this->assertSame( 1, $gateway->calls, 'the second call never reaches the gateway' );
+
+		// New runs withhold the tool.
+		ImageCapability::setProbe( true );
+		$this->assertFalse( ImageCapability::available() );
+		ImageCapability::setProbe( null );
+	}
+
+	public function test_a_transient_failure_is_not_remembered(): void {
+		$gateway = new class() implements MediaGatewayInterface {
+			public int $calls = 0;
+
+			public function generateImage( string $prompt ): array|WP_Error {
+				unset( $prompt );
+				++$this->calls;
+
+				return new WP_Error( 'gateway_failed', 'cURL error 28: Operation timed out' );
+			}
+
+			public function generateAltText( string $image_url ): string|WP_Error {
+				unset( $image_url );
+
+				return 'alt';
+			}
+		};
+		Media::setGateway( $gateway );
+		$ability = $this->ability( 'senroflux/generate-image' );
+
+		$ability->execute( array( 'prompt' => 'a red bicycle' ) );
+		$ability->execute( array( 'prompt' => 'a red bicycle' ) );
+
+		$this->assertSame( 2, $gateway->calls );
+		ImageCapability::setProbe( true );
+		$this->assertTrue( ImageCapability::available() );
+		ImageCapability::setProbe( null );
 	}
 
 	public function test_generate_image_succeeds_under_the_budget(): void {

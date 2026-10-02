@@ -10,6 +10,7 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Packs\Content;
 
 use Specflux\SenroFlux\Model\AiClientMediaGateway;
+use Specflux\SenroFlux\Model\ImageCapability;
 use Specflux\SenroFlux\Model\MediaGatewayInterface;
 use Specflux\SenroFlux\Model\OpenverseStockImageGateway;
 use Specflux\SenroFlux\Model\StockImageGatewayInterface;
@@ -1052,12 +1053,32 @@ final class Media {
 			);
 		}
 
+		// A site-wide verdict from an earlier attempt: refuse without calling
+		// the provider.
+		if ( ImageCapability::knownUnavailable() ) {
+			return self::imageGenerationUnavailable();
+		}
+
 		$generated = self::gateway()->generateImage( $prompt );
 		if ( $generated instanceof WP_Error ) {
+			if ( 'image_generation_unavailable' === $generated->get_error_code() ) {
+				ImageCapability::markUnavailable();
+
+				return self::imageGenerationUnavailable();
+			}
+
 			return $generated;
 		}
 
 		return self::insertAttachmentFromFile( $generated['path'], $prompt );
+	}
+
+	private static function imageGenerationUnavailable(): WP_Error {
+		return new WP_Error(
+			'image_generation_unavailable',
+			__( 'Image generation is not available on this site: none of its configured AI models can generate images. Do not call generate-image again. Use stock-image-search then stock-image-import (or media-search for an existing library image) instead.', 'senroflux' ),
+			array( 'status' => 409 )
+		);
 	}
 
 	/**

@@ -90,11 +90,11 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 		try {
 			$result = wp_ai_client_prompt( $prompt )->using_request_options( $request_options )->generate_image_result();
 		} catch ( \Throwable $e ) {
-			return new WP_Error( 'gateway_failed', $e->getMessage() );
+			return self::isNoModelFailure( $e ) ? self::noModelError( $e->getMessage() ) : new WP_Error( 'gateway_failed', $e->getMessage() );
 		}
 
 		if ( is_wp_error( $result ) ) {
-			return $result;
+			return self::isNoModelFailure( $result ) ? self::noModelError( $result->get_error_message() ) : $result;
 		}
 
 		if ( ! is_object( $result ) || ! method_exists( $result, 'toImageFile' ) ) {
@@ -112,6 +112,38 @@ final class AiClientMediaGateway implements MediaGatewayInterface {
 		}
 
 		return $this->persistImageFile( $file );
+	}
+
+	/**
+	 * Whether a failure is the AI Client's "no model can serve this request":
+	 * `ModelResolver::resolve()` throws an `InvalidArgumentException` reading
+	 * "No models found that support image_generation[ for this prompt]." (with
+	 * a `for provider "x"` variant), which `WP_AI_Client_Prompt_Builder`
+	 * turns into a `prompt_invalid_argument` WP_Error. Timeouts, rate limits
+	 * and 5xx are different classes and never match.
+	 *
+	 * @param \Throwable|WP_Error $failure The thrown exception or returned error.
+	 */
+	private static function isNoModelFailure( \Throwable|WP_Error $failure ): bool {
+		if ( $failure instanceof WP_Error ) {
+			if ( 'prompt_invalid_argument' !== $failure->get_error_code() ) {
+				return false;
+			}
+			$message = $failure->get_error_message();
+		} elseif ( $failure instanceof \InvalidArgumentException ) {
+			$message = $failure->getMessage();
+		} else {
+			return false;
+		}
+
+		return 1 === preg_match( '/^No models found (?:for provider "[^"]*" )?that support image_generation\b/', $message );
+	}
+
+	/**
+	 * The distinct refusal Media acts on (it records the site-wide verdict).
+	 */
+	private static function noModelError( string $message ): WP_Error {
+		return new WP_Error( 'image_generation_unavailable', $message );
 	}
 
 	/**
