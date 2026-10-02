@@ -15,6 +15,7 @@ use Specflux\SenroFlux\Packs\Pages\Vocabulary as PagesVocabulary;
 use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Packs\Pages\Tone;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Clock;
 use Specflux\SenroFlux\Run\RunStore;
 use Specflux\SenroFlux\Run\Tracker;
 use WP_Error;
@@ -2375,6 +2376,13 @@ final class Abilities {
 			return new WP_Error( 'status_not_allowed', __( 'That status is not allowed on this ability.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
+		// WordPress publishes a `future` post with no date, or a date that is
+		// not ahead, IMMEDIATELY: refuse before anything is written.
+		$schedule_refusal = self::scheduleRefusal( is_string( $status ) ? $status : null, $input );
+		if ( null !== $schedule_refusal ) {
+			return $schedule_refusal;
+		}
+
 		// Per-post `edit_post`, the S4 public/transition routing, and the
 		// type's publish cap on a publish/future transition. Re-checked here
 		// for the same reason as create.
@@ -2481,17 +2489,8 @@ final class Abilities {
 			}
 		}
 
-		if ( isset( $input['date'] ) && '' !== trim( (string) $input['date'] ) ) {
-			$date = trim( (string) $input['date'] );
-			$when = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $date );
-			if ( false === $when || $when->format( 'Y-m-d H:i:s' ) !== $date ) {
-				return new WP_Error(
-					'invalid_date',
-					__( 'The date must be a site-timezone datetime formatted Y-m-d H:i:s, for example 2026-10-12 09:00:00.', 'senroflux' ),
-					array( 'status' => 400 )
-				);
-			}
-
+		$date = self::requestedDate( $input );
+		if ( null !== $date ) {
 			$args['post_date']     = $date;
 			$args['post_date_gmt'] = function_exists( 'get_gmt_from_date' ) ? get_gmt_from_date( $date ) : $date;
 		}
@@ -2538,6 +2537,65 @@ final class Abilities {
 		}
 
 		return $result;
+	}
+
+	/**
+	 * The call's `date`, trimmed, or null when absent or empty.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function requestedDate( array $input ): ?string {
+		$date = isset( $input['date'] ) ? trim( (string) $input['date'] ) : '';
+
+		return '' !== $date ? $date : null;
+	}
+
+	/**
+	 * Refuse a schedule that would not schedule: `future` needs a `date`
+	 * strictly later than the site's current time, `publish` must not carry
+	 * one, and a malformed `date` is never written.
+	 *
+	 * @param string|null         $status Requested status.
+	 * @param array<string,mixed> $input  Call input.
+	 */
+	private static function scheduleRefusal( ?string $status, array $input ): ?WP_Error {
+		$date = self::requestedDate( $input );
+		if ( null === $date ) {
+			return 'future' === $status
+				? self::scheduleNeedsFutureDate( __( 'Status "future" needs a `date`.', 'senroflux' ) )
+				: null;
+		}
+
+		$when = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $date, wp_timezone() );
+		if ( false === $when || $when->format( 'Y-m-d H:i:s' ) !== $date ) {
+			return new WP_Error(
+				'invalid_date',
+				__( 'The date must be a site-timezone datetime formatted Y-m-d H:i:s, for example 2026-10-12 09:00:00.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		$ahead = $when->getTimestamp() > Clock::now();
+		if ( 'future' === $status && ! $ahead ) {
+			return self::scheduleNeedsFutureDate( __( 'That `date` is not later than now.', 'senroflux' ) );
+		}
+		if ( 'publish' === $status && $ahead ) {
+			return new WP_Error(
+				'use_future_status',
+				__( 'That `date` is in the future, so status "publish" would be ambiguous. To schedule, send status "future" with the date; to publish now, omit `date`.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return null;
+	}
+
+	private static function scheduleNeedsFutureDate( string $reason ): WP_Error {
+		return new WP_Error(
+			'schedule_needs_future_date',
+			$reason . ' ' . __( 'Pass a site-local `Y-m-d H:i:s` later than now (the turn\'s "Today is" line gives the current date), or WordPress would publish it immediately.', 'senroflux' ),
+			array( 'status' => 400 )
+		);
 	}
 
 	/**

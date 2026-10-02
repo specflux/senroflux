@@ -78,6 +78,22 @@ final class ContentSummaryTest extends TestCase {
 		$this->assertStringContainsString( '>preview</a>', $sum );
 	}
 
+	public function test_publish_post_card_shows_the_scheduled_date(): void {
+		$this->seedPost( 300, 'Spring launch', 'post' );
+
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/publish-post',
+			array(
+				'id'     => 300,
+				'status' => 'future',
+				'date'   => '2026-10-12 09:00:00',
+			)
+		);
+
+		$this->assertStringContainsString( 'Schedule &quot;Spring launch&quot; (post) for 2026-10-12 09:00:00 (site time)', $sum );
+	}
+
 	public function test_publish_post_card_is_inert_for_a_page(): void {
 		// A page's publish-post call is PublishSummary's card, not this
 		// class's — this class must pass it through unchanged.

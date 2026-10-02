@@ -117,7 +117,10 @@ final class ContentSummary {
 		$preview = function_exists( 'get_preview_post_link' ) ? (string) get_preview_post_link( $id ) : '';
 		$edit    = function_exists( 'get_edit_post_link' ) ? (string) get_edit_post_link( $id, 'raw' ) : '';
 
-		$row = sprintf( 'Publish &quot;%s&quot; (post)', esc_html( $title ) );
+		$when = ( 'future' === ( $input['status'] ?? null ) && is_string( $input['date'] ?? null ) ) ? trim( $input['date'] ) : '';
+		$row  = '' !== $when
+			? sprintf( 'Schedule &quot;%1$s&quot; (post) for %2$s (site time)', esc_html( $title ), esc_html( $when ) )
+			: sprintf( 'Publish &quot;%s&quot; (post)', esc_html( $title ) );
 		if ( '' !== $preview ) {
 			$row .= sprintf( ' — <a href="%s">preview</a>', esc_url( $preview ) );
 		}

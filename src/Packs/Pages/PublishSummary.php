@@ -122,7 +122,7 @@ final class PublishSummary {
 	 *
 	 * @param string              $summary Fallback summary (returned when no id).
 	 * @param string              $verb    The Tier-2 pack verb.
-	 * @param array<string,mixed> $input   Call input; only `id` is read from it.
+	 * @param array<string,mixed> $input   Call input; `id`, plus `status` and `date` for a scheduled publish.
 	 */
 	public static function build( string $summary, string $verb, array $input ): string {
 		unset( $verb );
@@ -142,10 +142,10 @@ final class PublishSummary {
 		$seq  = self::patternSequence( $id );
 		$goal = self::$run_goal ?? '';
 
-		$row = sprintf(
-			'Publish &quot;%1$s&quot; (page)',
-			esc_html( $title )
-		);
+		$when = ( 'future' === ( $input['status'] ?? null ) && is_string( $input['date'] ?? null ) ) ? trim( $input['date'] ) : '';
+		$row  = '' !== $when
+			? sprintf( 'Schedule &quot;%1$s&quot; (page) for %2$s (site time)', esc_html( $title ), esc_html( $when ) )
+			: sprintf( 'Publish &quot;%1$s&quot; (page)', esc_html( $title ) );
 
 		if ( '' !== $preview ) {
 			$row .= sprintf( ' — <a href="%s">preview</a>', esc_url( $preview ) );
