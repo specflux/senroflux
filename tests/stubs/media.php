@@ -293,6 +293,40 @@ if ( ! function_exists( 'wp_insert_term' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_term' ) ) {
+	/**
+	 * Finds a term by id in the fixture map; the taxonomy is the part of
+	 * the `<taxonomy>:<lowercased name>` key before the colon.
+	 */
+	function get_term( int $term_id, string $taxonomy = '' ): object|null {
+		unset( $taxonomy );
+
+		foreach ( $GLOBALS['senroflux_test_terms'] ?? array() as $key => $id ) {
+			if ( (int) $id !== $term_id ) {
+				continue;
+			}
+
+			list( $term_taxonomy, $name ) = explode( ':', (string) $key, 2 );
+
+			return (object) array(
+				'term_id'  => $term_id,
+				'name'     => ucwords( $name ),
+				'taxonomy' => $term_taxonomy,
+			);
+		}
+
+		return null;
+	}
+}
+
+if ( ! function_exists( 'get_edit_term_link' ) ) {
+	function get_edit_term_link( int $term_id, string $taxonomy = '', string $object_type = '' ): ?string {
+		unset( $object_type );
+
+		return 'https://example.test/wp-admin/term.php?taxonomy=' . $taxonomy . '&tag_ID=' . $term_id;
+	}
+}
+
 if ( ! function_exists( 'wp_set_post_terms' ) ) {
 	function wp_set_post_terms( int $post_id, array $terms, string $taxonomy, bool $append = false ): array|WP_Error {
 		if ( ! $append ) {

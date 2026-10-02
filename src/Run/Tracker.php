@@ -15,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Pure helpers over the `objects_json` map (0.2 S12, extended by 0.3 S8):
  *
- *   { "<object_id>": { last_write_seq: int, verified_seq: int|null, modified_marker?: string } }
+ *   { "<object_id>": { last_write_seq: int, verified_seq: int|null, modified_marker?: string, no_readback?: true } }
  *
  * The harness stays domain-agnostic: an object id is an opaque string|int
  * produced by a tool result and later re-read by another call's args, and a
@@ -44,9 +44,13 @@ final class Tracker {
 	 * @param array<string,mixed> $objects   The objects_json map (mutable copy made here).
 	 * @param string|int          $object_id Written object id (normalised to a string key).
 	 * @param int                 $seq       Step seq at which the write result was recorded.
+	 * @param bool                $readable  False when no ability can read this kind of object back
+	 *                                       (a term, a coupon…): the entry is flagged `no_readback`, so it
+	 *                                       still opens a report row — shown as not checked — but is never
+	 *                                       listed by {@see unverified()}, since nothing could clear it.
 	 * @return array<string,mixed> A NEW map with the object's write recorded.
 	 */
-	public static function recordWrite( array $objects, string|int $object_id, int $seq ): array {
+	public static function recordWrite( array $objects, string|int $object_id, int $seq, bool $readable = true ): array {
 		$key = (string) $object_id;
 
 		// S8: a write REPLACES the write/verify bookkeeping but must never
@@ -65,6 +69,10 @@ final class Tracker {
 			'last_write_seq' => $seq,
 			'verified_seq'   => null, // A new write re-opens verification.
 		);
+
+		if ( ! $readable ) {
+			$objects[ $key ]['no_readback'] = true;
+		}
 
 		if ( null !== $marker ) {
 			$objects[ $key ]['modified_marker'] = $marker;
@@ -189,6 +197,13 @@ final class Tracker {
 			$last_write = $entry['last_write_seq'] ?? null;
 			if ( null === $last_write ) {
 				// Read-only marker: never written, so never "unverified".
+				continue;
+			}
+
+			if ( true === ( $entry['no_readback'] ?? false ) ) {
+				// Written, but no ability reads this kind of object back: the
+				// report says "not checked"; the run is not nudged to do the
+				// impossible.
 				continue;
 			}
 

@@ -268,6 +268,14 @@ if ( ! function_exists( 'get_post_status' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_post_type' ) ) {
+	function get_post_type( int $id ): string|false {
+		$post = get_post( $id );
+
+		return $post ? (string) ( $post->post_type ?? '' ) : false;
+	}
+}
+
 if ( ! function_exists( 'get_the_title' ) ) {
 	function get_the_title( int $id ): string {
 		$post = get_post( $id );

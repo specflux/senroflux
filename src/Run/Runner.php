@@ -3884,7 +3884,7 @@ final class Runner {
 			$write_id = $this->writeObjectIdFor( $run, $verb, is_array( $args ) ? $args : array(), $outcome->output ?? array() )
 				?? self::objectIdIn( $outcome->output ?? array(), $key );
 			if ( null !== $write_id ) {
-				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq );
+				$objects = Tracker::recordWrite( $objects, $prefix . $write_id, $seq, $this->hasReadBack( $run, $prefix ) );
 			}
 		} elseif ( VerbTier::TIER_0 === $tier ) {
 			$args    = $call['args'] ?? null;
@@ -3958,6 +3958,28 @@ final class Runner {
 		$id = ( $this->read_object_id_resolver )( $run, $verb, $args );
 
 		return ( is_string( $id ) && '' !== $id ) ? $id : null;
+	}
+
+	/**
+	 * Whether any Tier-0 verb of the run's pack reads objects carrying
+	 * `$prefix` — i.e. whether a write to such an object could ever be
+	 * verified. A term or a coupon has no read verb, so the tracker must not
+	 * ask the model to re-read it. A direct-allow run (no verb map) keeps the
+	 * pre-existing assumption that everything is readable.
+	 */
+	private function hasReadBack( Run $run, string $prefix ): bool {
+		$map = $this->packVerbMap( $run );
+		if ( null === $map ) {
+			return true;
+		}
+
+		foreach ( $map as $verb => $tier ) {
+			if ( VerbTier::TIER_0 === $tier && $prefix === $this->objectIdPrefixFor( $run, (string) $verb ) ) {
+				return true;
+			}
+		}
+
+		return false;
 	}
 
 	/**

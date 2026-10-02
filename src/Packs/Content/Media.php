@@ -103,6 +103,15 @@ final class Media {
 	public const OBJECT_ID_PREFIX = 'attachment:';
 
 	/**
+	 * The same qualification for a term `create-term` made (proof-run
+	 * defect fix): a term id shares its number space with posts and
+	 * attachments, and no ability reads a term back, so
+	 * {@see \Specflux\SenroFlux\Packs\ObjectLookup} resolves it through
+	 * {@see termLookup()} and its report row says it was not checked.
+	 */
+	public const TERM_ID_PREFIX = 'term:';
+
+	/**
 	 * Cap on the file `generateAltText()` will inline as base64 — well above
 	 * anything a WordPress intermediate size produces, but an explicit fail
 	 * closed rather than an unbounded request body should a site's
@@ -1704,6 +1713,37 @@ final class Media {
 			// S12: "preview_url" for an attachment is its own file, not a
 			// post preview — there is nothing to draft-preview.
 			'preview_url' => '' !== $file ? $file : null,
+		);
+	}
+
+	/**
+	 * The S12 report lookup for one term: the object type is its taxonomy
+	 * (`category`, `post_tag`, …) the way a post's is its post type, and the
+	 * edit link is the term's own screen. Unknown when the term is gone or
+	 * the term functions are absent.
+	 *
+	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
+	 */
+	public static function termLookup( int $term_id ): array {
+		$term = function_exists( 'get_term' ) ? get_term( $term_id ) : null;
+		if ( ! is_object( $term ) || ! isset( $term->name, $term->taxonomy ) ) {
+			return array(
+				'object_type' => 'unknown',
+				'title'       => '',
+				'status'      => '',
+				'edit_url'    => null,
+				'preview_url' => null,
+			);
+		}
+
+		$edit = function_exists( 'get_edit_term_link' ) ? get_edit_term_link( $term_id, (string) $term->taxonomy ) : null;
+
+		return array(
+			'object_type' => (string) $term->taxonomy,
+			'title'       => (string) $term->name,
+			'status'      => '',
+			'edit_url'    => ( is_string( $edit ) && '' !== $edit ) ? $edit : null,
+			'preview_url' => null,
 		);
 	}
 

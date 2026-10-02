@@ -57,6 +57,14 @@ final class TrackerTest extends TestCase {
 	 * reported unverified — nothing was ever written, so there is nothing to
 	 * re-read before finishing.
 	 */
+	public function test_a_write_with_no_read_back_is_recorded_but_never_unverified(): void {
+		$objects = Tracker::recordWrite( array(), 'term:9', 4, false );
+
+		$this->assertSame( 4, $objects['term:9']['last_write_seq'] );
+		$this->assertNull( $objects['term:9']['verified_seq'] );
+		$this->assertSame( array(), Tracker::unverified( $objects ), 'there is nothing the run could re-read, so nothing to nudge' );
+	}
+
 	public function test_a_read_only_marker_is_never_unverified(): void {
 		$objects = Tracker::recordRead( array(), 'site-navigation', 'marker-a' );
 

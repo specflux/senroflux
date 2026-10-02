@@ -274,32 +274,48 @@ final class PostsPack extends Pack {
 	}
 
 	/**
-	 * S12 (defect fix): `update-alt`'s output and `read-media`'s input both
-	 * carry the attachment id as `attachment_id`, never `id` — the base's
-	 * default would silently track/verify nothing for either.
+	 * S12 (defect fix): which output key carries the id of the object a verb
+	 * wrote (or, for `read-media`, the input key naming the one it read) —
+	 * the base's `id` default would silently track/verify nothing for any of
+	 * these. The three attachment-producing media verbs and `update-alt`
+	 * answer `attachment_id`; `create-term` answers `term_id`; `set-terms`
+	 * and `set-featured-image` answer the `post_id` they changed.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdKey( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt', 'posts/read-media' => 'attachment_id',
+			'posts/update-alt',
+			'posts/read-media',
+			'posts/media-upload',
+			'posts/media-generate',
+			'posts/media-stock-import' => 'attachment_id',
+			'posts/create-term' => 'term_id',
+			'posts/set-terms',
+			'posts/set-featured-image' => 'post_id',
 			default => parent::objectIdKey( $verb ),
 		};
 	}
 
 	/**
 	 * S12 (defect fix): an attachment and a post can share the same numeric
-	 * id, so the two verbs above qualify it with {@see Media::OBJECT_ID_PREFIX}
-	 * before the harness ever sees it — the same prefix
-	 * {@see Media::attachmentLookup()} expects, stripped back off by the
-	 * composition root's report lookup (Plugin.php). Every other verb here
-	 * keeps a bare id (posts never collide with themselves).
+	 * id, so every verb that writes or reads one qualifies it with
+	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it — the
+	 * same prefix {@see Media::attachmentLookup()} expects, stripped back off
+	 * by {@see \Specflux\SenroFlux\Packs\ObjectLookup}. A created term is
+	 * qualified the same way ({@see Media::TERM_ID_PREFIX}). Every other verb
+	 * here keeps a bare id (posts never collide with themselves).
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdPrefix( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt', 'posts/read-media' => Media::OBJECT_ID_PREFIX,
+			'posts/update-alt',
+			'posts/read-media',
+			'posts/media-upload',
+			'posts/media-generate',
+			'posts/media-stock-import' => Media::OBJECT_ID_PREFIX,
+			'posts/create-term' => Media::TERM_ID_PREFIX,
 			default => parent::objectIdPrefix( $verb ),
 		};
 	}
@@ -457,7 +473,7 @@ final class PostsPack extends Pack {
 			return implode(
 				"\n",
 				array(
-					'This run has no image-generation budget left. Search the existing media library first; when nothing suitable exists, call stock-image-search for a free CC0/public-domain stock photo, then stock-image-import to use it. If that finds nothing either, publish without an image.',
+					'Image generation is not available in this run. Search the existing media library first; when nothing suitable exists, call stock-image-search for a free CC0/public-domain stock photo, then stock-image-import to use it. If that finds nothing either, publish without an image.',
 					'Every image needs non-empty, descriptive alt text — write it yourself with generate-alt-text or your own words, then save it with update-alt.',
 					'The theme shows the featured image above the post — do not also put it in the content.',
 					'After update-alt, media-upload or stock-image-import, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',

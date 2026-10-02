@@ -117,6 +117,72 @@ describe( 'ReportView change rows', () => {
 	} );
 } );
 
+describe( 'ReportView non-post rows', () => {
+	const attachmentRow = {
+		object_type: 'attachment',
+		object_id: 'attachment:3',
+		title: 'desk-photo.jpg',
+		status: 'inherit',
+		edit_url: 'https://example.test/wp-admin/post.php?post=3&action=edit',
+		preview_url: 'https://example.test/wp-content/uploads/desk-photo.jpg',
+		verified: true,
+	};
+
+	const termRow = {
+		object_type: 'category',
+		object_id: 'term:5',
+		title: 'Workstation Comfort',
+		status: '',
+		edit_url: 'https://example.test/wp-admin/term.php?taxonomy=category&tag_ID=5',
+		preview_url: null,
+		verified: false,
+	};
+
+	it( 'names an attachment row "Media", links to its edit screen and says it was verified', () => {
+		render( <ReportView report={ { ...baseReport, changes: [ attachmentRow ] } } steps={ [] } /> );
+
+		const row = screen.getByText( 'desk-photo.jpg' ).closest( 'li' );
+		expect( within( row ).getByText( /Media/ ) ).toBeInTheDocument();
+		expect( within( row ).queryByText( /attachment/ ) ).not.toBeInTheDocument();
+		expect( within( row ).getByRole( 'link', { name: 'Edit desk-photo.jpg' } ) ).toHaveAttribute( 'href', attachmentRow.edit_url );
+		expect( within( row ).getByText( 'Verified' ) ).toBeInTheDocument();
+	} );
+
+	it( 'names a term row by its taxonomy, links to the term screen and says it was not checked', () => {
+		render( <ReportView report={ { ...baseReport, changes: [ termRow ] } } steps={ [] } /> );
+
+		const row = screen.getByText( 'Workstation Comfort' ).closest( 'li' );
+		expect( within( row ).getByText( /Category/ ) ).toBeInTheDocument();
+		expect( within( row ).getByRole( 'link', { name: 'Edit Workstation Comfort' } ) ).toHaveAttribute( 'href', termRow.edit_url );
+		expect( within( row ).getByText( 'Not checked after the change' ) ).toBeInTheDocument();
+	} );
+
+	it( 'labels the other object kinds a run can write in plain words', () => {
+		const kinds = {
+			post_tag: 'Tag',
+			shop_coupon: 'Coupon',
+			shop_order: 'Order',
+			shipping_zone: 'Shipping zone',
+			tax_rate: 'Tax rate',
+			product: 'Product',
+		};
+		Object.entries( kinds ).forEach( ( [ type, label ], index ) => {
+			const { unmount } = render(
+				<ReportView report={ { ...baseReport, changes: [ { ...termRow, object_type: type, object_id: `x:${ index }`, title: `Row ${ index }` } ] } } steps={ [] } />
+			);
+			expect( screen.getByText( `Row ${ index }` ).closest( 'li' ) ).toHaveTextContent( label );
+			unmount();
+		} );
+	} );
+
+	it( 'falls back to the bare number, not the internal prefix, when a prefixed row has no title', () => {
+		render( <ReportView report={ { ...baseReport, changes: [ { ...termRow, title: '' } ] } } steps={ [] } /> );
+
+		expect( screen.getByText( '#5' ) ).toBeInTheDocument();
+		expect( screen.queryByText( /term:5/ ) ).not.toBeInTheDocument();
+	} );
+} );
+
 describe( 'ReportView gate mode, withheld roles and grants', () => {
 	it( 'names the built-in gate mode and the server line about where approvals are recorded', () => {
 		const report = {

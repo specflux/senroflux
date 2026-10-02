@@ -237,6 +237,14 @@ if ( ! class_exists( 'WC_Order', false ) ) {
 			return ( null !== $row && isset( $row->date_created ) ) ? (int) $row->date_created : null;
 		}
 
+		public function get_order_number(): string {
+			return (string) $this->id;
+		}
+
+		public function get_edit_order_url(): string {
+			return 'https://example.test/wp-admin/admin.php?page=wc-orders&action=edit&id=' . $this->id;
+		}
+
 		/** Stage 14 (AS-15/S19): the recipient a customer-visible note reaches. */
 		public function get_billing_email(): string {
 			return (string) ( $this->row()->billing_email ?? '' );
