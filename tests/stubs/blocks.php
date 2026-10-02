@@ -61,7 +61,8 @@ if ( ! function_exists( 'wp_register_ability' ) ) {
 			$args['execute_callback'] ?? array( 'ok' => true ),
 			$args['description'] ?? '',
 			$args['input_schema'] ?? null,
-			$args['meta'] ?? array()
+			$args['meta'] ?? array(),
+			$args['output_schema'] ?? null
 		);
 		$GLOBALS['senroflux_test_abilities'][ $name ] = $ability;
 

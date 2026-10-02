@@ -329,6 +329,8 @@ final class Navigation {
 							'url'     => array( 'type' => 'string' ),
 							'page_id' => array( 'type' => array( 'integer', 'null' ) ),
 							'order'   => array( 'type' => 'integer' ),
+							'key'     => array( 'type' => 'string' ),
+							'parent'  => array( 'type' => array( 'string', 'null' ) ),
 						),
 					),
 				),
@@ -361,8 +363,19 @@ final class Navigation {
 						'properties'           => array(
 							'label'   => array( 'type' => 'string' ),
 							'url'     => array( 'type' => 'string' ),
-							'page_id' => array( 'type' => 'integer' ),
-							'order'   => array( 'type' => 'integer' ),
+							'page_id' => array( 'type' => array( 'integer', 'null' ) ),
+							'order'   => array(
+								'type'        => 'integer',
+								'description' => 'Position among items with the same parent.',
+							),
+							'key'     => array(
+								'type'        => 'string',
+								'description' => 'Your own name for this item, unique within this call, so other items can name it as their parent.',
+							),
+							'parent'  => array(
+								'type'        => array( 'string', 'null' ),
+								'description' => 'The key of the item this one sits under; omit or null for the top level. At most ' . self::MAX_DEPTH . ' levels.',
+							),
 						),
 					),
 				),

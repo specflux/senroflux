@@ -70,6 +70,27 @@ final class NavigationTest extends TestCase {
 		return $GLOBALS['senroflux_test_abilities']['senroflux/update-navigation'];
 	}
 
+	/**
+	 * The item schema is additionalProperties:false, and WordPress validates
+	 * input against it before execute() runs — so a nesting field the schema
+	 * does not declare is refused live even though execute() would accept it.
+	 */
+	public function test_update_schema_declares_every_field_a_nested_item_and_a_read_echo_carry(): void {
+		$item = $this->updateAbility()->get_input_schema()['properties']['items']['items'];
+
+		$this->assertFalse( $item['additionalProperties'] );
+		foreach ( array( 'label', 'url', 'page_id', 'order', 'key', 'parent' ) as $field ) {
+			$this->assertArrayHasKey( $field, $item['properties'], $field );
+		}
+		$this->assertContains( 'null', (array) $item['properties']['parent']['type'] );
+		$this->assertContains( 'null', (array) $item['properties']['page_id']['type'] );
+
+		$read_item = $this->readAbility()->get_output_schema()['properties']['items']['items']['properties'];
+		foreach ( array_keys( $read_item ) as $field ) {
+			$this->assertArrayHasKey( $field, $item['properties'], "read-navigation returns {$field}, so update-navigation must accept it back" );
+		}
+	}
+
 	/** Insert a wp_navigation post with the given content, return its id. */
 	private function insertNav( string $content ): int {
 		return wp_insert_post(
