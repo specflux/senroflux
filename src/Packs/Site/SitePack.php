@@ -328,7 +328,7 @@ final class SitePack extends Pack {
 	 */
 	public function withheldRoleNotice( array $withheld ): ?string {
 		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) || in_array( 'stock-import', $withheld, true ) ) {
-			return __( 'This run cannot add images.', 'senroflux' );
+			return __( 'Images are off for this run — your account can\'t upload files.', 'senroflux' );
 		}
 
 		return null;
@@ -526,7 +526,7 @@ final class SitePack extends Pack {
 				'After clarify, your next call is `senroflux/propose-plan`. It lists every page you will create, every adopted object (title, id, status) and the publish and navigation steps. Match an existing page by slug or title and ADOPT it; never create a second page for it.',
 				'Rewrite an adopted page only when the human asked for a rewrite. Publish an adopted draft only when the plan names it "publish existing draft".',
 				'If navigation kind is "page_list", call update-navigation to list the real pages when stock_sample_page is not null; otherwise page_list is fine.',
-				'Delete nothing. Name leftover default-install objects in your summary for the human to remove.',
+				'Delete nothing. Name leftover default-install objects in `left_for_you` for the human to remove.',
 				'Update the navigation only after every planned page is published; a link to an unpublished page is refused.',
 				'Only call set-style when asked for a different look; read-style first, even if read earlier this run.',
 			)

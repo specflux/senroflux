@@ -65,7 +65,7 @@ final class PostsPackTest extends TestCase {
 		$this->assertSame( array( 'posts/media-stock-import' ), $pack->roleVerbs()['stock-import'] );
 
 		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
 	public function test_publish_verb_routes_publish_future_and_update_live(): void {
@@ -131,8 +131,8 @@ final class PostsPackTest extends TestCase {
 	public function test_withheld_role_notice(): void {
 		$pack = new PostsPack();
 
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'upload' ) ) );
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'generate' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'upload' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'generate' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array( 'read' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array() ) );
 	}

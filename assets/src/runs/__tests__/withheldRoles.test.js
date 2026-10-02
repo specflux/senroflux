@@ -37,3 +37,29 @@ describe( 'a withheld role is disclosed on the run', () => {
 		expect( document.querySelector( '.senroflux-withheld-roles' ) ).toBeNull();
 	} );
 } );
+
+describe( 'the run view shows the pack\'s own withheld-roles line at start (S6)', () => {
+	const notice = 'Images are off for this run — your account can\'t upload files.';
+
+	it( 'shows the pack notice, not the generic sentence', () => {
+		render(
+			<Chat run={ { ...baseRun, withheld_roles: [ 'upload' ], withheld_notice: notice } } steps={ [] } />
+		);
+
+		const line = document.querySelector( '.senroflux-withheld-roles' );
+		expect( line ).toHaveTextContent( notice );
+		expect( screen.queryByText( /Some abilities are off/ ) ).not.toBeInTheDocument();
+	} );
+
+	it( 'falls back to a generic line when the pack had nothing to say, so the gap is never silent', () => {
+		render( <Chat run={ { ...baseRun, withheld_roles: [ 'upload' ], withheld_notice: null } } steps={ [] } /> );
+
+		expect( document.querySelector( '.senroflux-withheld-roles' ) ).toHaveTextContent( /Some abilities are off/ );
+	} );
+
+	it( 'shows nothing at all for a user holding every capability, even with a stray notice', () => {
+		render( <Chat run={ { ...baseRun, withheld_roles: [], withheld_notice: null } } steps={ [] } /> );
+
+		expect( document.querySelector( '.senroflux-withheld-roles' ) ).toBeNull();
+	} );
+} );

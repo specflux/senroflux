@@ -1,4 +1,4 @@
-import { useEffect, useState } from '@wordpress/element';
+import { useEffect, useRef, useState } from '@wordpress/element';
 import { __, sprintf } from '@wordpress/i18n';
 import { SelectControl } from '@wordpress/components';
 
@@ -81,8 +81,23 @@ function flattenModelChoices( modelChoices ) {
  *                                                                       rather than the box just going
  *                                                                       quiet.
  * @param {Object}   [props.modelChoices] `senrofluxRunsConfig.modelChoices` — `{ providerId: { name, models: [{id, name}] } }`, only configured providers.
+ * @param {boolean}  [props.startBlocked] A blocking setup check fails (no model provider, J1): Start is disabled
+ *                                        and says why. The server-rendered setup panel above the app names the fix.
+ * @param {?{runId:number,pack:string}} [props.followUp] A follow-up run is being started from a finished run
+ *                                        (0.3 S20): the pack is locked to that run's, and `onSend` gets its id as a 4th argument.
+ * @param {Function} [props.onCancelFollowUp] `() => void` — leaves follow-up mode.
  */
-export default function MessageBox( { state, onSend, initialText, packs, unavailablePacks, modelChoices } ) {
+export default function MessageBox( {
+	state,
+	onSend,
+	initialText,
+	packs,
+	unavailablePacks,
+	modelChoices,
+	startBlocked,
+	followUp,
+	onCancelFollowUp,
+} ) {
 	const packList = Array.isArray( packs ) ? packs : [];
 	const unavailableList = Array.isArray( unavailablePacks ) ? unavailablePacks : [];
 	const [ text, setText ] = useState( initialText || '' );
@@ -99,9 +114,36 @@ export default function MessageBox( { state, onSend, initialText, packs, unavail
 		}
 	}, [ pack, packList ] );
 
-	const packReady = 0 === packList.length ? false : 1 === packList.length ? true : '' !== pack;
+	// A selected pack that is no longer runnable (a focus refresh dropped it)
+	// must not stay selected.
+	useEffect( () => {
+		if ( '' !== pack && ! packList.some( ( p ) => p.name === pack ) ) {
+			setPack( '' );
+		}
+	}, [ pack, packList ] );
+
+	// A follow-up runs the SOURCE run's pack (S20), whatever the picker held.
+	const effectivePack = followUp ? followUp.pack : pack;
+	const packReady = followUp
+		? true
+		: 0 === packList.length
+		? false
+		: 1 === packList.length
+		? true
+		: '' !== pack;
 	const boxDisabled = 'idle' !== state || ! onSend;
+	// The text box stays usable while Start is blocked, so a goal typed (or
+	// pre-filled by the command palette) is not lost while the user fixes setup.
 	const disabled = boxDisabled || ! packReady;
+	const startDisabled = disabled || Boolean( startBlocked );
+
+	const textRef = useRef( null );
+	// Entering follow-up mode puts the cursor in the (empty) goal box.
+	useEffect( () => {
+		if ( followUp && textRef.current ) {
+			textRef.current.focus();
+		}
+	}, [ followUp ] );
 
 	const placeholder =
 		'parked' === state
@@ -128,16 +170,17 @@ export default function MessageBox( { state, onSend, initialText, packs, unavail
 
 	const submit = () => {
 		const goal = text.trim();
-		if ( '' === goal || ! onSend || ! packReady ) {
+		if ( '' === goal || ! onSend || ! packReady || startBlocked ) {
 			return;
 		}
 		const chosenModel =
 			AUTOMATIC_VALUE === modelIndex ? null : flatModels[ Number( modelIndex ) ];
-		onSend(
-			goal,
-			packList.length > 0 ? pack : undefined,
-			chosenModel ? { provider: chosenModel.provider, id: chosenModel.id } : null
-		);
+		const model = chosenModel ? { provider: chosenModel.provider, id: chosenModel.id } : null;
+		if ( followUp ) {
+			onSend( goal, followUp.pack, model, followUp.runId );
+		} else {
+			onSend( goal, packList.length > 0 ? pack : undefined, model );
+		}
 		setText( '' );
 	};
 
@@ -157,6 +200,18 @@ export default function MessageBox( { state, onSend, initialText, packs, unavail
 					) ) }
 				</ul>
 			) }
+			{ followUp && (
+				<p className="senroflux-followup-note">
+					{ sprintf(
+						/* translators: %d: the id of the finished run being followed up. */
+						__( 'Follow-up to run #%d. It keeps the same pack and starts from the objects that run changed; it re-reads each before changing it.', 'senroflux' ),
+						followUp.runId
+					) }{ ' ' }
+					<button type="button" className="button-link" onClick={ () => onCancelFollowUp && onCancelFollowUp() }>
+						{ __( 'Cancel follow-up', 'senroflux' ) }
+					</button>
+				</p>
+			) }
 			<div className="senroflux-message-box">
 				{ packList.length > 0 && (
 					<SelectControl
@@ -164,8 +219,8 @@ export default function MessageBox( { state, onSend, initialText, packs, unavail
 						label={ __( 'Pack', 'senroflux' ) }
 						hideLabelFromVision
 						__next40pxDefaultSize
-						disabled={ boxDisabled }
-						value={ pack }
+						disabled={ boxDisabled || Boolean( followUp ) }
+						value={ effectivePack }
 						onChange={ setPack }
 					>
 						{ 1 !== packList.length && (
@@ -206,22 +261,34 @@ export default function MessageBox( { state, onSend, initialText, packs, unavail
 					</SelectControl>
 				) }
 				<textarea
+					ref={ textRef }
 					className="senroflux-message-box-input"
 					disabled={ disabled }
 					placeholder={ placeholder }
 					value={ text }
 					onChange={ ( e ) => setText( e.target.value ) }
 					onKeyDown={ ( e ) => {
-						if ( 'Enter' === e.key && ! e.shiftKey && ! disabled ) {
+						if ( 'Enter' === e.key && ! e.shiftKey && ! startDisabled ) {
 							e.preventDefault();
 							submit();
 						}
 					} }
 				/>
-				<button type="button" className="button button-primary" disabled={ disabled || '' === text.trim() } onClick={ submit }>
+				<button
+					type="button"
+					className="button button-primary"
+					disabled={ startDisabled || '' === text.trim() }
+					aria-describedby={ startBlocked ? 'senroflux-start-blocked' : undefined }
+					onClick={ submit }
+				>
 					{ __( 'Start run', 'senroflux' ) }
 				</button>
 			</div>
+			{ startBlocked && (
+				<p id="senroflux-start-blocked" className="senroflux-start-blocked">
+					{ __( 'Finish the setup notice above to start a run.', 'senroflux' ) }
+				</p>
+			) }
 		</div>
 	);
 }

@@ -671,3 +671,143 @@
 		}
 	}
 }
+
+/* The run report at a terminal state (0.3 S12, stage 22b). A row's state is
+ * always said in text: the mark and the border are decoration on top, so the
+ * "Not checked after the change" state never depends on colour. */
+.senroflux-report {
+	background: #fff;
+	border-block-start: 1px solid #dcdcde;
+	padding: 12px 20px 16px;
+}
+
+.senroflux-report-heading {
+	margin: 0 0 4px;
+	font-size: 16px;
+}
+
+.senroflux-report-summary {
+	margin: 0 0 10px;
+	font-weight: 600;
+}
+
+.senroflux-report-subheading {
+	margin: 14px 0 6px;
+	font-size: 13px;
+}
+
+.senroflux-report-changes,
+.senroflux-report-objects,
+.senroflux-report-grants,
+.senroflux-report-meta {
+	list-style: none;
+	margin: 0;
+	padding: 0;
+}
+
+.senroflux-report-change {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: 4px 10px;
+	padding: 6px 10px;
+	margin-block-end: 4px;
+	border: 1px solid #dcdcde;
+	border-inline-start: 4px solid #00a32a;
+	border-radius: 4px;
+}
+
+/* Not checked: a dashed, different border shape as well as the warning mark
+ * and the words, so it differs from a verified row in outline, glyph and text. */
+.senroflux-report-change.is-unchecked {
+	border-style: dashed;
+	border-inline-start: 4px dashed #996800;
+	background: #fcf9e8;
+}
+
+.senroflux-report-mark {
+	font-weight: 700;
+}
+
+.senroflux-report-object {
+	overflow-wrap: anywhere;
+}
+
+.senroflux-report-object-meta {
+	color: #646970;
+	font-size: 12px;
+}
+
+.senroflux-report-state {
+	margin-inline-start: auto;
+	font-size: 12px;
+	font-weight: 600;
+}
+
+.senroflux-report-meta {
+	margin-block-start: 10px;
+	color: #50575e;
+	font-size: 13px;
+}
+
+.senroflux-report-gate,
+.senroflux-report-gate-note,
+.senroflux-report-withheld,
+.senroflux-report-grant,
+.senroflux-report-object-row {
+	margin-block-end: 2px;
+}
+
+.senroflux-report-object-row {
+	display: flex;
+	gap: 10px;
+	align-items: baseline;
+}
+
+.senroflux-report-store {
+	margin: 0;
+}
+
+.senroflux-report-store-row {
+	display: flex;
+	gap: 10px;
+}
+
+.senroflux-report-store-row dt {
+	min-inline-size: 150px;
+	color: #50575e;
+}
+
+.senroflux-report-store-row dd {
+	margin: 0;
+	font-weight: 600;
+}
+
+/* "Start a follow-up" on a finished run, and the box's follow-up note (S20). */
+.senroflux-followup-actions {
+	display: flex;
+	gap: 10px;
+	padding: 12px 20px;
+	border-block-start: 1px solid #dcdcde;
+}
+
+.senroflux-followup-note,
+.senroflux-start-blocked {
+	margin: 0 0 8px;
+	color: #50575e;
+	font-size: 13px;
+}
+
+.senroflux-start-blocked {
+	margin-block: 8px 0;
+}
+
+.senroflux-report-edit {
+	font-size: 12px;
+}
+
+/* The server-rendered setup panel above the app (S11); swapped in place on
+ * window focus, so its spacing lives here rather than inline. */
+.senroflux-setup-panel {
+	margin-block-end: 8px;
+}

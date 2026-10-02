@@ -390,3 +390,43 @@ export function stepResult( step ) {
 	}
 	return '';
 }
+
+/**
+ * The store report the run produced on demand (J13), if any: the newest
+ * successful `store-report` tool result, in the output shape
+ * `senroflux/store-report` declares. `save-store-report` is a different
+ * ability (it writes a page) and never counts. Returns null when the run made
+ * none, or the result does not have the expected shape.
+ *
+ * @param {Array} steps The run's steps.
+ * @return {?Object} The report output, or null.
+ */
+export function storeReportFromSteps( steps ) {
+	for ( let i = ( steps || [] ).length - 1; i >= 0; i-- ) {
+		const step = steps[ i ];
+		if ( 'tool_result' !== step.kind || 'ok' !== step.status ) {
+			continue;
+		}
+		if ( ! /(^|__|\/)store-report$/.test( step.tool_name || '' ) ) {
+			continue;
+		}
+		const part =
+			step.message && Array.isArray( step.message.parts )
+				? step.message.parts.find( ( p ) => p && p.functionResponse )
+				: null;
+		const response = part ? part.functionResponse.response : null;
+		if ( response && 'object' === typeof response && Number.isInteger( response.order_count ) ) {
+			return response;
+		}
+	}
+	return null;
+}
+
+/** `{ total, notChecked }` over a report's change rows. */
+export function reportCounts( report ) {
+	const changes = report && Array.isArray( report.changes ) ? report.changes : [];
+	return {
+		total: changes.length,
+		notChecked: changes.filter( ( change ) => ! change.verified ).length,
+	};
+}

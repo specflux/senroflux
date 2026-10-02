@@ -79,14 +79,29 @@ function postAjax( action, fields, config ) {
  * @param {Object}      config
  * @param {string}      [pack]
  * @param {?{provider: string, id: string}} [model] Chosen (provider, model) pair, or null/omitted for automatic.
+ * @param {number}      [followUpOf] A finished run to follow up (0.3 S20). The server forces
+ *                                   the pack to that run's own, whatever `pack` says.
  */
-export function startRun( goal, config, pack, model ) {
+export function startRun( goal, config, pack, model, followUpOf ) {
 	const fields = { consumer: config.consumer, goal, pack };
+	if ( followUpOf ) {
+		fields.follow_up_of = followUpOf;
+	}
 	if ( model ) {
 		fields.model_provider = model.provider;
 		fields.model_id = model.id;
 	}
 	return postAjax( 'senroflux_start', fields, config );
+}
+
+/**
+ * admin-ajax `senroflux_setup_panel` (0.3 S11, "refresh on window focus"):
+ * the setup panel's markup plus the whole start state — `{ html,
+ * start_enabled, packs, unavailable_packs }`. Same nonce/capability as every
+ * other write, but read-only: it changes nothing on the server.
+ */
+export function fetchSetupState( config ) {
+	return postAjax( 'senroflux_setup_panel', {}, config );
 }
 
 /** admin-ajax `senroflux_tick`: {run_id, step_count, resume?} -> RunState. */

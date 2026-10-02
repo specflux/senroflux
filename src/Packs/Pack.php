@@ -442,7 +442,9 @@ abstract class Pack {
 	 * (0.3 S6) — one line per withheld GROUP, in the pack's own words, so the
 	 * harness (which never learns what a role's ability actually does) stays
 	 * domain-agnostic. Null when the pack has nothing to say (the base
-	 * default, and a pack given an empty `$withheld`). `@api` (S23).
+	 * default, and a pack given an empty `$withheld`). The same line is shown
+	 * to the human on the run view at start (stage 22b, S6), so write it for
+	 * both readers. `@api` (S23).
 	 *
 	 * @param list<string> $withheld The role names withheld from this run's start().
 	 */

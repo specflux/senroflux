@@ -35,6 +35,9 @@ function fullTour() {
 		call( 'wpab__senroflux-e2e__list-things', {} ),
 		call( 'wpab__senroflux-e2e__search-things', { query: 'launch' } ),
 		call( 'wpab__senroflux-e2e__create-thing', { title: 'Launch Day' } ),
+		// Stage 22b: re-read the new thing (the fixture's first created id is
+		// `thing-3`), so the report's row is "verified".
+		call( 'wpab__senroflux-e2e__read-thing', { id: 'thing-3' } ),
 		call( 'senroflux__suggest-brief-addition', {
 			text: 'Mention the launch post in the weekly newsletter.',
 		} ),
@@ -72,6 +75,47 @@ function keyboardTour() {
 	];
 }
 
+/**
+ * A write that is never re-read (stage 22b, S12): plan, one Tier-1 create,
+ * a closing summary, and a second text turn for the harness's own re-read
+ * nudge, which this scripted model ignores. The report's one row is "Not
+ * checked after the change".
+ */
+function unverifiedWrite() {
+	return [
+		call( 'senroflux__propose-plan', {
+			goal: PLAN_GOAL,
+			steps: [ { text: 'Create the launch post', verbs: [ 'senroflux-e2e/create-thing' ] } ],
+			assumptions: [],
+		} ),
+		call( 'wpab__senroflux-e2e__create-thing', { title: 'Launch Day' } ),
+		text( 'Created the launch post.' ),
+		text( 'Done.' ),
+	];
+}
+
+/**
+ * Plan, one approved write, then a question park — a run that can be
+ * cancelled with a change on record (a follow-up's seed, J15). The trailing
+ * plan park is the FOLLOW-UP run's first turn.
+ */
+function writeThenQuestion() {
+	return [
+		call( 'senroflux__propose-plan', {
+			goal: PLAN_GOAL,
+			steps: [ { text: 'Create the launch post', verbs: [ 'senroflux-e2e/create-thing' ] } ],
+			assumptions: [],
+		} ),
+		call( 'wpab__senroflux-e2e__create-thing', { title: 'Launch Day' } ),
+		call( 'senroflux__ask-user', {
+			text: 'Which section next?',
+			choices: [ 'News', 'Announcements' ],
+			rationale: 'Need a section.',
+		} ),
+		...planOnly( 'Follow up on the launch page' ),
+	];
+}
+
 /** A trivial one-turn scenario: no parks, completes immediately. */
 function quickComplete() {
 	return [ text( 'Nothing to do here — completed immediately.' ) ];
@@ -102,4 +146,4 @@ function readBeforeAnyPlan() {
 	];
 }
 
-module.exports = { PLAN_GOAL, call, text, fullTour, keyboardTour, quickComplete, planOnly, readBeforeAnyPlan };
+module.exports = { PLAN_GOAL, call, text, fullTour, keyboardTour, quickComplete, planOnly, readBeforeAnyPlan, unverifiedWrite, writeThenQuestion };

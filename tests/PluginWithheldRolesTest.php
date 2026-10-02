@@ -112,6 +112,11 @@ final class PluginWithheldRolesTest extends TestCase {
 		$fresh = Plugin::instance()->get( $run_id );
 		$this->assertIsArray( $fresh );
 		$this->assertSame( array( 'generate' ), $fresh['run']['withheld_roles'] );
+
+		// Stage 22b (S6): the pack's own words ride on the read, so the run
+		// view can show them at start without the client knowing any pack.
+		$this->assertSame( 'This run cannot add images.', $fresh['run']['withheld_notice'] );
+		$this->assertSame( 'This run cannot add images.', $result['run']['withheld_notice'] );
 	}
 
 	public function test_a_user_holding_the_capability_has_nothing_withheld(): void {
@@ -122,6 +127,7 @@ final class PluginWithheldRolesTest extends TestCase {
 
 		$this->assertIsArray( $result );
 		$this->assertSame( array(), $result['run']['withheld_roles'] );
+		$this->assertNull( $result['run']['withheld_notice'], 'a user holding every capability sees nothing' );
 		$this->assertContains( 'senroflux/generate-image', $result['run']['allow'] );
 	}
 

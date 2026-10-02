@@ -149,6 +149,21 @@ class SenroFlux_E2E_Model implements ModelInterface, TextGenerationModelInterfac
 		$consumed[] = $step ?? array( 'type' => 'empty' );
 		update_option( 'senroflux_e2e_calls', $consumed, false );
 
+		// Stage 22b: the text of the FIRST message of every prompt, so a spec can
+		// prove a follow-up run's seed (the source run's object list) reached the
+		// model. Text parts only; absent methods leave an empty string.
+		$first_text = '';
+		if ( isset( $prompt[0] ) && is_object( $prompt[0] ) && method_exists( $prompt[0], 'getParts' ) ) {
+			foreach ( $prompt[0]->getParts() as $part ) {
+				if ( is_object( $part ) && method_exists( $part, 'getText' ) && is_string( $part->getText() ) ) {
+					$first_text .= $part->getText();
+				}
+			}
+		}
+		$prompts   = (array) get_option( 'senroflux_e2e_prompts', array() );
+		$prompts[] = $first_text;
+		update_option( 'senroflux_e2e_prompts', $prompts, false );
+
 		if ( null === $step || 'text' === ( $step['type'] ?? '' ) ) {
 			$parts = array( new MessagePart( (string) ( $step['text'] ?? 'No scripted response left.' ) ) );
 		} else {

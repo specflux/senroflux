@@ -87,6 +87,8 @@ if ( ! class_exists( 'SenroFlux_Test_Grants' ) ) {
 				'correlation_id' => $correlation_id,
 				'granted_by'     => $granted_by,
 				'plan_step_id'   => $plan_step_id,
+				// Mirrors the real grant's 24h default lifetime (UTC, 'Y-m-d H:i:s').
+				'expires_ts'     => gmdate( 'Y-m-d H:i:s', time() + 86400 ),
 			);
 
 			return $grant_id;

@@ -305,8 +305,59 @@ final class GrantsTest extends TestCase {
 				'granted_by'     => 1,
 				'plan_step_id'   => (string) $plan_seq,
 			),
-			array_diff_key( $this->grants->issued[0], array( 'grant_id' => null ) )
+			array_diff_key(
+				$this->grants->issued[0],
+				array(
+					'grant_id'   => null,
+					'expires_ts' => null,
+				)
+			)
 		);
+	}
+
+	/** Stage 22b (S12): the report lists the run's grants with their expiry. */
+	public function test_the_report_lists_the_runs_grants_with_their_expiry(): void {
+		list( $run_id ) = $this->parkPlan( array( array( 'agsafe-smoke/publish' ) ) );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		$report = $this->store->getRun( $run_id )->result;
+		$this->assertIsArray( $report );
+		$this->assertCount( 1, $report['grants'] );
+		$this->assertSame( 'agsafe-smoke/publish', $report['grants'][0]['verb'] );
+		$this->assertMatchesRegularExpression( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $report['grants'][0]['expires_at'] );
+	}
+
+	/** Stage 22b (S7/S12): the report reads adopted / left-for-you off the accepted plan. */
+	public function test_the_report_carries_the_accepted_plans_adopted_and_left_for_you_lists(): void {
+		$run_id = $this->createRun();
+		$args   = self::planArgs( array( array( 'agsafe-smoke/read' ) ) );
+
+		$args['adopted']         = array(
+			array(
+				'id'    => '12',
+				'title' => 'About',
+			),
+		);
+		$args['left_for_you']    = array(
+			array(
+				'id'    => '2',
+				'title' => 'Sample Page',
+			),
+		);
+		$this->gateway->script[] = self::callTurn( 'call_p', PlanTools::FUNCTION_NAME, $args );
+		$this->runner->tick( $run_id, 0, null );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$report = $this->store->getRun( $run_id )->result;
+		$this->assertIsArray( $report );
+		$this->assertSame( array( '12' ), array_column( $report['adopted'], 'object_id' ) );
+		$this->assertSame( 'About', $report['adopted'][0]['title'] );
+		$this->assertSame( 'Sample Page', $report['left_for_you'][0]['title'] );
+		$this->assertArrayNotHasKey( 'grants', $report, 'a plain accept issues no grant' );
 	}
 
 	public function test_the_grant_count_is_the_number_of_plan_steps_reaching_the_verb(): void {

@@ -327,7 +327,7 @@ final class PostsPack extends Pack {
 	 */
 	public function withheldRoleNotice( array $withheld ): ?string {
 		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) || in_array( 'stock-import', $withheld, true ) ) {
-			return __( 'This run cannot add images.', 'senroflux' );
+			return __( 'Images are off for this run — your account can\'t upload files.', 'senroflux' );
 		}
 
 		return null;

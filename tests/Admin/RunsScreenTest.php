@@ -187,6 +187,26 @@ final class RunsScreenTest extends TestCase {
 		$this->assertSame( $fixture, $GLOBALS['senroflux_test_localized']['senrofluxRunsConfig']['modelChoices'] );
 	}
 
+	/**
+	 * Stage 22b (J1): a failing BLOCKING harness check (no provider) must
+	 * reach the React app as `startBlocked`, so Start is disabled rather than
+	 * only the server-rendered panel naming the fix.
+	 */
+	public function test_assets_localizes_start_blocked_when_a_blocking_harness_check_fails(): void {
+		Checks::setProviderProbe( false );
+		try {
+			( new RunsScreen() )->assets( 'toplevel_page_senroflux-runs' );
+			$blocked = $GLOBALS['senroflux_test_localized']['senrofluxRunsConfig']['startBlocked'] ?? null;
+		} finally {
+			Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
+		}
+
+		$this->assertTrue( $blocked );
+
+		( new RunsScreen() )->assets( 'toplevel_page_senroflux-runs' );
+		$this->assertFalse( $GLOBALS['senroflux_test_localized']['senrofluxRunsConfig']['startBlocked'] );
+	}
+
 	// ------------------------------------------------------------------
 	// handleNewRun: one start path through senroflux()->start
 	// ------------------------------------------------------------------
@@ -871,6 +891,10 @@ final class RunsScreenTest extends TestCase {
 			$this->assertTrue( $json->success );
 			$this->assertFalse( $json->data['start_enabled'] );
 			$this->assertStringContainsString( 'senroflux-setup-panel', $json->data['html'] );
+			// Stage 22b: the pack lists ride along so the screen refreshes its
+			// whole start state on focus, not only the panel.
+			$this->assertArrayHasKey( 'packs', $json->data );
+			$this->assertArrayHasKey( 'unavailable_packs', $json->data );
 		} finally {
 			Checks::setProviderProbe( true ); // suite-wide default, not the real registry.
 		}

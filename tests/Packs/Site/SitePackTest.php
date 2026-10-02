@@ -92,7 +92,7 @@ final class SitePackTest extends TestCase {
 		$this->assertSame( array( 'site/media-stock-import' ), $pack->roleVerbs()['stock-import'] );
 
 		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
 	public function test_object_id_key_and_prefix_for_attachment_verbs(): void {

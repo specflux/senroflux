@@ -167,7 +167,7 @@ final class PagesPackTest extends TestCase {
 
 		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
 		$this->assertArrayNotHasKey( 'stock-search', $pack->roleCapabilities() );
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
 	public function test_verb_for_publish_unchanged_is_update_live(): void {
@@ -277,8 +277,8 @@ final class PagesPackTest extends TestCase {
 	public function test_withheld_role_notice(): void {
 		$pack = new PagesPack();
 
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'upload' ) ) );
-		$this->assertSame( 'This run cannot add images.', $pack->withheldRoleNotice( array( 'generate' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'upload' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'generate' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array( 'read' ) ) );
 		$this->assertNull( $pack->withheldRoleNotice( array() ) );
 	}

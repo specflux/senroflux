@@ -56,9 +56,12 @@ final class Report {
 	 *                                             with its writes done, but a budget ceiling
 	 *                                             cut verification short — e.g.
 	 *                                             `unverified: budget_exceeded (max_tokens)`.
+	 * @param list<array{verb:string,status:string,remaining:int,expires_at:string}> $grants Pre-approval grants issued for the run, with their expiry (0.3 S12, Agent Safety mode).
+	 * @param list<array{id:string,title:string}> $adopted      Objects the accepted plan adopted (0.3 S7/S12).
+	 * @param list<array{id:string,title:string}> $left_for_you Objects the accepted plan left for the human to remove (0.3 S7/S12).
 	 * @return array{summary:string,changes:list<array<string,mixed>>,gate_mode:string,withheld_roles:list<string>}
 	 */
-	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array(), ?string $unverified_note = null ): array {
+	public static function build( string $summary, array $objects, ?callable $post_lookup = null, GateMode $gate_mode = GateMode::AgentSafety, array $withheld_roles = array(), ?string $unverified_note = null, array $grants = array(), array $adopted = array(), array $left_for_you = array() ): array {
 		$lookup  = $post_lookup ?? self::wpPostLookup();
 		$changes = array();
 
@@ -104,7 +107,47 @@ final class Report {
 			$report['unverified'] = $unverified_note;
 		}
 
+		// 0.3 S12: only present when there is something to say, so a report
+		// with none of these keeps its pre-22b shape.
+		if ( array() !== $grants ) {
+			$report['grants'] = $grants;
+		}
+		if ( array() !== $adopted ) {
+			$report['adopted'] = self::objectRows( $adopted, $lookup );
+		}
+		if ( array() !== $left_for_you ) {
+			$report['left_for_you'] = self::objectRows( $left_for_you, $lookup );
+		}
+
 		return $report;
+	}
+
+	/**
+	 * Rows for the plan-named objects (adopted / left for you). The object is
+	 * resolved through the same lookup as a change row, so its title, status
+	 * and edit link are WordPress's own; the plan's (model-written) title is
+	 * only the fallback for an object the lookup cannot resolve.
+	 *
+	 * @param list<array{id:string,title:string}> $entries The accepted plan's entries.
+	 * @param callable                            $lookup  Lookup adapter.
+	 * @return list<array{object_id:string,title:string,status:string,edit_url:?string}>
+	 */
+	private static function objectRows( array $entries, callable $lookup ): array {
+		$rows = array();
+		foreach ( $entries as $entry ) {
+			$id      = (string) $entry['id'];
+			$details = self::changeRow( $id, false, $lookup, $id );
+			$known   = 'unknown' !== $details['object_type'];
+
+			$rows[] = array(
+				'object_id' => $id,
+				'title'     => $known && '' !== $details['title'] ? $details['title'] : $entry['title'],
+				'status'    => $known ? $details['status'] : '',
+				'edit_url'  => $known ? $details['edit_url'] : null,
+			);
+		}
+
+		return $rows;
 	}
 
 	/**

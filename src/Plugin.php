@@ -440,6 +440,12 @@ final class Plugin {
 			if ( null === $source ) {
 				return new WP_Error( 'follow_up_not_found', __( 'The source run was not found.', 'senroflux' ), array( 'status' => 404 ) );
 			}
+			// Stage 22b: the viewer must also be able to SEE the source run — its
+			// object list seeds the follow-up, so a run `get()` would refuse
+			// must not leak through here.
+			if ( ! $this->maySee( $source ) ) {
+				return new WP_Error( 'follow_up_forbidden', __( 'This run belongs to another user.', 'senroflux' ), array( 'status' => 403 ) );
+			}
 			if ( ! in_array( $source->status, array( RunStatus::Completed, RunStatus::Failed, RunStatus::Cancelled ), true ) ) {
 				return new WP_Error( 'follow_up_not_finished', __( 'The source run has not finished yet.', 'senroflux' ), array( 'status' => 400 ) );
 			}
@@ -880,6 +886,10 @@ final class Plugin {
 				'gate_mode'           => $run->gateMode->value,
 				// 0.3 S6: pinned at start(), rendered once by the run header.
 				'withheld_roles'      => $run->withheldRoles,
+				// Stage 22b (S6): the pack's own one-line notice for those
+				// roles — the run view shows it at start. Null when nothing
+				// is withheld (or the pack has nothing to say).
+				'withheld_notice'     => $this->withheldNoticeFor( $run ),
 				// 0.3 S20: the source run id when this run is a follow-up.
 				'follow_up_of'        => $run->followUpOf,
 				// Pinned at start(), rendered once by the run header.
@@ -1000,6 +1010,19 @@ final class Plugin {
 		$capability = apply_filters( 'senroflux_runs_capability', 'manage_options' );
 
 		return function_exists( 'current_user_can' ) && current_user_can( (string) $capability );
+	}
+
+	/**
+	 * The pack's own notice for a run's withheld roles (S6), or null.
+	 */
+	private function withheldNoticeFor( \Specflux\SenroFlux\Run\Run $run ): ?string {
+		if ( null === $run->pack || array() === $run->withheldRoles ) {
+			return null;
+		}
+
+		$pack = $this->packRegistry()->get( $run->pack );
+
+		return null !== $pack ? $pack->withheldRoleNotice( $run->withheldRoles ) : null;
 	}
 
 	/**

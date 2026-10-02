@@ -298,6 +298,11 @@ class RunsScreen {
 				// picker above is short a pack, or empty (every pack
 				// refused), instead of going silent.
 				'unavailablePacks'   => $this->unavailablePacks(),
+				// Stage 22b (J1): a failing BLOCKING harness check (no model
+				// provider, WordPress too old) disables Start. The setup panel
+				// above the app names the fix; this is the app's half. It is
+				// refreshed on window focus through `senroflux_setup_panel`.
+				'startBlocked'       => $this->startBlocked( get_current_user_id() ),
 				// Per-run model choice: only currently-configured
 				// providers/models, grouped by provider — the new-run form's
 				// select and the run header's display name both read this
@@ -422,6 +427,15 @@ class RunsScreen {
 		}
 
 		return $packs;
+	}
+
+	/**
+	 * Does a failing BLOCKING harness check (the provider check) stop this
+	 * viewer starting any run right now? Pack-level checks are not asked
+	 * here: they already shape {@see runnablePacks()}.
+	 */
+	protected function startBlocked( int $user_id ): bool {
+		return null !== Checks::firstBlockingFailure( Checks::harnessChecks( $user_id ) );
 	}
 
 	/**
@@ -928,8 +942,13 @@ class RunsScreen {
 
 		wp_send_json_success(
 			array(
-				'html'          => $this->renderSetupPanel( $user_id ),
-				'start_enabled' => ! $start_disabled,
+				'html'              => $this->renderSetupPanel( $user_id ),
+				'start_enabled'     => ! $start_disabled,
+				// Stage 22b: the whole start state, so the screen refreshes
+				// the pack picker (and its "unavailable" notices) on focus
+				// too, not just the panel.
+				'packs'             => $this->runnablePacks(),
+				'unavailable_packs' => $this->unavailablePacks(),
 			)
 		);
 	}

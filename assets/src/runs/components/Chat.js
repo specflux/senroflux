@@ -4,6 +4,7 @@ import PinnedPlan from './PinnedPlan';
 import LedgerGroup from './LedgerGroup';
 import ParkCard from './ParkCard';
 import SuggestionCard from './SuggestionCard';
+import ReportView from './ReportView';
 
 /**
  * The newest step of the kind matching the run's OWN park status. A question
@@ -110,6 +111,8 @@ function modelLabel( run, modelChoices ) {
  * @param {boolean}  [props.busy]                True while a tick/cancel is in flight.
  * @param {number}   [props.tickCount]           How many tick round-trips this run has sent this page-load (the "Tick N" bubble).
  * @param {Object}   [props.modelChoices]        `senrofluxRunsConfig.modelChoices`, used only to resolve `run.model`'s display name.
+ * @param {boolean}  [props.canFollowUp]         The viewer holds the run's pack capability (S20); offers "Start a follow-up" on a terminal run.
+ * @param {Function} [props.onFollowUp]          `( run ) => void` — the follow-up affordance's click.
  */
 export default function Chat( {
 	run,
@@ -122,6 +125,8 @@ export default function Chat( {
 	busy,
 	tickCount,
 	modelChoices,
+	canFollowUp,
+	onFollowUp,
 } ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
@@ -168,20 +173,25 @@ export default function Chat( {
 			 * S6 disclosure: a role the starter lacks the capability for is
 			 * withheld from the run's tool surface — without this line the run
 			 * silently has fewer abilities than the pack advertises and the
-			 * viewer has no way to know why something wasn't attempted. A
-			 * viewer holding every capability sees nothing (no empty
-			 * paragraph either).
+			 * viewer has no way to know why something wasn't attempted. The
+			 * line is the PACK's own words (`withheld_notice`, from
+			 * `Pack::withheldRoleNotice()`): the harness never learns what a
+			 * role does. A pack with nothing to say gets a generic fallback
+			 * rather than silence. A viewer holding every capability sees
+			 * nothing (no empty paragraph either).
 			 */ }
 			{ Array.isArray( run.withheld_roles ) && run.withheld_roles.length > 0 && (
 				<p className="senroflux-withheld-roles">
-					{ sprintf(
-						/* translators: %s: comma-separated list of withheld role names. */
-						__(
-							'Some abilities are off for this run (your account is missing the capability they need): %s',
-							'senroflux'
-						),
-						run.withheld_roles.join( ', ' )
-					) }
+					{ run.withheld_notice
+						? run.withheld_notice
+						: sprintf(
+								/* translators: %s: comma-separated list of withheld role names. */
+								__(
+									'Some abilities are off for this run (your account is missing the capability they need): %s',
+									'senroflux'
+								),
+								run.withheld_roles.join( ', ' )
+						  ) }
 				</p>
 			) }
 			<PinnedPlan plan={ plan } steps={ steps } />
@@ -258,6 +268,18 @@ export default function Chat( {
 					</div>
 				) }
 			</div>
+			{ /* 0.3 S12 (stage 22b): the harness-built report, once the run is terminal. */ }
+			{ isTerminalStatus( run.status ) && run.report && 'object' === typeof run.report && (
+				<ReportView report={ run.report } steps={ steps } />
+			) }
+			{ /* 0.3 S20 (stage 22b): a follow-up starts from a finished, cancelled or failed run. */ }
+			{ isTerminalStatus( run.status ) && canFollowUp && onFollowUp && (
+				<div className="senroflux-followup-actions">
+					<button type="button" className="button" onClick={ () => onFollowUp( run ) }>
+						{ __( 'Start a follow-up', 'senroflux' ) }
+					</button>
+				</div>
+			) }
 			{ /* Live-review finding: a terminal run shows NO Cancel button — there is
 			 * simply no button element rendered here for a terminal status, not a
 			 * disabled one. */ }

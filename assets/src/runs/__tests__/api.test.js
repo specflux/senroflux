@@ -4,7 +4,7 @@
  * looked for a `pack` field before this fix).
  */
 
-import { startRun } from '../api';
+import { startRun, fetchSetupState } from '../api';
 
 describe( 'startRun', () => {
 	const config = { consumer: 'senroflux-admin', nonce: 'abc123', ajaxUrl: 'https://example.test/wp-admin/admin-ajax.php' };
@@ -78,5 +78,50 @@ describe( 'startRun model params', () => {
 		const body = new URLSearchParams( options.body.toString() );
 		expect( body.get( 'model_provider' ) ).toBe( 'openai' );
 		expect( body.get( 'model_id' ) ).toBe( 'gpt-5' );
+	} );
+} );
+
+describe( 'startRun follow-up (stage 22b)', () => {
+	const config = { consumer: 'senroflux-admin', nonce: 'abc123', ajaxUrl: 'https://example.test/wp-admin/admin-ajax.php' };
+
+	beforeEach( () => {
+		global.fetch = jest.fn().mockResolvedValue( {
+			json: () => Promise.resolve( { success: true, data: { run: { id: 2 } } } ),
+		} );
+	} );
+
+	it( 'sends follow_up_of when a source run is given', async () => {
+		await startRun( 'Tidy it', config, 'pages', null, 7 );
+
+		const body = new URLSearchParams( global.fetch.mock.calls[ 0 ][ 1 ].body.toString() );
+		expect( body.get( 'follow_up_of' ) ).toBe( '7' );
+	} );
+
+	it( 'sends no follow_up_of otherwise', async () => {
+		await startRun( 'Tidy it', config, 'pages' );
+
+		const body = new URLSearchParams( global.fetch.mock.calls[ 0 ][ 1 ].body.toString() );
+		expect( body.has( 'follow_up_of' ) ).toBe( false );
+	} );
+} );
+
+describe( 'fetchSetupState (stage 22b, J1)', () => {
+	const config = { consumer: 'senroflux-admin', nonce: 'abc123', ajaxUrl: 'https://example.test/wp-admin/admin-ajax.php' };
+
+	it( 'posts the setup-panel action and returns the state', async () => {
+		global.fetch = jest.fn().mockResolvedValue( {
+			json: () =>
+				Promise.resolve( {
+					success: true,
+					data: { html: '<div id="senroflux-setup-panel"></div>', start_enabled: true, packs: [], unavailable_packs: [] },
+				} ),
+		} );
+
+		const state = await fetchSetupState( config );
+
+		const body = new URLSearchParams( global.fetch.mock.calls[ 0 ][ 1 ].body.toString() );
+		expect( body.get( 'action' ) ).toBe( 'senroflux_setup_panel' );
+		expect( body.get( 'nonce' ) ).toBe( 'abc123' );
+		expect( state.start_enabled ).toBe( true );
 	} );
 } );

@@ -210,3 +210,94 @@ describe( 'model picker selection reaches onSend', () => {
 		expect( onSend ).toHaveBeenCalledWith( 'Do the thing', 'pages', { provider: 'anthropic', id: 'claude-opus' } );
 	} );
 } );
+
+describe( 'MessageBox blocked by a blocking setup check (stage 22b, J1)', () => {
+	const packs = [ { name: 'pages', label: 'pages' } ];
+
+	it( 'disables Start while startBlocked, even with a goal typed and a pack chosen', () => {
+		const onSend = jest.fn();
+		render( <MessageBox state="idle" onSend={ onSend } packs={ packs } startBlocked /> );
+
+		fireEvent.change( screen.getByPlaceholderText( 'Describe what you want done…' ), {
+			target: { value: 'Publish the spring page' },
+		} );
+		const start = screen.getByRole( 'button', { name: 'Start run' } );
+		expect( start ).toBeDisabled();
+
+		fireEvent.keyDown( screen.getByPlaceholderText( 'Describe what you want done…' ), { key: 'Enter' } );
+		fireEvent.click( start );
+		expect( onSend ).not.toHaveBeenCalled();
+	} );
+
+	it( 'says why, and ties the explanation to the button for assistive tech', () => {
+		render( <MessageBox state="idle" onSend={ jest.fn() } packs={ packs } startBlocked /> );
+
+		const start = screen.getByRole( 'button', { name: 'Start run' } );
+		const hint = screen.getByText( /Finish the setup notice above/ );
+		expect( start.getAttribute( 'aria-describedby' ) ).toBe( hint.id );
+	} );
+
+	it( 'enables Start again once startBlocked clears', () => {
+		const { rerender } = render( <MessageBox state="idle" onSend={ jest.fn() } packs={ packs } startBlocked /> );
+		fireEvent.change( screen.getByPlaceholderText( 'Describe what you want done…' ), { target: { value: 'Go' } } );
+		expect( screen.getByRole( 'button', { name: 'Start run' } ) ).toBeDisabled();
+
+		rerender( <MessageBox state="idle" onSend={ jest.fn() } packs={ packs } startBlocked={ false } /> );
+
+		expect( screen.getByRole( 'button', { name: 'Start run' } ) ).not.toBeDisabled();
+		expect( screen.queryByText( /Finish the setup notice above/ ) ).not.toBeInTheDocument();
+	} );
+} );
+
+describe( 'MessageBox follow-up mode (stage 22b, S20)', () => {
+	const packs = [
+		{ name: 'pages', label: 'pages' },
+		{ name: 'site', label: 'site' },
+	];
+
+	it( 'starts the follow-up with the source run id and the source pack, whatever the picker held', () => {
+		const onSend = jest.fn();
+		render(
+			<MessageBox
+				state="idle"
+				onSend={ onSend }
+				packs={ packs }
+				followUp={ { runId: 7, pack: 'site' } }
+			/>
+		);
+
+		fireEvent.change( screen.getByPlaceholderText( 'Describe what you want done…' ), {
+			target: { value: 'Tidy the copy' },
+		} );
+		fireEvent.click( screen.getByRole( 'button', { name: 'Start run' } ) );
+
+		expect( onSend ).toHaveBeenCalledWith( 'Tidy the copy', 'site', null, 7 );
+	} );
+
+	it( 'says it is a follow-up, locks the pack, and lets the user cancel it', () => {
+		const onCancel = jest.fn();
+		render(
+			<MessageBox
+				state="idle"
+				onSend={ jest.fn() }
+				packs={ packs }
+				followUp={ { runId: 7, pack: 'site' } }
+				onCancelFollowUp={ onCancel }
+			/>
+		);
+
+		expect( screen.getByText( /Follow-up to run #7/ ) ).toBeInTheDocument();
+		expect( screen.getByLabelText( 'Pack' ) ).toBeDisabled();
+		expect( screen.getByLabelText( 'Pack' ) ).toHaveValue( 'site' );
+
+		fireEvent.click( screen.getByRole( 'button', { name: 'Cancel follow-up' } ) );
+		expect( onCancel ).toHaveBeenCalled();
+	} );
+
+	it( 'starts the goal EMPTY: nothing is pre-filled, so Start stays disabled until the user types', () => {
+		render( <MessageBox state="idle" onSend={ jest.fn() } packs={ packs } followUp={ { runId: 7, pack: 'site' } } /> );
+
+		expect( screen.getByPlaceholderText( 'Describe what you want done…' ) ).toHaveValue( '' );
+		expect( screen.getByRole( 'button', { name: 'Start run' } ) ).toBeDisabled();
+	} );
+} );

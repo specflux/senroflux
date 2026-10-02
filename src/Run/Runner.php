@@ -3779,18 +3779,66 @@ final class Runner {
 	public function report( int $run_id, ?string $unverified_note = null ): array {
 		$fresh   = $this->store->getRun( $run_id );
 		$objects = ( null !== $fresh && is_array( $fresh->objects ) ) ? $fresh->objects : array();
+		$gate    = null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety;
+		$plan    = null !== $fresh ? $this->acceptedPlanPayload( $fresh ) : array();
 		$report  = Report::build(
 			$this->finalSummaryText( $run_id, $objects ),
 			$objects,
 			$this->post_lookup,
-			null !== $fresh ? $fresh->gateMode : GateMode::AgentSafety,
+			$gate,
 			null !== $fresh ? $fresh->withheldRoles : array(),
-			$unverified_note
+			$unverified_note,
+			// 0.3 S12: grants exist only under Agent Safety; built-in mode has none.
+			GateMode::AgentSafety === $gate ? $this->grants->forRun( $run_id ) : array(),
+			self::planObjectList( $plan, 'adopted' ),
+			self::planObjectList( $plan, 'left_for_you' )
 		);
 
 		$this->store->updateRun( $run_id, array( 'result_json' => $report ) );
 
 		return $report;
+	}
+
+	/**
+	 * The accepted plan's validated payload (the plan step's message), or an
+	 * empty array when no plan was accepted.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function acceptedPlanPayload( Run $run ): array {
+		if ( null === $run->acceptedPlanStepId ) {
+			return array();
+		}
+
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::Plan === $step->kind && $step->seq === $run->acceptedPlanStepId && null !== $step->messageArray ) {
+				return $step->messageArray;
+			}
+		}
+
+		return array();
+	}
+
+	/**
+	 * One of the plan's `adopted` / `left_for_you` lists, re-checked to the
+	 * `{ id, title }` shape (the stored payload was validated on the way in,
+	 * but a stored row is read back as untrusted).
+	 *
+	 * @param array<string,mixed> $plan The accepted plan payload.
+	 * @return list<array{id:string,title:string}>
+	 */
+	private static function planObjectList( array $plan, string $key ): array {
+		$rows = array();
+		foreach ( is_array( $plan[ $key ] ?? null ) ? $plan[ $key ] : array() as $entry ) {
+			if ( is_array( $entry ) && is_string( $entry['id'] ?? null ) && '' !== $entry['id'] ) {
+				$rows[] = array(
+					'id'    => $entry['id'],
+					'title' => is_string( $entry['title'] ?? null ) ? $entry['title'] : '',
+				);
+			}
+		}
+
+		return $rows;
 	}
 
 	/**

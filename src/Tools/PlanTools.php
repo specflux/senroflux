@@ -50,6 +50,7 @@ final class PlanTools {
 	public const MAX_STEPS           = 10;
 	public const MAX_STEP_TEXT_CHARS = 200;
 	public const MAX_ASSUMPTIONS     = 10;
+	public const MAX_OBJECT_LIST     = 20;
 
 	/**
 	 * The character caps above are what the model is told (schema maxLength,
@@ -220,12 +221,12 @@ final class PlanTools {
 		$schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'goal'        => array(
+				'goal'         => array(
 					'type'        => 'string',
 					'maxLength'   => self::MAX_GOAL_CHARS,
 					'description' => __( 'The goal this plan proposes to achieve.', 'senroflux' ),
 				),
-				'steps'       => array(
+				'steps'        => array(
 					'type'        => 'array',
 					'maxItems'    => self::MAX_STEPS,
 					'items'       => array(
@@ -262,12 +263,14 @@ final class PlanTools {
 					),
 					'description' => __( 'The ordered steps the plan will carry out.', 'senroflux' ),
 				),
-				'assumptions' => array(
+				'assumptions'  => array(
 					'type'        => 'array',
 					'items'       => array( 'type' => 'string' ),
 					'maxItems'    => self::MAX_ASSUMPTIONS,
 					'description' => __( 'Assumptions the plan rests on, if any.', 'senroflux' ),
 				),
+				'adopted'      => self::objectListSchema( __( 'Existing objects (pages, for example) this plan adopts as they are instead of creating new ones — each with its ID. Leave out when it adopts nothing.', 'senroflux' ) ),
+				'left_for_you' => self::objectListSchema( __( 'Existing objects the run will NOT touch but the human may want to remove, such as default-install leftovers — each with its ID. Leave out when there are none.', 'senroflux' ) ),
 			),
 			'required'             => array( 'goal', 'steps' ),
 			// Fail closed: the model may not smuggle extra fields in.
@@ -488,11 +491,116 @@ final class PlanTools {
 			return $pack_error;
 		}
 
-		return array(
+		$payload = array(
 			'goal'        => $goal,
 			'steps'       => $normalized_steps,
 			'assumptions' => $normalized_assumptions,
 		);
+
+		// 0.3 stage 22b (S7/S12): the objects the plan adopts, and the ones it
+		// leaves for the human — the report reads them back from the accepted
+		// plan. Optional; a plan naming none keeps its old payload shape.
+		foreach ( array( 'adopted', 'left_for_you' ) as $key ) {
+			if ( ! array_key_exists( $key, $args ) || null === $args[ $key ] ) {
+				continue;
+			}
+			$list = self::normaliseObjectList( $key, $args[ $key ] );
+			if ( $list instanceof WP_Error ) {
+				return $list;
+			}
+			if ( array() !== $list ) {
+				$payload[ $key ] = $list;
+			}
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * The schema of one `adopted` / `left_for_you` list.
+	 *
+	 * @param string $description What the list means, for the model.
+	 * @return array<string,mixed>
+	 */
+	private static function objectListSchema( string $description ): array {
+		return array(
+			'type'        => 'array',
+			'maxItems'    => self::MAX_OBJECT_LIST,
+			'description' => $description,
+			'items'       => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'id'    => array(
+						'type'        => 'string',
+						'description' => __( 'The object\'s ID, as a string.', 'senroflux' ),
+					),
+					'title' => array(
+						'type'        => 'string',
+						'maxLength'   => self::MAX_STEP_TEXT_CHARS,
+						'description' => __( 'Its title, if you know it.', 'senroflux' ),
+					),
+				),
+				'required'             => array( 'id' ),
+				'additionalProperties' => false,
+			),
+		);
+	}
+
+	/**
+	 * Validate one `adopted` / `left_for_you` list into `{ id, title }` rows.
+	 * The model's title is untrusted display text; the report resolves the
+	 * real one from the object itself where it can.
+	 *
+	 * @param string $key   The field name, for the error message.
+	 * @param mixed  $value The model's value.
+	 * @return list<array{id:string,title:string}>|WP_Error
+	 */
+	private static function normaliseObjectList( string $key, mixed $value ): array|WP_Error {
+		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
+			self::ERROR_INVALID_PLAN,
+			/* translators: %s names the offending field. */
+			sprintf( __( 'Invalid propose-plan call: %s', 'senroflux' ), $what )
+		);
+
+		if ( ! is_array( $value ) || count( $value ) > self::MAX_OBJECT_LIST ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: the field name, 2: the maximum number of entries. */
+					__( '"%1$s" must be a list of at most %2$d objects.', 'senroflux' ),
+					$key,
+					self::MAX_OBJECT_LIST
+				)
+			);
+		}
+
+		$rows = array();
+		foreach ( $value as $entry ) {
+			$id = is_array( $entry ) ? ( $entry['id'] ?? null ) : null;
+			if ( is_int( $id ) ) {
+				$id = (string) $id;
+			}
+			if ( ! is_string( $id ) || '' === trim( $id ) ) {
+				return $invalid(
+					sprintf(
+						/* translators: %s: the field name. */
+						__( 'every "%s" entry needs an "id".', 'senroflux' ),
+						$key
+					)
+				);
+			}
+
+			$title = is_array( $entry ) && is_string( $entry['title'] ?? null ) ? trim( $entry['title'] ) : '';
+			if ( self::overCap( $title, self::MAX_STEP_TEXT_CHARS ) ) {
+				$title = mb_substr( $title, 0, self::MAX_STEP_TEXT_CHARS );
+			}
+
+			$rows[] = array(
+				'id'    => trim( $id ),
+				'title' => $title,
+			);
+		}
+
+		return $rows;
 	}
 
 	/**

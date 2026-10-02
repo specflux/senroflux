@@ -65,6 +65,7 @@ function resetRuns() {
 	wpCli( [ 'db', 'query', 'TRUNCATE TABLE wp_senroflux_steps' ] );
 	wpCli( [ 'option', 'delete', 'senroflux_e2e_script' ] );
 	wpCli( [ 'option', 'delete', 'senroflux_e2e_calls' ] );
+	wpCli( [ 'option', 'delete', 'senroflux_e2e_prompts' ] );
 	wpCli( [ 'option', 'delete', 'senroflux_e2e_things_created' ] );
 	wpCli( [ 'option', 'delete', 'senroflux_site_brief' ] );
 }

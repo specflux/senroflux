@@ -71,7 +71,22 @@ final class Ajax {
 		$consumer = sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) );
 		$pack     = sanitize_text_field( wp_unslash( $_POST['pack'] ?? '' ) );
 
-		if ( RunsScreen::CONSUMER === $consumer && '' === $pack ) {
+		// 0.3 S20 (stage 22b): a follow-up run started from the Runs screen.
+		// start() forces the pack to the source run's own (fail closed — the
+		// posted pack is never trusted once a source is named), so a
+		// follow-up needs no pack field of its own.
+		$follow_up_of = absint( $_POST['follow_up_of'] ?? 0 );
+		if ( $follow_up_of > 0 ) {
+			// The source run's pack also decides the budget ceiling below. A
+			// source the viewer may not see (or that does not exist) leaves
+			// the posted pack in place; start() refuses it either way.
+			$source = senroflux()->get( $follow_up_of );
+			if ( is_array( $source ) && is_string( $source['run']['pack'] ?? null ) ) {
+				$pack = $source['run']['pack'];
+			}
+		}
+
+		if ( RunsScreen::CONSUMER === $consumer && '' === $pack && 0 === $follow_up_of ) {
 			wp_send_json_error(
 				array(
 					'code'    => 'senroflux_bad_request',
@@ -117,7 +132,7 @@ final class Ajax {
 			$policy['budget'],
 			'' !== $pack ? $pack : null,
 			null,
-			null,
+			$follow_up_of > 0 ? $follow_up_of : null,
 			'' !== $model_provider ? $model_provider : null,
 			'' !== $model_id ? $model_id : null
 		);

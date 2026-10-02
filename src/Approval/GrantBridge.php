@@ -121,6 +121,61 @@ class GrantBridge {
 	}
 
 	/**
+	 * What this run was allowed to do in advance (0.3 S12): every grant issued
+	 * in its scope, oldest first, with the expiry Agent Safety recorded —
+	 * including grants since revoked, which is exactly when the report is
+	 * built. Empty when Agent Safety is absent or too old to list a scope's
+	 * grants.
+	 *
+	 * @param int $run_id The run.
+	 * @return list<array{verb:string,status:string,remaining:int,expires_at:string}>
+	 */
+	public function forRun( int $run_id ): array {
+		$service = $this->service();
+		if ( null === $service || ! method_exists( $service, 'forCorrelation' ) ) {
+			return array();
+		}
+
+		$rows = array();
+		// Agent Safety lists a scope newest first; the report reads oldest first.
+		foreach ( array_reverse( array_values( (array) $service->forCorrelation( $this->correlationFor( $run_id ) ) ) ) as $grant ) {
+			$verb    = self::grantField( $grant, 'verb', 'verb' );
+			$expires = self::grantField( $grant, 'expiresTs', 'expires_ts' );
+			if ( ! is_string( $verb ) || '' === $verb || ! is_string( $expires ) || false === strtotime( $expires . ' UTC' ) ) {
+				continue;
+			}
+
+			$status    = self::grantField( $grant, 'status', 'status' );
+			$remaining = self::grantField( $grant, 'remainingCount', 'count' );
+
+			$rows[] = array(
+				'verb'       => $verb,
+				'status'     => $status instanceof \BackedEnum ? (string) $status->value : ( is_string( $status ) ? $status : '' ),
+				'remaining'  => is_int( $remaining ) ? $remaining : 0,
+				'expires_at' => gmdate( 'Y-m-d\TH:i:s\Z', (int) strtotime( $expires . ' UTC' ) ),
+			);
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * One field of a grant, whether the service hands back a value object
+	 * (Agent Safety's `Grant`) or a plain array.
+	 *
+	 * @param mixed  $grant    The grant.
+	 * @param string $property Value-object property.
+	 * @param string $key      Array key.
+	 */
+	private static function grantField( mixed $grant, string $property, string $key ): mixed {
+		if ( is_array( $grant ) ) {
+			return $grant[ $key ] ?? null;
+		}
+
+		return is_object( $grant ) && isset( $grant->$property ) ? $grant->$property : null;
+	}
+
+	/**
 	 * Withdraw every live grant in one run's scope; returns how many this call
 	 * hit. Safe to call on a run that never had any, and safe to call twice.
 	 *
