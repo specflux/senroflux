@@ -959,6 +959,39 @@ final class AbilitiesTest extends TestCase {
 		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
 	}
 
+	/** A scheduled post needs a way to carry its site-local publication date. */
+	public function test_update_post_writes_a_site_local_date(): void {
+		$this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'   => 100,
+				'date' => '2026-10-12 09:00:00',
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( '2026-10-12 09:00:00', $GLOBALS['senroflux_test_posts'][100]->post_date );
+	}
+
+	public function test_update_post_refuses_a_malformed_date(): void {
+		$this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'   => 100,
+				'date' => 'next Monday 9am',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_date', $result->get_error_code() );
+	}
+
 	/** `senroflux_require_page_image` off disables the update-post rule too. */
 	public function test_update_post_filter_can_disable_the_image_requirement(): void {
 		$post = $this->seedPost();

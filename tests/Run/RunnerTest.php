@@ -820,6 +820,20 @@ final class RunnerTest extends TestCase {
 		);
 	}
 
+	public function test_every_model_turn_carries_the_site_date_from_the_injected_clock(): void {
+		$GLOBALS['senroflux_test_timezone'] = 'Asia/Singapore';
+		Clock::useFixed( gmmktime( 23, 10, 0, 10, 2, 2026 ) );
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, 0, null );
+
+		$this->assertStringContainsString(
+			'Today is Saturday, 3 October 2026, 07:10 (site timezone Asia/Singapore, UTC+08:00).',
+			$this->gateway->systemInstructions[0]
+		);
+		unset( $GLOBALS['senroflux_test_timezone'] );
+	}
+
 	public function test_foreign_owner_is_forbidden(): void {
 		$run_id                                    = $this->createRun(); // owned by user 1
 		$GLOBALS['senroflux_test_current_user_id'] = 2;

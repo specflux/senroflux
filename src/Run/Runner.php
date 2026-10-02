@@ -1910,6 +1910,7 @@ final class Runner {
 			// (which would otherwise look like the "previous step" and mask
 			// a long park). See self::$tickElapsedGapSeconds.
 			elapsed_gap_seconds: $this->tick_elapsed_gap_seconds,
+			now_utc: Clock::now(),
 		);
 	}
 

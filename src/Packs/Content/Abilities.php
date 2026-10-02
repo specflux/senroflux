@@ -1138,6 +1138,10 @@ final class Abilities {
 					'type' => 'string',
 					'enum' => $status_enum,
 				),
+				'date'            => array(
+					'type'        => 'string',
+					'description' => __( 'Publication date in the SITE timezone, formatted `Y-m-d H:i:s` (for example 2026-10-12 09:00:00). Send it with status "future" to schedule; a date in the past publishes immediately.', 'senroflux' ),
+				),
 				'slug'            => array( 'type' => 'string' ),
 				'parent'          => array( 'type' => 'integer' ),
 				'excerpt'         => array( 'type' => 'string' ),
@@ -2477,6 +2481,20 @@ final class Abilities {
 			}
 		}
 
+		if ( isset( $input['date'] ) && '' !== trim( (string) $input['date'] ) ) {
+			$date = trim( (string) $input['date'] );
+			$when = \DateTimeImmutable::createFromFormat( '!Y-m-d H:i:s', $date );
+			if ( false === $when || $when->format( 'Y-m-d H:i:s' ) !== $date ) {
+				return new WP_Error(
+					'invalid_date',
+					__( 'The date must be a site-timezone datetime formatted Y-m-d H:i:s, for example 2026-10-12 09:00:00.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
+
+			$args['post_date']     = $date;
+			$args['post_date_gmt'] = function_exists( 'get_gmt_from_date' ) ? get_gmt_from_date( $date ) : $date;
+		}
 		if ( isset( $input['slug'] ) ) {
 			$args['post_name'] = (string) $input['slug'];
 		}
