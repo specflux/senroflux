@@ -103,6 +103,49 @@ if ( ! function_exists( 'add_filter' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_kses' ) ) {
+	/**
+	 * Minimal allow-list shim: drops every tag not in `$allowed`, and every
+	 * attribute not allowed for a kept tag (href values also need an allowed
+	 * protocol). Real `wp_kses()` is stricter; this only has to prove the
+	 * production call site passes a tight allow-list.
+	 *
+	 * @param string                           $text              Markup.
+	 * @param array<string,array<string,bool>> $allowed           Tag => attribute allow-list.
+	 * @param list<string>                     $allowed_protocols Allowed URL schemes.
+	 */
+	function wp_kses( string $text, array $allowed, array $allowed_protocols = array( 'http', 'https' ) ): string {
+		return (string) preg_replace_callback(
+			'#<(/?)([a-z0-9]+)([^>]*)>#i',
+			static function ( array $m ) use ( $allowed, $allowed_protocols ): string {
+				$tag = strtolower( $m[2] );
+				if ( ! isset( $allowed[ $tag ] ) ) {
+					return '';
+				}
+				if ( '/' === $m[1] ) {
+					return '</' . $tag . '>';
+				}
+				$attrs = '';
+				if ( preg_match_all( '#([a-z-]+)\s*=\s*"([^"]*)"#i', $m[3], $pairs, PREG_SET_ORDER ) ) {
+					foreach ( $pairs as $pair ) {
+						$name = strtolower( $pair[1] );
+						if ( empty( $allowed[ $tag ][ $name ] ) ) {
+							continue;
+						}
+						if ( 'href' === $name && ! preg_match( '#^(' . implode( '|', array_map( 'preg_quote', $allowed_protocols ) ) . '):#i', $pair[2] ) && ! str_starts_with( $pair[2], '/' ) ) {
+							continue;
+						}
+						$attrs .= ' ' . $name . '="' . $pair[2] . '"';
+					}
+				}
+
+				return '<' . $tag . $attrs . '>';
+			},
+			$text
+		);
+	}
+}
+
 if ( ! function_exists( 'apply_filters' ) ) {
 	/**
 	 * Dispatch through registered callbacks, WP-style value threading.

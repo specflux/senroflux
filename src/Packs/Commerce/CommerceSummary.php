@@ -302,11 +302,15 @@ final class CommerceSummary {
 		$discount    = sprintf( '%s %s', $coupon->get_amount(), $coupon->get_discount_type() );
 		$expiry      = $coupon->get_date_expires();
 		$usage_limit = $coupon->get_usage_limit();
+		// Real WooCommerce: `get_date_expires()` is a WC_DateTime|null and
+		// `get_usage_limit()` is 0 (not null) when unlimited.
+		$expiry_text = $expiry instanceof \DateTimeInterface ? $expiry->format( 'Y-m-d' ) : ( is_string( $expiry ) && '' !== $expiry ? $expiry : 'none' );
+		$limit_text  = is_numeric( $usage_limit ) && (int) $usage_limit > 0 ? (string) (int) $usage_limit : 'unlimited';
 
 		$row  = sprintf( 'Enable coupon &quot;%s&quot;', esc_html( $code ) );
 		$row .= sprintf( ' — discount %s', esc_html( $discount ) );
-		$row .= sprintf( ' — expiry %s', esc_html( null !== $expiry ? $expiry : 'none' ) );
-		$row .= sprintf( ' — usage limit %s', esc_html( null !== $usage_limit ? (string) $usage_limit : 'unlimited' ) );
+		$row .= sprintf( ' — expiry %s', esc_html( $expiry_text ) );
+		$row .= sprintf( ' — usage limit %s', esc_html( $limit_text ) );
 
 		return $row;
 	}
@@ -343,7 +347,7 @@ final class CommerceSummary {
 
 		if ( $tax_rate_id > 0 && class_exists( '\WC_Tax' ) ) {
 			$existing = \WC_Tax::_get_tax_rate( $tax_rate_id ); // phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore -- mirrors WooCommerce's own method name.
-			if ( array() !== $existing && isset( $existing['tax_rate'] ) ) {
+			if ( is_array( $existing ) && isset( $existing['tax_rate'] ) ) {
 				$previous = (string) $existing['tax_rate'];
 			}
 		}

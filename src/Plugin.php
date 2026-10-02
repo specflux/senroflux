@@ -873,7 +873,8 @@ final class Plugin {
 			}
 		}
 
-		$plan_ui = $this->runner()->parkedPlanUi( $run );
+		$plan_ui     = $this->runner()->parkedPlanUi( $run );
+		$approval_ui = $this->runner()->parkedApprovalUi( $run );
 
 		return array(
 			'run'         => array(
@@ -921,7 +922,14 @@ final class Plugin {
 			'suggestions' => array_values( $suggestions ),
 			// A run parked on a plan carries the plan card's UI facts (e.g.
 			// `preapprove_available`), fresh, so the card survives a reload.
-			'ui'          => null !== $plan_ui ? array( 'plan' => $plan_ui ) : array(),
+			// Likewise a run parked on an approval carries the pack's summary.
+			'ui'          => array_filter(
+				array(
+					'plan'     => $plan_ui,
+					'approval' => $approval_ui,
+				),
+				static fn ( ?array $facts ): bool => null !== $facts
+			),
 		);
 	}
 

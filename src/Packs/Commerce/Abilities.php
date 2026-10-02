@@ -1296,8 +1296,7 @@ final class Abilities {
 			$refunds_total += self::orderTotalRefunded( $order );
 		}
 
-		$currency         = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
-		$low_stock_amount = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount() : 2;
+		$currency = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
 
 		return array(
 			'from'               => $from,
@@ -1307,7 +1306,7 @@ final class Abilities {
 			'net_sales'          => round( $gross - $refunds_total, 2 ),
 			'refunds_total'      => round( $refunds_total, 2 ),
 			'currency'           => $currency,
-			'low_stock_products' => self::lowStockProductIds( $low_stock_amount ),
+			'low_stock_products' => self::lowStockProductIds(),
 		);
 	}
 
@@ -1503,12 +1502,12 @@ final class Abilities {
 	}
 
 	/**
-	 * Product ids at or below `$threshold` stock. Read-only (S19
+	 * Product ids at or below their own low-stock threshold. Read-only (S19
 	 * `store-report`): only ever calls `wc_get_products()`, never a writer.
 	 *
 	 * @return list<int>
 	 */
-	private static function lowStockProductIds( int $threshold ): array {
+	private static function lowStockProductIds(): array {
 		if ( ! function_exists( 'wc_get_products' ) ) {
 			return array();
 		}
@@ -1520,6 +1519,8 @@ final class Abilities {
 				continue;
 			}
 			$quantity = $product->get_stock_quantity();
+			// WooCommerce's own threshold: the product-level amount, else the store setting.
+			$threshold = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount( $product ) : 2;
 			if ( null !== $quantity && (int) $quantity <= $threshold ) {
 				$ids[] = method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0;
 			}

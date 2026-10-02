@@ -107,8 +107,9 @@ if ( ! class_exists( 'WC_Coupon', false ) ) {
 			return $this->expires;
 		}
 
-		public function get_usage_limit(): ?int {
-			return $this->usage_limit;
+		// Real `WC_Coupon::get_usage_limit()` returns 0 (not null) when unlimited.
+		public function get_usage_limit(): int {
+			return $this->usage_limit ?? 0;
 		}
 
 		public function set_code( string $code ): void {
@@ -414,13 +415,14 @@ if ( ! class_exists( 'WC_Tax', false ) ) {
 		}
 
 		/**
-		 * @return array<string,mixed>
+		 * @return array<string,mixed>|null
 		 */
 		// phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore -- mirrors WooCommerce's real WC_Tax method name.
-		public static function _get_tax_rate( int $id ): array {
+		public static function _get_tax_rate( int $id ): ?array {
 			$row = $GLOBALS['senroflux_test_tax_rates'][ $id ] ?? null;
 
-			return is_array( $row ) ? $row : array();
+			// Real `$wpdb->get_row()` returns null for a missing row.
+			return is_array( $row ) ? $row : null;
 		}
 	}
 }
@@ -475,8 +477,12 @@ if ( ! function_exists( 'get_woocommerce_currency' ) ) {
 }
 
 if ( ! function_exists( 'wc_get_low_stock_amount' ) ) {
-	function wc_get_low_stock_amount(): int {
-		return $GLOBALS['senroflux_test_low_stock_amount'] ?? 2;
+	// Real signature: `wc_get_low_stock_amount( WC_Product $product )` (WC 11);
+	// a product-level amount wins, else the store setting.
+	function wc_get_low_stock_amount( WC_Product $product ): int {
+		return $GLOBALS['senroflux_test_low_stock_by_product'][ $product->get_id() ]
+			?? $GLOBALS['senroflux_test_low_stock_amount']
+			?? 2;
 	}
 }
 

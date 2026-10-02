@@ -1,3 +1,4 @@
+import { useMemo } from '@wordpress/element';
 import { __, sprintf } from '@wordpress/i18n';
 import { groupSteps, stepText, isTerminalStatus } from '../utils';
 import PinnedPlan from './PinnedPlan';
@@ -127,6 +128,18 @@ function planCardPayload( step, planUi ) {
 	return { ...step.message, ...planUi };
 }
 
+/**
+ * The approval card's payload: the stored approval step has only the raw
+ * arguments, so the server's `ui.approval` (the pack's human summary) is
+ * merged in — only when it describes THIS parked approval.
+ */
+function approvalCardPayload( step, approvalUi ) {
+	if ( 'approval' !== step.kind || ! approvalUi || approvalUi.approval_id !== step.message?.approval_id ) {
+		return step.message;
+	}
+	return { ...step.message, summary: approvalUi.summary };
+}
+
 export default function Chat( {
 	run,
 	steps,
@@ -141,9 +154,16 @@ export default function Chat( {
 	canFollowUp,
 	onFollowUp,
 	planUi,
+	approvalUi,
 } ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
+	// Memoised: ParkCard re-focuses its heading whenever `payload` changes
+	// identity, so a fresh object per render would steal focus from Approve.
+	const approvalPayload = useMemo(
+		() => ( park && 'approval' === park.kind ? approvalCardPayload( park, approvalUi ) : null ),
+		[ park, approvalUi ]
+	);
 	const plan = currentPlan( run, steps );
 	const suggestionsBySeq = new Map( ( suggestions || [] ).map( ( s ) => [ s.seq, s ] ) );
 
@@ -230,7 +250,7 @@ export default function Chat( {
 							<ParkCard
 								key={ index }
 								kind={ step.kind }
-								payload={ planCardPayload( step, planUi ) }
+								payload={ 'approval' === step.kind ? approvalPayload : planCardPayload( step, planUi ) }
 								gateMode={ run.gate_mode }
 								onResolve={ onResolvePark }
 								busy={ busy }

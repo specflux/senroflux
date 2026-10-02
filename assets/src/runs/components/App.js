@@ -208,10 +208,18 @@ export default function App( { config } ) {
 					...( state.ui && state.ui.report ? { report: state.ui.report } : {} ),
 				},
 				steps: Array.isArray( state.steps ) ? state.steps : [ ...previousSteps, ...appended ],
-				// A fresh plan park's card facts ride the tick's `ui.plan`; keep
-				// the run-detail read's own `ui` otherwise (Chat matches it to
-				// the parked plan step, so a stale one is never shown).
-				ui: state.ui && state.ui.plan ? { ...( previous && previous.ui ), plan: state.ui.plan } : previous && previous.ui,
+				// A fresh plan or approval park's card facts ride the tick's
+				// `ui.plan` / `ui.approval`; keep the run-detail read's own
+				// `ui` otherwise (Chat matches each to the parked step, so a
+				// stale one is never shown).
+				ui:
+					state.ui && ( state.ui.plan || state.ui.approval )
+						? {
+								...( previous && previous.ui ),
+								...( state.ui.plan ? { plan: state.ui.plan } : {} ),
+								...( state.ui.approval ? { approval: state.ui.approval } : {} ),
+						  }
+						: previous && previous.ui,
 			};
 		} );
 		refreshList();
@@ -404,6 +412,7 @@ export default function App( { config } ) {
 						steps={ runDetail.steps }
 						suggestions={ runDetail.suggestions }
 						planUi={ runDetail.ui && runDetail.ui.plan }
+						approvalUi={ runDetail.ui && runDetail.ui.approval }
 						canManageBrief={ Boolean( config.canManageSiteBrief ) }
 						modelChoices={ config.modelChoices || {} }
 						onResolvePark={ handleResolvePark }

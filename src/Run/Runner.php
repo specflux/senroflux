@@ -1037,11 +1037,83 @@ final class Runner {
 				'verb'         => $outcome->verb ?? $call['name'],
 				'tier'         => $built_in ? null : $outcome->tier,
 				'args_preview' => $call['args'] ?? array(),
+				// The packs' human summary (current beside proposed, server-
+				// read totals, ...) — the same text Agent Safety's own
+				// Pending Actions page shows, so the Runs card reads alike.
+				'summary'      => $this->approvalSummary( $call ),
 				'review_url'   => ( ! $built_in && function_exists( 'admin_url' ) )
 					? admin_url( 'tools.php?page=agent-safety-pending' )
 					: '',
 			),
 		);
+	}
+
+	/**
+	 * The human approval summary for a parked call, through the same
+	 * `agent_safety_approval_summary` filter Agent Safety applies. SenroFlux
+	 * registers its pack builders on it at boot, so this works with Agent
+	 * Safety absent (built-in gate mode). The result is HOST markup built by
+	 * the packs (escaped fragments plus `<a href>` preview/edit links), so it
+	 * is reduced to an anchor-only allow-list before leaving the server; ''
+	 * means no pack summarises this verb.
+	 *
+	 * @param array{id:string,name:string,args:mixed} $call Parked call.
+	 */
+	private function approvalSummary( array $call ): string {
+		$args = is_array( $call['args'] ?? null ) ? $call['args'] : array();
+
+		try {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- Agent Safety's own filter, applied here so the Runs card matches its queue.
+			$summary = apply_filters( 'agent_safety_approval_summary', '', ToolRegistry::abilityName( (string) $call['name'] ), $args );
+		} catch ( \Throwable ) {
+			// A summary builder reads store state; its failure must never
+			// block the park the human is about to resolve.
+			return '';
+		}
+
+		if ( ! is_string( $summary ) || '' === $summary ) {
+			return '';
+		}
+
+		return wp_kses( $summary, array( 'a' => array( 'href' => true ) ), array( 'http', 'https' ) );
+	}
+
+	/**
+	 * The approval card's UI facts for a run currently parked on an approval,
+	 * computed fresh (same {@see approvalUi()} the tick response uses), or
+	 * null when the run is not `awaiting_approval`. The run-detail read
+	 * carries this so the card's summary survives a reload: the stored
+	 * approval step has only the raw arguments.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	public function parkedApprovalUi( Run $run ): ?array {
+		if ( RunStatus::AwaitingApproval !== $run->status ) {
+			return null;
+		}
+
+		foreach ( array_reverse( $this->store->getSteps( $run->id ) ) as $step ) {
+			if ( StepKind::Approval !== $step->kind || ! is_array( $step->messageArray ) || true !== ( $step->messageArray['parked'] ?? false ) ) {
+				continue;
+			}
+			$parked  = $step->messageArray;
+			$outcome = ToolOutcome::approvalRequired(
+				(string) ( $parked['approval_id'] ?? '' ),
+				(string) ( $parked['tool_name'] ?? '' ),
+				is_string( $parked['tier'] ?? null ) ? $parked['tier'] : null
+			);
+
+			return $this->approvalUi(
+				$outcome,
+				array(
+					'id'   => (string) ( $parked['function_call_id'] ?? '' ),
+					'name' => (string) ( $parked['tool_name'] ?? '' ),
+					'args' => $parked['args'] ?? array(),
+				)
+			)['approval'];
+		}
+
+		return null;
 	}
 
 	// ------------------------------------------------------------------
