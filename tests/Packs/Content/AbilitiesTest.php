@@ -3099,6 +3099,22 @@ final class AbilitiesTest extends TestCase {
 		$this->tearDownTerms();
 	}
 
+	/** Live J7: `tags: {"item": [...]}` was refused nine times with a message that never said why. */
+	public function test_a_term_refusal_names_the_expected_list_shape(): void {
+		$this->termsSetUp();
+		$this->grant( 'edit_posts', 'assign_post_tags', 'assign_categories', 'manage_categories' );
+
+		$object = Abilities::preflight( 'create-post', $this->postWithTerms( array( 'tags' => array( 'item' => array( 'Composting' ) ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $object );
+		$this->assertStringContainsString( 'sent as an object', $object->get_error_message() );
+		$this->assertStringContainsString( 'must be a plain list of names, like ["Composting", "Kitchen"]', $object->get_error_message() );
+
+		$blank = Abilities::preflight( 'create-post', $this->postWithTerms( array( 'categories' => array( array( 'x' ) ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $blank );
+		$this->assertStringContainsString( 'categories must be a list of names, each a non-empty string, like ["Gardening", "Recipes"]', $blank->get_error_message() );
+		$this->tearDownTerms();
+	}
+
 	public function test_a_missing_create_capability_names_the_term_in_permission_and_preflight(): void {
 		$this->termsSetUp();
 		$GLOBALS['senroflux_test_terms']['category:news'] = 5;

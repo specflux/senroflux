@@ -2117,6 +2117,15 @@ final class Abilities {
 	}
 
 	/**
+	 * The expected shape of a term list, spelled out in a refusal.
+	 *
+	 * @param string $field `categories` or `tags`.
+	 */
+	private static function termListExample( string $field ): string {
+		return 'categories' === $field ? '["Gardening", "Recipes"]' : '["Composting", "Kitchen"]';
+	}
+
+	/**
 	 * Every check on a call's `categories` / `tags`, the SAME code execute and
 	 * {@see preflight()} run: the post type must carry the taxonomy, each list
 	 * is non-empty and within its limit, names are non-empty, at most 60
@@ -2145,9 +2154,13 @@ final class Abilities {
 			}
 
 			$given = $input[ $field ];
+			if ( is_array( $given ) && ! array_is_list( $given ) ) {
+				/* translators: 1: input name, 2: example list. */
+				return $invalid( sprintf( __( '%1$s was sent as an object, but it must be a plain list of names, like %2$s.', 'senroflux' ), $field, self::termListExample( $field ) ) );
+			}
 			if ( ! is_array( $given ) || array() === $given ) {
-				/* translators: %s: input name. */
-				return $invalid( sprintf( __( '%s must list at least one name, or be left out.', 'senroflux' ), $field ) );
+				/* translators: 1: input name, 2: example list. */
+				return $invalid( sprintf( __( '%1$s must be a list of at least one name, like %2$s, or be left out.', 'senroflux' ), $field, self::termListExample( $field ) ) );
 			}
 
 			if ( count( $given ) > self::TERM_LIMITS[ $field ] ) {
@@ -2160,8 +2173,8 @@ final class Abilities {
 			foreach ( $given as $name ) {
 				$name = is_string( $name ) ? trim( $name ) : '';
 				if ( '' === $name ) {
-					/* translators: %s: input name. */
-					return $invalid( sprintf( __( 'Every name in %s must be a non-empty string.', 'senroflux' ), $field ) );
+					/* translators: 1: input name, 2: example list. */
+					return $invalid( sprintf( __( '%1$s must be a list of names, each a non-empty string, like %2$s.', 'senroflux' ), $field, self::termListExample( $field ) ) );
 				}
 				if ( mb_strlen( $name ) > self::TERM_NAME_MAX ) {
 					/* translators: 1: term name, 2: limit. */
