@@ -292,7 +292,7 @@ export function planProgress( plan, steps ) {
  * discloses it per call), so this returns `null` and the caller renders
  * nothing.
  *
- * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier, verb_tiers }] }`).
+ * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier, verb_tiers, objects }] }`).
  * @param {string} gateMode 'agent_safety' | 'built_in'.
  * @return {number|null} The approval count in built-in mode, else `null`.
  */
@@ -312,7 +312,10 @@ export function planApprovalCount( plan, gateMode ) {
 			const tier = Number.isInteger( verbTiers[ verb ] ) ? verbTiers[ verb ] : stepTier;
 			return tier >= THRESHOLD;
 		} );
-		return total + qualifying.length;
+		// A step naming N existing objects asks once per object per verb (the
+		// server issues max(1, N) grants for it); one with none asks once.
+		const named = Array.isArray( step.objects ) ? step.objects.length : 0;
+		return total + qualifying.length * Math.max( 1, named );
 	}, 0 );
 }
 

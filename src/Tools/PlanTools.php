@@ -51,6 +51,7 @@ final class PlanTools {
 	public const MAX_STEP_TEXT_CHARS = 200;
 	public const MAX_ASSUMPTIONS     = 10;
 	public const MAX_OBJECT_LIST     = 20;
+	public const MAX_STEP_OBJECTS    = 25;
 
 	/**
 	 * The character caps above are what the model is told (schema maxLength,
@@ -228,6 +229,10 @@ final class PlanTools {
 			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
 			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' ) );
 
+		// A pre-approval is bound to objects, so a step that edits EXISTING
+		// ones must name them (live J10: five price changes all parked).
+		$step_text_description .= ' ' . __( 'When a step changes existing objects, list their ids in that step\'s "objects": a pre-approval covers only objects named in the plan or created by this run.', 'senroflux' );
+
 		$schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
@@ -242,7 +247,7 @@ final class PlanTools {
 					'items'       => array(
 						'type'                 => 'object',
 						'properties'           => array(
-							'text'  => array(
+							'text'    => array(
 								'type'        => 'string',
 								'maxLength'   => self::MAX_STEP_TEXT_CHARS,
 								// 0.3 quality fix 4 (page brief): a step that
@@ -261,10 +266,16 @@ final class PlanTools {
 								// avoids the whole retry loop.
 								'description' => $step_text_description,
 							),
-							'verbs' => array(
+							'verbs'   => array(
 								'type'        => 'array',
 								'items'       => array( 'type' => 'string' ),
 								'description' => $verbs_description,
+							),
+							'objects' => array(
+								'type'        => 'array',
+								'maxItems'    => self::MAX_STEP_OBJECTS,
+								'items'       => array( 'type' => 'string' ),
+								'description' => __( 'Ids of the EXISTING objects this step changes, as strings: a plain post, page or product id, or the prefixed id the tool reports (term:12). Leave out for a step that only creates.', 'senroflux' ),
 							),
 						),
 						'required'             => array( 'text', 'verbs' ),
@@ -327,6 +338,10 @@ final class PlanTools {
 	 *                                               the check; an EMPTY list means nothing is known.
 	 * @param int|null          $remaining_questions The run's remaining question budget; at 0 the
 	 *                                               plan must state its assumptions (S7). Null = unknown.
+	 * @param callable|null     $object_lookup       `(string $id): array{object_type:string,...}` — the
+	 *                                               report's object lookup, used to refuse step
+	 *                                               `objects` ids that name nothing. Null refuses any
+	 *                                               step that lists objects (fail closed).
 	 * @return array<string,mixed>|WP_Error Validated payload or an error.
 	 */
 	public static function validateProposePlan(
@@ -334,7 +349,8 @@ final class PlanTools {
 		?int $run_id = null,
 		?array $verb_map = null,
 		?array $known_verbs = null,
-		?int $remaining_questions = null
+		?int $remaining_questions = null,
+		?callable $object_lookup = null
 	): array|WP_Error {
 		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
 			self::ERROR_INVALID_PLAN,
@@ -419,6 +435,11 @@ final class PlanTools {
 				return $invalid( __( 'every step needs at least one verb.', 'senroflux' ) );
 			}
 
+			$objects = self::normaliseStepObjects( $step['objects'] ?? null, $step_index + 1, $object_lookup );
+			if ( $objects instanceof WP_Error ) {
+				return $objects;
+			}
+
 			// S7: annotate the step with the highest tier among its verbs,
 			// through the RUN's map so the card and the fence agree. The
 			// per-verb tiers ride along so the card counts only the verbs
@@ -430,12 +451,16 @@ final class PlanTools {
 				$tier                = max( $tier, $verb_tiers[ $verb ] );
 			}
 
-			$normalized_steps[] = array(
+			$normalized_step = array(
 				'text'       => $text,
 				'verbs'      => $normalized_verbs,
 				'tier'       => $tier,
 				'verb_tiers' => $verb_tiers,
 			);
+			if ( array() !== $objects ) {
+				$normalized_step['objects'] = $objects;
+			}
+			$normalized_steps[] = $normalized_step;
 		}
 
 		// S7: a plan with no steps authorises nothing and cannot be acted on;
@@ -529,6 +554,79 @@ final class PlanTools {
 		}
 
 		return $payload;
+	}
+
+	/**
+	 * One step's `objects`: the existing objects a pre-approval may cover.
+	 *
+	 * Ids are the strings the run tracks written objects under (a bare post or
+	 * product id, or a pack-prefixed one such as `term:12`), so a plan id and
+	 * the id a call's arguments carry compare equal. Every id must resolve to a
+	 * real object, or the grant would bind to nothing the human could see.
+	 *
+	 * @param mixed         $objects       The step's raw `objects`.
+	 * @param int           $step_number   1-based, for the message.
+	 * @param callable|null $object_lookup See {@see validateProposePlan()}.
+	 * @return list<string>|WP_Error
+	 */
+	private static function normaliseStepObjects( mixed $objects, int $step_number, ?callable $object_lookup ): array|WP_Error {
+		if ( null === $objects ) {
+			return array();
+		}
+
+		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
+			self::ERROR_INVALID_PLAN,
+			/* translators: %s names the offending field. */
+			sprintf( __( 'Invalid propose-plan call: %s', 'senroflux' ), $what )
+		);
+
+		if ( ! is_array( $objects ) ) {
+			/* translators: %d is the 1-based step number. */
+			return $invalid( sprintf( __( 'step %d "objects" must be an array of ids.', 'senroflux' ), $step_number ) );
+		}
+		if ( count( $objects ) > self::MAX_STEP_OBJECTS ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: 1-based step number, 2: maximum ids per step. */
+					__( 'step %1$d "objects" lists more than %2$d ids; split the work across steps.', 'senroflux' ),
+					$step_number,
+					self::MAX_STEP_OBJECTS
+				)
+			);
+		}
+
+		$ids = array();
+		foreach ( $objects as $object ) {
+			if ( is_int( $object ) ) {
+				$object = (string) $object;
+			}
+			if ( ! is_string( $object ) || '' === trim( $object ) ) {
+				/* translators: %d is the 1-based step number. */
+				return $invalid( sprintf( __( 'step %d "objects" entries must be non-empty string or integer ids.', 'senroflux' ), $step_number ) );
+			}
+			$ids[ trim( $object ) ] = true;
+		}
+		$ids = array_map( 'strval', array_keys( $ids ) );
+
+		$unknown = array();
+		foreach ( $ids as $id ) {
+			$found = is_callable( $object_lookup ) ? $object_lookup( $id ) : null;
+			if ( ! is_array( $found ) || 'unknown' === ( $found['object_type'] ?? 'unknown' ) ) {
+				$unknown[] = $id;
+			}
+		}
+		if ( array() !== $unknown ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: 1-based step number, 2: comma-separated ids. */
+					__( 'step %1$d "objects" names ids that are not existing objects: %2$s. Use the id exactly as the read tool reports it.', 'senroflux' ),
+					$step_number,
+					implode( ', ', $unknown )
+				)
+			);
+		}
+
+		return $ids;
 	}
 
 	/**

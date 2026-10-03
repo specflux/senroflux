@@ -248,14 +248,15 @@ final class PostsPackTest extends TestCase {
 
 	/**
 	 * space-bunny live runs (2026-09-28 bunny1-4, fix1) used 228k-286k tokens
-	 * and 51-62 steps against the shipped 250000/60.
+	 * and 51-62 steps against the shipped 250000/60; live J3 (three illustrated,
+	 * tagged, scheduled posts) ended at 384k-396k of 400000.
 	 */
 	public function test_default_budget_raises_steps_calls_and_tokens(): void {
 		$this->assertSame(
 			array(
-				Budget::MAX_STEPS      => 90,
-				Budget::MAX_TOOL_CALLS => 45,
-				Budget::MAX_TOKENS     => 400000,
+				Budget::MAX_STEPS      => 150,
+				Budget::MAX_TOOL_CALLS => 75,
+				Budget::MAX_TOKENS     => 800000,
 			),
 			( new PostsPack() )->defaultBudget()
 		);

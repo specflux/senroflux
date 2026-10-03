@@ -340,6 +340,75 @@ final class PlanParkTest extends TestCase {
 		$this->assertStringContainsString( '"goal" is 251 characters; the limit is 200.', $responded['response']['message'] ?? '' );
 	}
 
+	/** A runner whose object lookup knows product 12 only. */
+	private function runnerKnowingProductTwelve(): Runner {
+		return new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			$this->bridge,
+			static fn ( string|int $id ): array => '12' === (string) $id
+				? array(
+					'object_type' => 'product',
+					'title'       => 'Ceramic Mug',
+				)
+				: array(
+					'object_type' => 'unknown',
+					'title'       => '',
+				)
+		);
+	}
+
+	/** @param list<string> $objects */
+	private static function planNaming( array $objects ): array {
+		return array(
+			'goal'  => 'Reprice',
+			'steps' => array(
+				array(
+					'text'    => 'Raise the mug',
+					'verbs'   => array( 'agsafe-smoke/write' ),
+					'objects' => $objects,
+				),
+			),
+		);
+	}
+
+	public function test_plan_card_resolves_each_named_object_to_id_title_and_type(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn( 'call_p', self::planNaming( array( '12' ) ) );
+
+		$result = $this->runnerKnowingProductTwelve()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'awaiting_plan', $result['run']['status'] );
+		$this->assertSame(
+			array(
+				array(
+					'id'    => '12',
+					'title' => 'Ceramic Mug',
+					'type'  => 'product',
+				),
+			),
+			$result['ui']['plan']['steps'][0]['objects']
+		);
+		// The stored plan keeps the bare ids the grant binds to.
+		$this->assertSame( array( '12' ), $this->planSteps( $run_id )[0]->messageArray['steps'][0]['objects'] );
+	}
+
+	public function test_a_plan_naming_an_unknown_object_is_refused_not_parked(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn( 'call_p', self::planNaming( array( '12', '777' ) ) );
+		$this->gateway->script[] = self::textTurn( 'Ok.' );
+
+		$result = $this->runnerKnowingProductTwelve()->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertNotSame( 'awaiting_plan', $result['run']['status'] );
+		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
+		$this->assertSame( PlanTools::ERROR_INVALID_PLAN, $responded['response']['error'] ?? null );
+		$this->assertStringContainsString( '777', $responded['response']['message'] ?? '' );
+	}
+
 	public function test_invalid_payload_step_text_over_200_states_step_number_length_and_limit(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::planTurn(

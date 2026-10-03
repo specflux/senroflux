@@ -171,6 +171,17 @@ function QuestionBody( { payload, onResolve, busy } ) {
 }
 
 /**
+ * One existing object a plan step names: "Ceramic Mug (#12)", or just the id
+ * when it has no title. Plain text only, like every other card line.
+ */
+function planObjectLabel( object ) {
+	const id = String( object?.id ?? '' );
+	const label = /^\d+$/.test( id ) ? `#${ id }` : id;
+	const title = 'string' === typeof object?.title ? object.title : '';
+	return '' !== title ? `${ title } (${ label })` : label;
+}
+
+/**
  * S5 plan shape: `{ "plan": { "action": "accept" | "accept_preapprove" |
  * "veto", "note"? } }`. The pre-approve radio's visibility is decided
  * ENTIRELY by `payload.preapprove_available` (`Runner::planUi()` — true only
@@ -215,6 +226,15 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 						<span data-senroflux-content dir="auto">{ step.text }</span>
 						{ Array.isArray( step.verbs ) &&
 							step.verbs.map( ( verb ) => <TierBadge key={ verb } gateMode={ gateMode } tier={ step.tier } /> ) }
+						{ Array.isArray( step.objects ) && step.objects.length > 0 && (
+							<ul className="senroflux-plan-objects">
+								{ step.objects.map( ( object ) => (
+									<li key={ object.id } data-senroflux-content dir="auto">
+										{ planObjectLabel( object ) }
+									</li>
+								) ) }
+							</ul>
+						) }
 					</li>
 				) ) }
 			</ol>

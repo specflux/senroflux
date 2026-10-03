@@ -151,3 +151,48 @@ describe( 'park resolutions call onResolve with the S5 resume shape', () => {
 		expect( onResolve ).toHaveBeenCalledWith( { plan: { action: 'veto', note: 'Too risky' } } );
 	} );
 } );
+
+describe( 'the plan card names the existing objects a step will change', () => {
+	const plan = {
+		steps: [
+			{
+				text: 'Raise the mug price',
+				verbs: [ 'commerce/price-change' ],
+				tier: 2,
+				objects: [
+					{ id: '12', title: 'Ceramic Mug', type: 'product' },
+					{ id: 'term:7', title: 'Accessories', type: 'term' },
+					{ id: '99', title: '', type: 'product' },
+				],
+			},
+			{ text: 'Create a post', verbs: [ 'posts/create-draft' ], tier: 1 },
+		],
+	};
+
+	it( 'renders each object as plain text marked as site content', () => {
+		const { container } = render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const mug = screen.getByText( 'Ceramic Mug (#12)' );
+		expect( mug ).toHaveAttribute( 'data-senroflux-content' );
+		expect( screen.getByText( 'Accessories (term:7)' ) ).toBeInTheDocument();
+		expect( screen.getByText( '#99' ) ).toBeInTheDocument();
+		expect( container.querySelectorAll( '.senroflux-plan-objects' ) ).toHaveLength( 1 );
+	} );
+
+	it( 'never interprets a hostile title as markup', () => {
+		const hostile = {
+			steps: [
+				{
+					text: 'Edit',
+					verbs: [ 'commerce/price-change' ],
+					tier: 2,
+					objects: [ { id: '5', title: '<img src=x onerror=alert(1)>', type: 'product' } ],
+				},
+			],
+		};
+		const { container } = render( <ParkCard kind="plan" gateMode="agent_safety" payload={ hostile } /> );
+
+		expect( container.querySelector( 'img' ) ).toBeNull();
+		expect( screen.getByText( '<img src=x onerror=alert(1)> (#5)' ) ).toBeInTheDocument();
+	} );
+} );

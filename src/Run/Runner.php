@@ -239,6 +239,19 @@ final class Runner {
 					}
 
 					return $this->objectIdKeyFor( $fresh, $this->verbFor( $fresh, $ability, $args ) );
+				},
+				function ( string $ability, array $args ) use ( $run_id ): string {
+					$fresh = $this->store->getRun( $run_id );
+					if ( null === $fresh ) {
+						return '';
+					}
+
+					return $this->objectIdPrefixFor( $fresh, $this->verbFor( $fresh, $ability, $args ) );
+				},
+				function () use ( $run_id ): array {
+					$fresh = $this->store->getRun( $run_id );
+
+					return null !== $fresh ? $this->planObjectsByGateVerb( $fresh ) : array();
 				}
 			);
 
@@ -3046,7 +3059,8 @@ final class Runner {
 			// accepts is the tier the fence enforces.
 			$this->packVerbMap( $run ),
 			$this->knownVerbs( $run, $registry ),
-			$this->remainingQuestions( $run )
+			$this->remainingQuestions( $run ),
+			$this->objectLookup()
 		);
 		if ( is_wp_error( $payload ) ) {
 			$code = (string) $payload->get_error_code();
@@ -3245,6 +3259,11 @@ final class Runner {
 	 * the plan steps" (§0.2). A step that turns out to need two publishes
 	 * parks for the second; a grant is never a blank cheque.
 	 *
+	 * A step that names N existing objects counts max(1, N) for each verb it
+	 * reaches: it will call the verb once per named object, so counting it once
+	 * would re-create the undercount that made J3/J4 park. The plan card's
+	 * `planApprovalCount()` applies the same rule.
+	 *
 	 * @param array<string,mixed> $payload      The accepted plan payload.
 	 * @param int                 $plan_step_id The accepted plan step's seq.
 	 */
@@ -3290,7 +3309,8 @@ final class Runner {
 				continue;
 			}
 
-			$seen = array();
+			$seen  = array();
+			$named = is_array( $step['objects'] ?? null ) ? count( $step['objects'] ) : 0;
 			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
 				if ( ! is_string( $verb ) || '' === $verb ) {
 					continue;
@@ -3324,11 +3344,46 @@ final class Runner {
 				}
 
 				$seen[ $gate_verb ]   = true;
-				$counts[ $gate_verb ] = ( $counts[ $gate_verb ] ?? 0 ) + 1;
+				$counts[ $gate_verb ] = ( $counts[ $gate_verb ] ?? 0 ) + max( 1, $named );
 			}
 		}
 
 		return $counts;
+	}
+
+	/**
+	 * The existing objects the ACCEPTED plan names, keyed by the gate verb of
+	 * the step that names them. A step's objects authorise only the verbs that
+	 * step lists: the same id under another verb's step buys nothing here.
+	 *
+	 * Read from the stored plan step, so it follows a re-plan and can never be
+	 * supplied by a call.
+	 *
+	 * @return array<string,list<string>>
+	 */
+	private function planObjectsByGateVerb( Run $run ): array {
+		$by_verb = array();
+
+		foreach ( (array) ( $this->acceptedPlanPayload( $run )['steps'] ?? array() ) as $step ) {
+			if ( ! is_array( $step ) || ! is_array( $step['objects'] ?? null ) ) {
+				continue;
+			}
+
+			foreach ( (array) ( $step['verbs'] ?? array() ) as $verb ) {
+				$gate_verb = is_string( $verb ) ? $this->gateVerbFor( $run, $verb ) : null;
+				if ( null === $gate_verb ) {
+					continue;
+				}
+
+				foreach ( $step['objects'] as $object_id ) {
+					if ( is_string( $object_id ) && '' !== $object_id ) {
+						$by_verb[ $gate_verb ][ $object_id ] = $object_id;
+					}
+				}
+			}
+		}
+
+		return array_map( 'array_values', $by_verb );
 	}
 
 	/**
@@ -3812,10 +3867,31 @@ final class Runner {
 	 * @return array<string,mixed>
 	 */
 	private function planUi( array $payload, int $step_id, int $remaining, int $run_id ): array {
+		$lookup = $this->objectLookup();
+		$steps  = array();
+		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
+			if ( is_array( $step ) && isset( $step['objects'] ) && is_array( $step['objects'] ) ) {
+				// The card shows what the human is naming, not bare ids.
+				$step['objects'] = array_map(
+					static function ( $object_id ) use ( $lookup ): array {
+						$found = $lookup( (string) $object_id );
+
+						return array(
+							'id'    => (string) $object_id,
+							'title' => (string) ( $found['title'] ?? '' ),
+							'type'  => (string) ( $found['object_type'] ?? 'unknown' ),
+						);
+					},
+					$step['objects']
+				);
+			}
+			$steps[] = $step;
+		}
+
 		return array(
 			'step_id'              => $step_id,
 			'goal'                 => (string) ( $payload['goal'] ?? '' ),
-			'steps'                => (array) ( $payload['steps'] ?? array() ),
+			'steps'                => $steps,
 			'assumptions'          => (array) ( $payload['assumptions'] ?? array() ),
 			'remaining_plans'      => $remaining,
 			'preapprove_available' => $this->preapprovalEnabled(),
@@ -3823,6 +3899,16 @@ final class Runner {
 				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
 				: '',
 		);
+	}
+
+	/**
+	 * The report's object lookup (id => object_type/title/…), the one place
+	 * that can name every pack's ids.
+	 *
+	 * @return callable(string|int):array<string,mixed>
+	 */
+	private function objectLookup(): callable {
+		return is_callable( $this->post_lookup ) ? $this->post_lookup : Report::wpPostLookup();
 	}
 
 	/**
