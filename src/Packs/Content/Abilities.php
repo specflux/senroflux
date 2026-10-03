@@ -475,8 +475,9 @@ final class Abilities {
 	 *
 	 * Left to execute alone: the capability gate (the permission callback owns
 	 * it; the one exception is creating a missing term, which the shared term
-	 * checks refuse here too) and the stale-write compare, which reads the run's tracker and is
-	 * meaningful only at write time, after any approval wait. `@internal`.
+	 * checks refuse here too) and the STALE half of the stale-write compare (a
+	 * read marker that no longer matches), which is meaningful only at write
+	 * time, after any approval wait. The UNREAD half runs here. `@internal`.
 	 *
 	 * @param string              $base_name The ability's final segment, e.g. `create-post`.
 	 * @param array<string,mixed> $input     Call input.
@@ -498,6 +499,16 @@ final class Abilities {
 		$target = self::updateTarget( $input, 'publish-post' === $base_name );
 		if ( is_wp_error( $target ) ) {
 			return $target;
+		}
+
+		// The UNREAD half of the stale-write compare: a run that never read
+		// this object by id (a list query records nothing) can never land the
+		// write, so refuse before an approval is asked for it. Only with a run
+		// context resolved; execute still refuses without one.
+		if ( null !== self::$current_run_id && null !== self::$store
+			&& ! array_key_exists( (string) ( $target['post']->ID ?? 0 ), self::currentObjects() )
+		) {
+			return self::unreadWriteError();
 		}
 
 		$checked = self::updateContentChecks( $input, $target['post'], $target['status'] );
