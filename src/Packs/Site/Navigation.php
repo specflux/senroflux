@@ -14,6 +14,13 @@
  * never learns which world it is in — both resolve to `{ kind, items }`,
  * where `kind` is `'items'` or `'page_list'` (a `core/page-list` block).
  *
+ * NESTING (J6 live fix): items carry an optional `key` and `parent`; see
+ * {@see updateNavigationSchema()} for the one reference scheme and
+ * {@see MAX_DEPTH} for the limit. A classic menu stores real nav-menu-item
+ * parent ids (`wp_update_nav_menu_item()`'s `menu-item-parent-id`); a block
+ * navigation wraps children in a `core/navigation-submenu`, the block core's
+ * own classic-menu converter emits for a parent item.
+ *
  * NO CREATE, NO ASSIGN-LOCATION, NO DELETE (S7) — `update-navigation`
  * replaces the resolved navigation's ITEM LIST only; it never creates a new
  * navigation/menu, changes which one a location points to, or removes the
@@ -67,6 +74,13 @@ final class Navigation {
 	 * is enough.
 	 */
 	public const OBJECT_ID = 'site-navigation';
+
+	/**
+	 * The deepest nesting `update-navigation` writes: a top level plus one
+	 * level of children. Themes commonly style two levels; a third is
+	 * refused rather than left to render unreachable.
+	 */
+	public const MAX_DEPTH = 2;
 
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
@@ -272,7 +286,7 @@ final class Navigation {
 			'senroflux/update-navigation',
 			array(
 				'label'               => __( 'Update site navigation', 'senroflux' ),
-				'description'         => __( 'Replace the resolved site navigation\'s items (label, target and order). Refuses a link to an unpublished page.', 'senroflux' ),
+				'description'         => __( 'Replace the resolved site navigation\'s items (label, target, order and optional sub-menu nesting). The list is the WHOLE menu: anything left out is removed. Refuses a link to an unpublished page.', 'senroflux' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => self::updateNavigationSchema(),
 				'output_schema'       => self::navigationOutputSchema(),
@@ -315,6 +329,8 @@ final class Navigation {
 							'url'     => array( 'type' => 'string' ),
 							'page_id' => array( 'type' => array( 'integer', 'null' ) ),
 							'order'   => array( 'type' => 'integer' ),
+							'key'     => array( 'type' => 'string' ),
+							'parent'  => array( 'type' => array( 'string', 'null' ) ),
 						),
 					),
 				),
@@ -347,8 +363,19 @@ final class Navigation {
 						'properties'           => array(
 							'label'   => array( 'type' => 'string' ),
 							'url'     => array( 'type' => 'string' ),
-							'page_id' => array( 'type' => 'integer' ),
-							'order'   => array( 'type' => 'integer' ),
+							'page_id' => array( 'type' => array( 'integer', 'null' ) ),
+							'order'   => array(
+								'type'        => 'integer',
+								'description' => 'Position among items with the same parent.',
+							),
+							'key'     => array(
+								'type'        => 'string',
+								'description' => 'Your own name for this item, unique within this call, so other items can name it as their parent.',
+							),
+							'parent'  => array(
+								'type'        => array( 'string', 'null' ),
+								'description' => 'The key of the item this one sits under; omit or null for the top level. At most ' . self::MAX_DEPTH . ' levels.',
+							),
 						),
 					),
 				),
@@ -542,51 +569,80 @@ final class Navigation {
 	}
 
 	/**
-	 * The top-level `core/navigation-link` blocks as `{label,url,page_id,order}`.
+	 * The `core/navigation-link` and `core/navigation-submenu` blocks as
+	 * `{label,url,page_id,order,key,parent}`, children listed after their
+	 * submenu. A block has no id of its own, so its `key` is its position
+	 * path (`block-0`, `block-0-1`).
 	 *
-	 * @param list<array<string,mixed>> $blocks Parsed blocks (the navigation's own content).
+	 * @param list<array<string,mixed>> $blocks Parsed blocks (the navigation's own content, or a submenu's children).
+	 * @param string|null               $parent_key The enclosing submenu's key, or null at the top level.
+	 * @param string                    $prefix The key path so far.
+	 * @param int                       $order  Running order, shared across the walk.
 	 * @return list<array<string,mixed>>
 	 */
-	private static function itemsFromBlockNav( array $blocks ): array {
-		$items = array();
-		$order = 0;
+	private static function itemsFromBlockNav( array $blocks, ?string $parent_key = null, string $prefix = 'block', int &$order = 0 ): array {
+		$items    = array();
+		$position = 0;
 		foreach ( $blocks as $block ) {
-			if ( 'core/navigation-link' !== ( $block['blockName'] ?? '' ) ) {
+			$name = $block['blockName'] ?? '';
+			if ( 'core/navigation-link' !== $name && 'core/navigation-submenu' !== $name ) {
 				continue;
 			}
 			$attrs   = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
 			$is_page = 'post-type' === ( $attrs['kind'] ?? '' ) && 'page' === ( $attrs['type'] ?? '' ) && isset( $attrs['id'] );
+			$key     = $prefix . '-' . $position;
+			++$position;
 
 			$items[] = array(
 				'label'   => (string) ( $attrs['label'] ?? '' ),
 				'url'     => (string) ( $attrs['url'] ?? '' ),
 				'page_id' => $is_page ? (int) $attrs['id'] : null,
 				'order'   => $order,
+				'key'     => $key,
+				'parent'  => $parent_key,
 			);
 			++$order;
+
+			$inner = $block['innerBlocks'] ?? array();
+			if ( 'core/navigation-submenu' === $name && is_array( $inner ) && array() !== $inner ) {
+				$items = array_merge( $items, self::itemsFromBlockNav( array_values( $inner ), $key, $key, $order ) );
+			}
 		}
 
 		return $items;
 	}
 
 	/**
-	 * The classic menu's items as `{label,url,page_id,order}`.
+	 * The classic menu's items as `{label,url,page_id,order,key,parent}`. A
+	 * menu item's `key` is `menu-<nav_menu_item id>`; its `parent` names its
+	 * parent item's key, or is null at the top level (or when the stored
+	 * parent is not in this menu).
 	 *
 	 * @param list<object> $menu_items `wp_get_nav_menu_items()` result.
 	 * @return list<array<string,mixed>>
 	 */
 	private static function itemsFromClassicMenu( array $menu_items ): array {
+		$ids = array();
+		foreach ( $menu_items as $item ) {
+			if ( is_object( $item ) ) {
+				$ids[ (int) ( $item->ID ?? 0 ) ] = true;
+			}
+		}
+
 		$items = array();
 		foreach ( $menu_items as $item ) {
 			if ( ! is_object( $item ) ) {
 				continue;
 			}
-			$is_page = 'page' === ( $item->object ?? '' );
-			$items[] = array(
+			$is_page   = 'page' === ( $item->object ?? '' );
+			$parent_id = (int) ( $item->menu_item_parent ?? 0 );
+			$items[]   = array(
 				'label'   => (string) ( $item->title ?? '' ),
 				'url'     => (string) ( $item->url ?? '' ),
 				'page_id' => $is_page ? (int) ( $item->object_id ?? 0 ) : null,
 				'order'   => (int) ( $item->menu_order ?? 0 ),
+				'key'     => 'menu-' . (int) ( $item->ID ?? 0 ),
+				'parent'  => isset( $ids[ $parent_id ] ) ? 'menu-' . $parent_id : null,
 			);
 		}
 
@@ -595,7 +651,7 @@ final class Navigation {
 
 	/**
 	 * A hash of a classic menu's items (0.3 S8 marker) — id, title, url,
-	 * object id and order, so any of those changing invalidates it.
+	 * object id, order and parent, so any of those changing invalidates it.
 	 *
 	 * @param list<object> $menu_items `wp_get_nav_menu_items()` result.
 	 */
@@ -663,6 +719,11 @@ final class Navigation {
 			}
 		}
 
+		$nesting_error = self::nestingError( $items );
+		if ( null !== $nesting_error ) {
+			return $nesting_error;
+		}
+
 		// S7 ordering: refuse a link to a page that is not publish YET.
 		foreach ( $items as $item ) {
 			if ( ! isset( $item['page_id'] ) ) {
@@ -696,7 +757,7 @@ final class Navigation {
 			);
 		}
 
-		usort( $items, static fn ( array $a, array $b ): int => ( (int) ( $a['order'] ?? 0 ) ) <=> ( (int) ( $b['order'] ?? 0 ) ) );
+		$items = self::orderedItems( $items );
 
 		$result = 'block' === $target['world']
 			? self::writeBlockNavigation( $target['ref'], $items )
@@ -720,31 +781,17 @@ final class Navigation {
 	/**
 	 * Persist the item list as `core/navigation-link` blocks on the resolved
 	 * `wp_navigation` post (never as `core/page-list` — converting a Page
-	 * List into explicit links is exactly what this write is for).
+	 * List into explicit links is exactly what this write is for, nested or
+	 * not). An item with children is a `core/navigation-submenu` wrapping
+	 * them, serialized through core's own `serialize_block()`.
 	 *
 	 * @param int|null                   $ref   The wp_navigation post id.
-	 * @param list<array<string,mixed>>  $items Sorted items.
+	 * @param list<array<string,mixed>>  $items Ordered items ({@see orderedItems()}).
 	 * @return array{marker:string}|WP_Error
 	 */
 	private static function writeBlockNavigation( ?int $ref, array $items ): array|WP_Error {
 		if ( null === $ref ) {
 			return self::navigationUnresolved();
-		}
-
-		$content = '';
-		foreach ( $items as $item ) {
-			$attrs = array( 'label' => (string) ( $item['label'] ?? '' ) );
-			if ( isset( $item['page_id'] ) ) {
-				$attrs['id']   = (int) $item['page_id'];
-				$attrs['kind'] = 'post-type';
-				$attrs['type'] = 'page';
-				$attrs['url']  = function_exists( 'get_permalink' ) ? (string) get_permalink( (int) $item['page_id'] ) : (string) ( $item['url'] ?? '' );
-			} else {
-				$attrs['url'] = (string) ( $item['url'] ?? '' );
-			}
-
-			$encoded  = function_exists( 'wp_json_encode' ) ? wp_json_encode( $attrs ) : json_encode( $attrs ); // phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode
-			$content .= '<!-- wp:navigation-link ' . (string) $encoded . ' /-->';
 		}
 
 		if ( ! function_exists( 'wp_update_post' ) ) {
@@ -754,7 +801,7 @@ final class Navigation {
 		$updated = wp_update_post(
 			array(
 				'ID'           => $ref,
-				'post_content' => $content,
+				'post_content' => serialize_blocks( self::blocksForItems( $items, null ) ),
 			),
 			true
 		);
@@ -768,12 +815,61 @@ final class Navigation {
 	}
 
 	/**
+	 * The block tree for the children of `$parent_key` (null = top level).
+	 *
+	 * @param list<array<string,mixed>> $items      Ordered items.
+	 * @param string|null               $parent_key The parent key, or null.
+	 * @return list<array{blockName:string|null,attrs:array<string,mixed>,innerBlocks:array<array<string,mixed>>,innerHTML:string,innerContent:array<int,string|null>}>
+	 */
+	private static function blocksForItems( array $items, ?string $parent_key ): array {
+		$blocks = array();
+		foreach ( $items as $item ) {
+			if ( self::parentKey( $item ) !== $parent_key ) {
+				continue;
+			}
+
+			$attrs = array( 'label' => (string) ( $item['label'] ?? '' ) );
+			if ( isset( $item['page_id'] ) ) {
+				$attrs['id']   = (int) $item['page_id'];
+				$attrs['kind'] = 'post-type';
+				$attrs['type'] = 'page';
+				$attrs['url']  = function_exists( 'get_permalink' ) ? (string) get_permalink( (int) $item['page_id'] ) : (string) ( $item['url'] ?? '' );
+			} else {
+				$attrs['url'] = (string) ( $item['url'] ?? '' );
+			}
+
+			$children = isset( $item['key'] ) && is_string( $item['key'] ) ? self::blocksForItems( $items, $item['key'] ) : array();
+
+			$content = array();
+			if ( array() !== $children ) {
+				$content = array( "\n" );
+				for ( $i = 0, $n = count( $children ); $i < $n; $i++ ) {
+					$content[] = null;
+					$content[] = "\n";
+				}
+			}
+
+			$blocks[] = array(
+				'blockName'    => array() !== $children ? 'core/navigation-submenu' : 'core/navigation-link',
+				'attrs'        => $attrs,
+				'innerBlocks'  => $children,
+				'innerHTML'    => implode( '', array_filter( $content, 'is_string' ) ),
+				'innerContent' => $content,
+			);
+		}
+
+		return $blocks;
+	}
+
+	/**
 	 * Replace a classic menu's items wholesale: delete every existing item,
 	 * insert the new list in order. Still no create/assign/delete of the MENU
-	 * or its location (S7) — only its item set changes.
+	 * or its location (S7) — only its item set changes. Parents are inserted
+	 * before their children so each child carries its parent's real
+	 * nav-menu-item id as `menu-item-parent-id`.
 	 *
 	 * @param int|null                  $menu_id The nav_menu term id.
-	 * @param list<array<string,mixed>> $items   Sorted items.
+	 * @param list<array<string,mixed>> $items   Ordered items ({@see orderedItems()}).
 	 * @return array{marker:string}|WP_Error
 	 */
 	private static function writeClassicMenu( ?int $menu_id, array $items ): array|WP_Error {
@@ -788,10 +884,15 @@ final class Navigation {
 			}
 		}
 
+		$ids      = array();
+		$position = 0;
 		foreach ( $items as $item ) {
+			++$position;
 			$data = array(
-				'menu-item-title'  => (string) ( $item['label'] ?? '' ),
-				'menu-item-status' => 'publish',
+				'menu-item-title'     => (string) ( $item['label'] ?? '' ),
+				'menu-item-status'    => 'publish',
+				'menu-item-position'  => $position,
+				'menu-item-parent-id' => 0,
 			);
 			if ( isset( $item['page_id'] ) ) {
 				$data['menu-item-object-id'] = (int) $item['page_id'];
@@ -802,14 +903,200 @@ final class Navigation {
 				$data['menu-item-type'] = 'custom';
 			}
 
+			$parent = self::parentKey( $item );
+			if ( null !== $parent && isset( $ids[ $parent ] ) ) {
+				$data['menu-item-parent-id'] = $ids[ $parent ];
+			}
+
 			if ( function_exists( 'wp_update_nav_menu_item' ) ) {
-				wp_update_nav_menu_item( $menu_id, 0, $data );
+				$id = wp_update_nav_menu_item( $menu_id, 0, $data );
+				if ( is_wp_error( $id ) ) {
+					return $id;
+				}
+				if ( isset( $item['key'] ) && is_string( $item['key'] ) ) {
+					$ids[ $item['key'] ] = (int) $id;
+				}
 			}
 		}
 
 		$new_items = function_exists( 'wp_get_nav_menu_items' ) ? wp_get_nav_menu_items( $menu_id ) : array();
 
 		return array( 'marker' => self::classicMarker( array_values( is_array( $new_items ) ? $new_items : array() ) ) );
+	}
+
+	// ------------------------------------------------------------------
+	// Nesting
+	// ------------------------------------------------------------------
+
+	/**
+	 * An item's parent key, or null for a top-level item (a missing, null or
+	 * empty `parent`).
+	 *
+	 * @param array<string,mixed> $item One item.
+	 */
+	private static function parentKey( array $item ): ?string {
+		$parent = $item['parent'] ?? null;
+
+		return is_string( $parent ) && '' !== $parent ? $parent : null;
+	}
+
+	/**
+	 * Refuse a proposed item list whose nesting cannot be written as asked:
+	 * a bad or duplicate key, an unknown or self parent, a cycle, or more
+	 * than {@see MAX_DEPTH} levels. Checked before anything is saved.
+	 *
+	 * @param array<int|string,mixed> $items The call's items.
+	 */
+	private static function nestingError( array $items ): ?WP_Error {
+		$parents = array();
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			if ( array_key_exists( 'key', $item ) ) {
+				if ( ! is_string( $item['key'] ) || '' === trim( $item['key'] ) ) {
+					return self::nestingRefusal( 'navigation_invalid_key', __( 'An item key must be a non-empty string.', 'senroflux' ) );
+				}
+				if ( array_key_exists( $item['key'], $parents ) ) {
+					return self::nestingRefusal( 'navigation_duplicate_key', __( 'Two navigation items share a key. Keys must be unique within the call.', 'senroflux' ), $item['key'] );
+				}
+				$parents[ $item['key'] ] = self::parentKey( $item );
+			}
+		}
+
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			$raw = $item['parent'] ?? null;
+			if ( null === $raw || '' === $raw ) {
+				continue;
+			}
+			if ( ! is_string( $raw ) || ! array_key_exists( $raw, $parents ) ) {
+				return self::nestingRefusal( 'navigation_unknown_parent', __( 'An item names a parent that is not the key of any item in this call.', 'senroflux' ), is_string( $raw ) ? $raw : '' );
+			}
+			if ( isset( $item['key'] ) && $item['key'] === $raw ) {
+				return self::nestingRefusal( 'navigation_self_parent', __( 'A navigation item cannot be its own parent.', 'senroflux' ), $raw );
+			}
+		}
+
+		foreach ( $items as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			$start   = isset( $item['key'] ) && is_string( $item['key'] ) ? $item['key'] : '';
+			$depth   = 1;
+			$seen    = '' !== $start ? array( $start => true ) : array();
+			$current = self::parentKey( $item );
+			while ( null !== $current ) {
+				if ( isset( $seen[ $current ] ) ) {
+					return self::nestingRefusal( 'navigation_parent_cycle', __( 'The navigation parents form a loop.', 'senroflux' ), $start );
+				}
+				$seen[ $current ] = true;
+				++$depth;
+				$current = $parents[ $current ];
+			}
+			if ( $depth > self::MAX_DEPTH ) {
+				return self::nestingRefusal(
+					'navigation_too_deep',
+					sprintf(
+						/* translators: %d: maximum number of menu levels. */
+						__( 'Navigation can nest %d levels at most: top-level items and one level of sub-menu items under them.', 'senroflux' ),
+						self::MAX_DEPTH
+					),
+					$start
+				);
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * @param string $code    Error code.
+	 * @param string $message Message.
+	 * @param string $key     The offending key, when there is one.
+	 */
+	private static function nestingRefusal( string $code, string $message, string $key = '' ): WP_Error {
+		return new WP_Error(
+			$code,
+			$message,
+			array_filter(
+				array(
+					'status' => 400,
+					'key'    => $key,
+				),
+				static fn ( $value ): bool => '' !== $value
+			)
+		);
+	}
+
+	/**
+	 * Items sorted by `order` (stable), flattened so each parent is directly
+	 * followed by its children — the order both writers need (a parent
+	 * exists before its children). An item whose parent is not in the list
+	 * is treated as top level; the nesting was validated before any write.
+	 *
+	 * @param array<int|string,mixed> $items Items ({@see updateNavigationSchema()} shape).
+	 * @return list<array<string,mixed>>
+	 */
+	public static function orderedItems( array $items ): array {
+		$items = array_values( array_filter( $items, 'is_array' ) );
+		usort( $items, static fn ( array $a, array $b ): int => ( (int) ( $a['order'] ?? 0 ) ) <=> ( (int) ( $b['order'] ?? 0 ) ) );
+
+		$keys = array();
+		foreach ( $items as $item ) {
+			if ( isset( $item['key'] ) && is_string( $item['key'] ) ) {
+				$keys[ $item['key'] ] = true;
+			}
+		}
+
+		$children = array();
+		$top      = array();
+		foreach ( $items as $index => $item ) {
+			$parent = self::parentKey( $item );
+			if ( null !== $parent && isset( $keys[ $parent ] ) && ( $item['key'] ?? null ) !== $parent ) {
+				$children[ $parent ][] = $index;
+			} else {
+				$top[] = $index;
+			}
+		}
+
+		$ordered = array();
+		$seen    = array();
+		foreach ( $top as $index ) {
+			self::appendBranch( $items, $children, $index, $ordered, $seen );
+		}
+		// Anything a malformed (cyclic) list left unreachable still shows.
+		foreach ( array_keys( $items ) as $index ) {
+			if ( ! isset( $seen[ $index ] ) ) {
+				$ordered[] = $items[ $index ];
+			}
+		}
+
+		return $ordered;
+	}
+
+	/**
+	 * @param list<array<string,mixed>> $items    Sorted items.
+	 * @param array<string,list<int>>   $children Child indexes by parent key.
+	 * @param int                       $index    The item to append, then its children.
+	 * @param list<array<string,mixed>> $ordered  Output, by reference.
+	 * @param array<int,bool>           $seen     Appended indexes, by reference.
+	 */
+	private static function appendBranch( array $items, array $children, int $index, array &$ordered, array &$seen ): void {
+		if ( isset( $seen[ $index ] ) ) {
+			return;
+		}
+		$seen[ $index ] = true;
+		$ordered[]      = $items[ $index ];
+
+		$key = $items[ $index ]['key'] ?? null;
+		if ( is_string( $key ) && isset( $children[ $key ] ) ) {
+			foreach ( $children[ $key ] as $child ) {
+				self::appendBranch( $items, $children, $child, $ordered, $seen );
+			}
+		}
 	}
 
 	/**

@@ -27,6 +27,7 @@ if ( ! class_exists( 'SenroFlux_Test_Fake_Ability' ) ) {
 			private string $description = '',
 			private ?array $input_schema = null,
 			private array $meta = array(),
+			private ?array $output_schema = null,
 		) {
 		}
 
@@ -40,6 +41,10 @@ if ( ! class_exists( 'SenroFlux_Test_Fake_Ability' ) ) {
 
 		public function get_input_schema(): ?array {
 			return $this->input_schema;
+		}
+
+		public function get_output_schema(): ?array {
+			return $this->output_schema;
 		}
 
 		public function get_meta(): array {

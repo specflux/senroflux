@@ -210,4 +210,42 @@ final class AiClientMediaGatewayTest extends TestCase {
 		$this->assertSame( 'attachment_file_missing', $result->get_error_code() );
 		$this->assertSame( array(), $GLOBALS['senroflux_test_prompt_builder_calls'], 'a missing file must never reach the model call at all' );
 	}
+
+	public function test_generate_image_flags_the_no_model_failure_as_unavailable(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_invalid_argument', 'No models found that support image_generation for this prompt.' );
+		};
+
+		$result = ( new AiClientMediaGateway() )->generateImage( 'a red bicycle' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'image_generation_unavailable', $result->get_error_code() );
+	}
+
+	public function test_generate_image_flags_a_thrown_no_model_exception_as_unavailable(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			throw new \WordPress\AiClient\Common\Exception\InvalidArgumentException( 'No models found for provider "openrouter" that support image_generation for this prompt.' );
+		};
+
+		$result = ( new AiClientMediaGateway() )->generateImage( 'a red bicycle' );
+
+		$this->assertSame( 'image_generation_unavailable', $result->get_error_code() );
+	}
+
+	public function test_generate_image_does_not_flag_a_timeout_or_other_invalid_argument(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_network_error', 'cURL error 28: Operation timed out' );
+		};
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_invalid_argument', 'The prompt is too long.' );
+		};
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_upstream_server_error', 'No models found that support image_generation.' );
+		};
+
+		$gateway = new AiClientMediaGateway();
+		foreach ( range( 1, 3 ) as $unused ) {
+			$this->assertNotSame( 'image_generation_unavailable', $gateway->generateImage( 'x' )->get_error_code() );
+		}
+	}
 }

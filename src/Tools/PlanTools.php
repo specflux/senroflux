@@ -215,8 +215,8 @@ final class PlanTools {
 		);
 
 		$step_text_description = $media_generate_available
-			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each change a person must approve its own step — one step per post, page, product, price, image or other object you write, never one step for several: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several writes under-states what you will ask and its extra writes stop for approval again. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
-			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each change a person must approve its own step — one step per post, page, product, price, image or other object you write, never one step for several: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several writes under-states what you will ask and its extra writes stop for approval again. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' );
+			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
+			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' );
 
 		$schema = array(
 			'type'                 => 'object',
@@ -410,16 +410,21 @@ final class PlanTools {
 			}
 
 			// S7: annotate the step with the highest tier among its verbs,
-			// through the RUN's map so the card and the fence agree.
-			$tier = 0;
+			// through the RUN's map so the card and the fence agree. The
+			// per-verb tiers ride along so the card counts only the verbs
+			// that actually park (live J4 told the approver 15, not 5).
+			$tier       = 0;
+			$verb_tiers = array();
 			foreach ( $normalized_verbs as $verb ) {
-				$tier = max( $tier, VerbTier::tierFor( $verb, $verb_map, $run_id ) );
+				$verb_tiers[ $verb ] = VerbTier::tierFor( $verb, $verb_map, $run_id );
+				$tier                = max( $tier, $verb_tiers[ $verb ] );
 			}
 
 			$normalized_steps[] = array(
-				'text'  => $text,
-				'verbs' => $normalized_verbs,
-				'tier'  => $tier,
+				'text'       => $text,
+				'verbs'      => $normalized_verbs,
+				'tier'       => $tier,
+				'verb_tiers' => $verb_tiers,
 			);
 		}
 

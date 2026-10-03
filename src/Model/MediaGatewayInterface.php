@@ -28,7 +28,9 @@ interface MediaGatewayInterface {
 	 *
 	 * @param string $prompt The image prompt.
 	 * @return array{path:string, filename:string}|WP_Error Absolute file path
-	 *         and a suggested filename, or a refusal.
+	 *         and a suggested filename, or a refusal. The code
+	 *         `image_generation_unavailable` means no configured model can
+	 *         ever serve the request (not a transient failure).
 	 */
 	public function generateImage( string $prompt ): array|WP_Error;
 

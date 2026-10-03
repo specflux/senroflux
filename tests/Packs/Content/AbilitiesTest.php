@@ -39,6 +39,7 @@ use Specflux\SenroFlux\Packs\Pages\Vocabulary;
 use Specflux\SenroFlux\Packs\Posts\Validator as PostsValidator;
 use Specflux\SenroFlux\Packs\Posts\Vocabulary as PostsVocabulary;
 use Specflux\SenroFlux\Run\Budget;
+use Specflux\SenroFlux\Run\Clock;
 use Specflux\SenroFlux\Run\Tracker;
 use Specflux\SenroFlux\Run\WpdbRunStore;
 use Specflux\SenroFlux\Tests\Packs\Pages\LayoutsTest;
@@ -959,6 +960,111 @@ final class AbilitiesTest extends TestCase {
 		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
 	}
 
+	/** A scheduled post needs a way to carry its site-local publication date. */
+	public function test_update_post_writes_a_site_local_date(): void {
+		$this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'   => 100,
+				'date' => '2026-10-12 09:00:00',
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( '2026-10-12 09:00:00', $GLOBALS['senroflux_test_posts'][100]->post_date );
+	}
+
+	/** @return array<string,mixed>|WP_Error */
+	private function publishAt( array $input ): array|WP_Error {
+		$post               = $this->seedPost( 100, 'page', 'draft' );
+		$post->post_content = $this->validContent();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+		// Site is UTC+08:00; "now" is 2026-10-03 07:00 local.
+		$GLOBALS['senroflux_test_timezone'] = 'Asia/Singapore';
+		Clock::useFixed( gmmktime( 23, 0, 0, 10, 2, 2026 ) );
+
+		$result = $this->ability( 'senroflux/publish-post' )->execute( array( 'id' => 100 ) + $input );
+		unset( $GLOBALS['senroflux_test_timezone'] );
+		Clock::reset();
+
+		return $result;
+	}
+
+	public function test_future_status_without_a_date_is_refused_before_any_write(): void {
+		$result = $this->publishAt( array( 'status' => 'future' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'schedule_needs_future_date', $result->get_error_code() );
+		$this->assertStringContainsString( 'Y-m-d H:i:s', $result->get_error_message() );
+		$this->assertSame( 'draft', $GLOBALS['senroflux_test_posts'][100]->post_status );
+	}
+
+	public function test_future_status_with_a_past_date_is_refused(): void {
+		$result = $this->publishAt(
+			array(
+				'status' => 'future',
+				'date'   => '2026-10-03 06:00:00',
+			)
+		);
+
+		$this->assertSame( 'schedule_needs_future_date', $result->get_error_code() );
+	}
+
+	public function test_future_status_with_exactly_now_in_site_time_is_refused(): void {
+		$result = $this->publishAt(
+			array(
+				'status' => 'future',
+				'date'   => '2026-10-03 07:00:00',
+			)
+		);
+
+		$this->assertSame( 'schedule_needs_future_date', $result->get_error_code() );
+	}
+
+	public function test_future_status_one_second_ahead_in_site_time_is_accepted(): void {
+		$result = $this->publishAt(
+			array(
+				'status' => 'future',
+				'date'   => '2026-10-03 07:00:01',
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( 'future', $result['status'] );
+		$this->assertSame( '2026-10-03 07:00:01', $GLOBALS['senroflux_test_posts'][100]->post_date );
+	}
+
+	public function test_publish_status_with_a_future_date_is_refused_as_ambiguous(): void {
+		$result = $this->publishAt(
+			array(
+				'status' => 'publish',
+				'date'   => '2026-10-12 09:00:00',
+			)
+		);
+
+		$this->assertSame( 'use_future_status', $result->get_error_code() );
+	}
+
+	public function test_update_post_refuses_a_malformed_date(): void {
+		$this->seedPost();
+		$this->primeRead( 100 );
+		$this->grant( 'edit_pages', 'edit_post' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'   => 100,
+				'date' => 'next Monday 9am',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_date', $result->get_error_code() );
+	}
+
 	/** `senroflux_require_page_image` off disables the update-post rule too. */
 	public function test_update_post_filter_can_disable_the_image_requirement(): void {
 		$post = $this->seedPost();
@@ -1544,6 +1650,7 @@ final class AbilitiesTest extends TestCase {
 			array(
 				'id'     => 100,
 				'status' => 'future',
+				'date'   => '2999-01-01 09:00:00',
 			)
 		);
 

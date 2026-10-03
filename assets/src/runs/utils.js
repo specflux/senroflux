@@ -277,23 +277,22 @@ export function planProgress( plan, steps ) {
  * How many approvals a plan implies (S7/S10), so the plan card discloses
  * this BEFORE the human accepts it, not step by step as the run goes.
  *
- * Built-in mode: every Tier >= 1 verb OCCURRENCE across the whole plan, not
- * every qualifying STEP — a step naming three Tier >= 1 verbs parks three
- * times, once per call, not once. Ported from the retired PHP plan card
- * (`RunsScreen::countParksInBuiltinMode()`/`countVerbsAtOrAboveTier()`) after
- * a live-run defect: counting steps instead of verb occurrences told the
- * approver "approve 2" when the real answer was 4 (one step grouped three
- * Tier >= 1 verbs: [create-draft], [media-generate, update-alt,
- * set-featured-image], [read] — the correct count is 1 + 3 + 0 = 4). A verb
- * whose tier is unknown (the step carries no `tier`) is treated as Tier 2 —
- * fail closed, the same rule `VerbTier::tierFor()` uses server-side.
+ * Built-in mode: every verb OCCURRENCE that is itself Tier >= 1, across the
+ * whole plan — a step naming three Tier >= 1 verbs parks three times, once
+ * per call. A verb's own tier comes from the step's `verb_tiers` map; the
+ * step-level `tier` is only the MAX over its verbs, so counting every verb of
+ * a step by it over-counted (live J4: five steps of [Tier 0, Tier 1, Tier 0]
+ * verbs told the approver "15" when exactly 5 approvals happened). A verb
+ * with no tier of its own (a plan stored before `verb_tiers` existed) falls
+ * back to the step's `tier`, and with neither it is treated as Tier 2 — fail
+ * closed, the same rule `VerbTier::tierFor()` uses server-side.
  *
  * Agent Safety mode: no count at all — S3's built-in-only approval count has
  * no AS-mode equivalent here (a Tier-2 verb's own tier badge already
  * discloses it per call), so this returns `null` and the caller renders
  * nothing.
  *
- * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier }] }`).
+ * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier, verb_tiers }] }`).
  * @param {string} gateMode 'agent_safety' | 'built_in'.
  * @return {number|null} The approval count in built-in mode, else `null`.
  */
@@ -307,9 +306,13 @@ export function planApprovalCount( plan, gateMode ) {
 
 	return ( plan.steps || [] ).reduce( ( total, step ) => {
 		const verbs = Array.isArray( step.verbs ) ? step.verbs : [];
-		const tier = Number.isInteger( step.tier ) ? step.tier : FAIL_CLOSED_TIER;
-		const qualifying = tier >= THRESHOLD ? verbs.length : 0;
-		return total + qualifying;
+		const verbTiers = step.verb_tiers && 'object' === typeof step.verb_tiers ? step.verb_tiers : {};
+		const stepTier = Number.isInteger( step.tier ) ? step.tier : FAIL_CLOSED_TIER;
+		const qualifying = verbs.filter( ( verb ) => {
+			const tier = Number.isInteger( verbTiers[ verb ] ) ? verbTiers[ verb ] : stepTier;
+			return tier >= THRESHOLD;
+		} );
+		return total + qualifying.length;
 	}, 0 );
 }
 

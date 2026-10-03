@@ -432,6 +432,7 @@ final class PostsPack extends Pack {
 				'Use at most one closing call to action, placed at the end. Use at most ' . Vocabulary::RULES_MAX_PULL_QUOTE . ' pull quotes, and only for a line that already appears in the body.',
 				'Never write a block whose name starts with senroflux/. A closing call to action is a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button. A pull quote is a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.',
 				'Every core/image MUST carry non-empty, descriptive alt text in its attributes; an image with no alt text is refused.',
+				'A finished post has an excerpt, one category other than Uncategorized, and two to four tags. Get each term\'s id from create-term (it returns the existing term when one has that name), then attach them with set-terms — once for category, once for post_tag.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
 				'When you propose a plan, spell each step\'s verbs exactly as one of: ' . implode( ', ', $verbs ) . '. Any other word is refused as unknown_verb.',
 			)

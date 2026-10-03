@@ -82,6 +82,29 @@ if ( ! defined( 'DAY_IN_SECONDS' ) ) {
 	define( 'DAY_IN_SECONDS', 86400 );
 }
 
+// Site-timezone shims. Tests pick the zone via
+// $GLOBALS['senroflux_test_timezone'] (default UTC).
+if ( ! function_exists( 'wp_timezone_string' ) ) {
+	/** Test stand-in: the configured test timezone string. */
+	function wp_timezone_string(): string {
+		return (string) ( $GLOBALS['senroflux_test_timezone'] ?? 'UTC' );
+	}
+}
+if ( ! function_exists( 'wp_timezone' ) ) {
+	/** Test stand-in: the configured test timezone. */
+	function wp_timezone(): DateTimeZone {
+		return new DateTimeZone( wp_timezone_string() );
+	}
+}
+if ( ! function_exists( 'wp_date' ) ) {
+	/** Test stand-in: format a timestamp in the given (or site) timezone. */
+	function wp_date( string $format, ?int $timestamp = null, ?DateTimeZone $timezone = null ): string {
+		return ( new DateTimeImmutable( '@' . ( $timestamp ?? time() ) ) )
+			->setTimezone( $timezone ?? wp_timezone() )
+			->format( $format );
+	}
+}
+
 // --- Working mini hook registry -------------------------------------------
 
 $GLOBALS['senroflux_test_filters'] = array();
