@@ -114,9 +114,10 @@ final class SkillSet {
 	 * @param string|null       $content_locale    The site content locale for `harness/content-language`.
 	 * @param bool              $images_available  0.3 quality fix (images budget 0): forwarded to
 	 *                                              {@see Pack::skills()} verbatim.
+	 * @param list<string>      $withheld_roles    The run's withheld role names (S6), forwarded to {@see Pack::skillsForRun()}.
 	 * @return list<Skill>
 	 */
-	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null, ?string $content_locale = null, bool $images_available = true ): array {
+	public static function collect( string $consumer, string $goal, mixed $pack = null, ?array $skills_disable = null, ?string $content_locale = null, bool $images_available = true, array $withheld_roles = array() ): array {
 		$pack = $pack instanceof Pack ? $pack : null;
 
 		$base = array();
@@ -125,7 +126,7 @@ final class SkillSet {
 		}
 
 		if ( null !== $pack ) {
-			foreach ( $pack->skills( $images_available ) as $skill ) {
+			foreach ( $pack->skillsForRun( $images_available, $withheld_roles ) as $skill ) {
 				if ( ! isset( $base[ $skill->id ] ) ) {
 					$base[ $skill->id ] = $skill;
 				}

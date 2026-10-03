@@ -115,13 +115,20 @@ final class PostsPackTest extends TestCase {
 		$this->assertSame( 'posts/read-media', $pack->verbFor( 'senroflux/read-media', array() ) );
 	}
 
-	public function test_role_capabilities_require_upload_files_for_media_roles_only(): void {
+	public function test_role_capabilities_require_upload_files_for_every_image_role(): void {
 		$pack = new PostsPack();
 
 		$this->assertSame(
 			array(
+				'search'       => 'upload_files',
+				'missing-alt'  => 'upload_files',
 				'upload'       => 'upload_files',
 				'generate'     => 'upload_files',
+				'alt-text'     => 'upload_files',
+				'featured'     => 'upload_files',
+				'alt'          => 'upload_files',
+				'read-media'   => 'upload_files',
+				'stock-search' => 'upload_files',
 				'stock-import' => 'upload_files',
 			),
 			$pack->roleCapabilities()

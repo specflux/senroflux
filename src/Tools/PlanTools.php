@@ -214,9 +214,19 @@ final class PlanTools {
 			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-generate' )
 		);
 
-		$step_text_description = $media_generate_available
+		// A role withheld at start (an account without upload_files) takes
+		// every media verb with it; no media-search verb means no image step
+		// can ever be carried out, so the description must not ask for one.
+		$images_off = null !== $known_verbs && array() === array_filter(
+			$known_verbs,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-search' )
+		);
+
+		$step_text_description = $images_off
+			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its terms, excerpt) belong in its step. This run cannot add or edit images, so plan no image step.', 'senroflux' )
+			: ( $media_generate_available
 			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
-			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' );
+			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' ) );
 
 		$schema = array(
 			'type'                 => 'object',
