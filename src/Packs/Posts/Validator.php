@@ -293,7 +293,7 @@ final class Validator implements ContentValidator {
 		$allowed = array_flip( $this->vocabulary->blockNames() );
 		$index   = 0;
 
-		$walk = static function ( array $node, callable $recurse, bool $top ) use ( &$allowed, &$index ): ?array {
+		$walk = static function ( array $node, callable $recurse, bool $top, ?string $parent_name = null ) use ( &$allowed, &$index ): ?array {
 			$name = $node['blockName'] ?? null;
 			if ( ! is_string( $name ) ) {
 				if ( $top && '' === trim( (string) ( $node['innerHTML'] ?? '' ) ) ) {
@@ -305,7 +305,7 @@ final class Validator implements ContentValidator {
 					'name'  => 'core/freeform',
 				);
 			}
-			if ( ! str_starts_with( $name, 'core/' ) || ! isset( $allowed[ $name ] ) ) {
+			if ( ! str_starts_with( $name, 'core/' ) || ! isset( $allowed[ $name ] ) || ( 'core/list-item' === $name && 'core/list' !== $parent_name ) ) {
 				return array(
 					'index' => $index,
 					'name'  => $name,
@@ -315,7 +315,7 @@ final class Validator implements ContentValidator {
 			$children = $node['innerBlocks'] ?? array();
 			/** @var list<array<string,mixed>> $children */
 			foreach ( $children as $child ) {
-				$found = $recurse( $child, $recurse, false );
+				$found = $recurse( $child, $recurse, false, $name );
 				if ( null !== $found ) {
 					return $found;
 				}
