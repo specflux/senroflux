@@ -63,12 +63,83 @@ if ( ! class_exists( 'SenroFlux_Test_Fake_Ability' ) ) {
 			if ( is_callable( $this->on_execute ) ) {
 				( $this->on_execute )( $input );
 			}
-			if ( is_callable( $this->execute_result ) ) {
-				return ( $this->execute_result )( $input );
+			$result = is_callable( $this->execute_result ) ? ( $this->execute_result )( $input ) : $this->execute_result;
+
+			// Real WP_Ability::execute() validates the result against the
+			// output schema and turns a mismatch into an error the model sees.
+			if ( null !== $this->output_schema && ! $result instanceof \WP_Error ) {
+				$reason = senroflux_test_schema_violation( $result, $this->output_schema );
+				if ( null !== $reason ) {
+					return new \WP_Error( 'ability_invalid_output', sprintf( 'Ability "%s" has invalid output. Reason: %s', $this->name, $reason ) );
+				}
 			}
 
-			return $this->execute_result;
+			return $result;
 		}
+	}
+}
+
+if ( ! function_exists( 'senroflux_test_schema_violation' ) ) {
+	/**
+	 * The subset of JSON Schema that WordPress's rest_validate_value_from_schema()
+	 * enforces and SenroFlux's schemas use: type, properties, required,
+	 * additionalProperties:false, items, enum. Null when the value conforms.
+	 *
+	 * @param mixed               $value  Value to check.
+	 * @param array<string,mixed> $schema Schema.
+	 * @param string              $path   Path for the message.
+	 */
+	function senroflux_test_schema_violation( mixed $value, array $schema, string $path = 'output' ): ?string {
+		$types = isset( $schema['type'] ) ? (array) $schema['type'] : array();
+		if ( array() !== $types ) {
+			$matches = false;
+			foreach ( $types as $type ) {
+				$matches = $matches || match ( $type ) {
+					'object'  => is_array( $value ) && ( array() === $value || ! array_is_list( $value ) ),
+					'array'   => is_array( $value ) && array_is_list( $value ),
+					'string'  => is_string( $value ),
+					'integer' => is_int( $value ),
+					'number'  => is_int( $value ) || is_float( $value ),
+					'boolean' => is_bool( $value ),
+					'null'    => null === $value,
+					default   => true,
+				};
+			}
+			if ( ! $matches ) {
+				return sprintf( '%s is not of type %s.', $path, implode( ',', $types ) );
+			}
+		}
+		if ( isset( $schema['enum'] ) && is_array( $schema['enum'] ) && ! in_array( $value, $schema['enum'], true ) ) {
+			return sprintf( '%s is not one of %s.', $path, implode( ', ', array_map( 'strval', $schema['enum'] ) ) );
+		}
+		if ( is_array( $value ) && ! array_is_list( $value ) ) {
+			$properties = is_array( $schema['properties'] ?? null ) ? $schema['properties'] : array();
+			foreach ( (array) ( $schema['required'] ?? array() ) as $required ) {
+				if ( ! array_key_exists( $required, $value ) ) {
+					return sprintf( '%s is a required property of %s.', $required, $path );
+				}
+			}
+			foreach ( $value as $key => $item ) {
+				if ( isset( $properties[ $key ] ) && is_array( $properties[ $key ] ) ) {
+					$reason = senroflux_test_schema_violation( $item, $properties[ $key ], $path . '[' . $key . ']' );
+					if ( null !== $reason ) {
+						return $reason;
+					}
+				} elseif ( false === ( $schema['additionalProperties'] ?? true ) ) {
+					return sprintf( '%s is not a valid property of Object.', $key );
+				}
+			}
+		}
+		if ( is_array( $value ) && array_is_list( $value ) && is_array( $schema['items'] ?? null ) ) {
+			foreach ( $value as $index => $item ) {
+				$reason = senroflux_test_schema_violation( $item, $schema['items'], $path . '[' . $index . ']' );
+				if ( null !== $reason ) {
+					return $reason;
+				}
+			}
+		}
+
+		return null;
 	}
 }
 

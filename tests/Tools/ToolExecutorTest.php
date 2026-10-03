@@ -655,6 +655,39 @@ final class ToolExecutorTest extends TestCase {
 		$this->assertSame( '18.5', $seen['received']['regular_price'] );
 	}
 
+	/** Live J13: shipping-zone-save got `"enabled":"true"`, which WordPress's input check refuses. */
+	public function test_true_and_false_text_become_booleans_only_for_boolean_properties(): void {
+		$seen = $this->registerRecordingAbility(
+			array(
+				'type'       => 'object',
+				'properties' => array(
+					'enabled' => array( 'type' => 'boolean' ),
+					'flag'    => array( 'type' => array( 'boolean', 'string' ) ),
+					'label'   => array( 'type' => 'string' ),
+				),
+			)
+		);
+
+		$this->executor->call(
+			'woocommerce/product-create',
+			array(
+				'enabled' => 'true',
+				'flag'    => 'false',
+				'label'   => 'true',
+			)
+		);
+
+		$this->assertTrue( $seen['received']['enabled'] );
+		$this->assertSame( 'false', $seen['received']['flag'] );
+		$this->assertSame( 'true', $seen['received']['label'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'enabled' => 'FALSE' ) );
+		$this->assertFalse( $seen['received']['enabled'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'enabled' => 'yes' ) );
+		$this->assertSame( 'yes', $seen['received']['enabled'] );
+	}
+
 	public function test_all_of_and_any_of_are_repaired_the_same_way(): void {
 		foreach ( array( 'allOf', 'anyOf' ) as $keyword ) {
 			$seen = $this->registerRecordingAbility( $this->wooShapedSchema( $keyword ) );

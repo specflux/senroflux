@@ -1258,6 +1258,8 @@ final class Abilities {
 			'properties'           => array(
 				'id'              => array( 'type' => 'integer' ),
 				'status'          => array( 'type' => 'string' ),
+				// The stored site-local date, present only when the call set one.
+				'date'            => array( 'type' => 'string' ),
 				// 0.3 quality fix: present (true) only when the call sent a
 				// non-empty `content` ALONGSIDE `sections` — `sections` was
 				// used, `content` was dropped.
