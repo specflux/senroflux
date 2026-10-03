@@ -50,6 +50,39 @@ final class ValidatorTest extends TestCase {
 		$this->assertSame( 'invalid_markup', $result['wp_error']->get_error_code() );
 	}
 
+	public function test_explicit_core_namespace_is_valid_and_stored_canonically(): void {
+		$result = $this->validator->clean( $this->coreNamespacedSample() );
+
+		$this->assertTrue( $result['ok'], $result['wp_error'] ? $result['wp_error']->get_error_message() : '' );
+		$this->assertStringContainsString( '<!-- wp:paragraph -->', $result['content'] );
+		$this->assertStringNotContainsString( 'wp:core/', $result['content'] );
+	}
+
+	public function test_mismatched_closer_is_refused_with_a_near_excerpt(): void {
+		$content = '<!-- wp:core/paragraph --><p>Drop your left ear.</p><!-- /wp:core/heading -->';
+		$result  = $this->validator->clean( $content );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'invalid_markup', $result['wp_error']->get_error_code() );
+		$this->assertStringStartsWith( 'The post content is not well-formed block markup.', $result['wp_error']->get_error_message() );
+		$this->assertStringContainsString( 'near: "', $result['wp_error']->get_error_message() );
+	}
+
+	public function test_unclosed_block_refusal_carries_a_near_excerpt(): void {
+		$result = $this->validator->clean( '<!-- wp:paragraph --><p>Unclosed' );
+
+		$this->assertStringContainsString( 'near: "', $result['wp_error']->get_error_message() );
+		$this->assertLessThanOrEqual( 140, strlen( explode( 'near: "', $result['wp_error']->get_error_message() )[1] ) );
+	}
+
+	public function test_only_the_core_namespace_is_normalised(): void {
+		$content = '<!-- wp:acme/paragraph --><p>x</p><!-- /wp:acme/paragraph -->';
+		$result  = $this->validator->clean( $content );
+
+		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
+		$this->assertStringContainsString( 'acme/paragraph', $result['wp_error']->get_error_message() );
+	}
+
 	public function test_unknown_block_is_refused(): void {
 		$content = '<!-- wp:senroflux/hero --><div>x</div><!-- /wp:senroflux/hero -->';
 		$result  = $this->validator->clean( $content );
@@ -242,5 +275,27 @@ final class ValidatorTest extends TestCase {
 
 	private function pullQuoteMarkup(): string {
 		return '<!-- wp:pullquote --><figure class="wp-block-pullquote"><blockquote><p>A short line worth pulling out.</p><cite>Someone</cite></blockquote></figure><!-- /wp:pullquote -->';
+	}
+
+	private function coreNamespacedSample(): string {
+		return <<<'HTML'
+<!-- wp:core/paragraph -->
+<p>Most desk-based days are built from small, repeated stillness.</p>
+<!-- /wp:core/paragraph -->
+
+<!-- wp:core/heading {"level":2} -->
+<h2 class="wp-block-heading">Neck side stretch</h2>
+<!-- /wp:core/heading -->
+
+<!-- wp:core/list {"ordered":true} -->
+<ol class="wp-block-list"><!-- wp:core/list-item -->
+<li>Sit tall, let your right hand rest on your desk.</li>
+<!-- /wp:core/list-item -->
+
+<!-- wp:core/list-item -->
+<li>Drop your left ear toward your left shoulder.</li>
+<!-- /wp:core/list-item --></ol>
+<!-- /wp:core/list -->
+HTML;
 	}
 }

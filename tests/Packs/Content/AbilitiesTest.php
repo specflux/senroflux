@@ -695,18 +695,42 @@ final class AbilitiesTest extends TestCase {
 				array(
 					'functionResponse' => array(
 						'id'       => 'call-1',
-						'name'     => 'senroflux/stock-image-search',
+						'name'     => 'wpab__senroflux__stock-image-search',
 						'response' => array( 'results' => array() ),
 					),
 				),
 			),
 		);
-		$this->store->appendStep( $this->runId, StepKind::ToolResult, $message, 'senroflux/stock-image-search', null, 'ok' );
+		$this->store->appendStep( $this->runId, StepKind::ToolResult, $message, 'wpab__senroflux__stock-image-search', null, 'ok' );
 
 		$result = $this->longPageWithReason( 'Nothing suitable was found anywhere.' );
 
 		$this->assertIsArray( $result, $result instanceof WP_Error ? $result->get_error_message() : '' );
 		$this->assertSame( 'Nothing suitable was found anywhere.', $result['no_image_reason'] ?? null );
+	}
+
+	/** Steps store the mangled function name, so an errored search is read from that form too. */
+	public function test_create_post_accepts_no_image_reason_when_stock_search_errored_under_its_stored_name(): void {
+		$this->grant( 'edit_pages' );
+		$this->exhaustImagesBudget();
+
+		$message = array(
+			'role'  => 'user',
+			'parts' => array(
+				array(
+					'functionResponse' => array(
+						'id'       => 'call-1',
+						'name'     => 'wpab__senroflux__stock-image-search',
+						'response' => array( 'error' => 'provider down' ),
+					),
+				),
+			),
+		);
+		$this->store->appendStep( $this->runId, StepKind::ToolResult, $message, 'wpab__senroflux__stock-image-search', null, 'error' );
+
+		$result = $this->longPageWithReason( 'Nothing suitable was found anywhere.' );
+
+		$this->assertIsArray( $result, $result instanceof WP_Error ? $result->get_error_message() : '' );
 	}
 
 	/**

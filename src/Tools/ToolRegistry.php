@@ -114,6 +114,53 @@ final class ToolRegistry {
 	}
 
 	/**
+	 * Resolve a bare tool name (`stock-image-search`, the model dropping the
+	 * `wpab__senroflux__` prefix) to the full function name of the ONE admitted
+	 * ability that ends in that segment; null when none or several do.
+	 */
+	public function resolveBareName( string $function_name ): ?string {
+		if ( '' === $function_name || str_contains( $function_name, '__' ) || str_contains( $function_name, '/' ) ) {
+			return null;
+		}
+
+		$matches = array();
+		foreach ( $this->names as $name ) {
+			if ( self::finalSegment( $name ) === $function_name ) {
+				$matches[] = $name;
+			}
+		}
+
+		return 1 === count( $matches ) ? self::functionName( $matches[0] ) : null;
+	}
+
+	/**
+	 * Up to `$limit` exact function names of admitted abilities whose final
+	 * segment is near the one called, closest first.
+	 *
+	 * @return list<string>
+	 */
+	public function closeMatches( string $function_name, int $limit = 3 ): array {
+		$wanted = self::finalSegment( self::abilityName( $function_name ) );
+		$scored = array();
+		foreach ( $this->names as $name ) {
+			$segment  = self::finalSegment( $name );
+			$distance = levenshtein( $wanted, $segment );
+			if ( $distance <= 3 || ( strlen( $wanted ) >= 4 && ( str_contains( $segment, $wanted ) || str_contains( $wanted, $segment ) ) ) ) {
+				$scored[ self::functionName( $name ) ] = $distance;
+			}
+		}
+		asort( $scored );
+
+		return array_slice( array_keys( $scored ), 0, $limit );
+	}
+
+	private static function finalSegment( string $ability_name ): string {
+		$pos = strrpos( $ability_name, '/' );
+
+		return false === $pos ? $ability_name : substr( $ability_name, $pos + 1 );
+	}
+
+	/**
 	 * All admitted ability names.
 	 *
 	 * @return list<string>

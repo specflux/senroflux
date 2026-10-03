@@ -120,6 +120,41 @@ final class ValidatorTest extends TestCase {
 		$this->assertSame( 'invalid_markup', $this->errorCode( $this->validator->validate( $content ) ) );
 	}
 
+	public function test_explicit_core_namespace_passes_the_round_trip(): void {
+		$sample = <<<'HTML'
+<!-- wp:core/paragraph -->
+<p>Most desk-based days are built from small, repeated stillness.</p>
+<!-- /wp:core/paragraph -->
+
+<!-- wp:core/heading {"level":2} -->
+<h2 class="wp-block-heading">Neck side stretch</h2>
+<!-- /wp:core/heading -->
+
+<!-- wp:core/list {"ordered":true} -->
+<ol class="wp-block-list"><!-- wp:core/list-item -->
+<li>Sit tall, let your right hand rest on your desk.</li>
+<!-- /wp:core/list-item -->
+
+<!-- wp:core/list-item -->
+<li>Drop your left ear toward your left shoulder.</li>
+<!-- /wp:core/list-item --></ol>
+<!-- /wp:core/list -->
+HTML;
+		$result = $this->validator->validate( $sample );
+
+		// Later steps (vocabulary) may still refuse; the round trip must not.
+		$this->assertTrue( true === $result || 'invalid_markup' !== $this->errorCode( $result ) );
+	}
+
+	public function test_mismatched_closer_refusal_carries_a_near_excerpt(): void {
+		$content = '<!-- wp:core/paragraph --><p>hi</p><!-- /wp:core/heading -->';
+		$error   = $this->validator->validate( $content );
+
+		$this->assertSame( 'invalid_markup', $this->errorCode( $error ) );
+		$this->assertStringStartsWith( 'The page content is not well-formed block markup.', $error->get_error_message() );
+		$this->assertStringContainsString( 'near: "', $error->get_error_message() );
+	}
+
 	// --- Step 2: unknown_block --------------------------------------------
 
 	public function test_unknown_block_refused_for_non_core_block(): void {

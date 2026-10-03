@@ -583,7 +583,7 @@ final class Runner {
 				);
 			}
 
-			$pending_calls = $this->unconsumedCalls( $run );
+			$pending_calls = $this->unconsumedCalls( $run, $registry );
 
 			if ( null === $pending_calls ) {
 				$this->waitOutTransientBackoff( $run );
@@ -668,7 +668,7 @@ final class Runner {
 				$this->addTokens( $run->id, $turn->tokensIn, $turn->tokensOut );
 				$run = $this->refresh( $run );
 
-				$pending_calls = $this->extractCalls( $turn->message );
+				$pending_calls = $this->extractCalls( $turn->message, $registry );
 
 				if ( array() === $pending_calls ) {
 					// An EMPTY turn (no text, no calls) is never the model
@@ -1619,7 +1619,7 @@ final class Runner {
 	 *
 	 * @return list<array{id:string,name:string,args:mixed}>|null
 	 */
-	private function unconsumedCalls( Run $run ): ?array {
+	private function unconsumedCalls( Run $run, ToolRegistry $registry ): ?array {
 		$steps = $this->store->getSteps( $run->id );
 		if ( array() === $steps ) {
 			return null;
@@ -1652,7 +1652,7 @@ final class Runner {
 			return null;
 		}
 
-		$calls = $this->extractCalls( Message::fromArray( $model_step->messageArray ) );
+		$calls = $this->extractCalls( Message::fromArray( $model_step->messageArray ), $registry );
 
 		$pending = array_values(
 			array_filter(
@@ -2127,14 +2127,19 @@ final class Runner {
 	 *
 	 * @return list<array{id:string,name:string,args:mixed}>
 	 */
-	private function extractCalls( Message $message ): array {
+	private function extractCalls( Message $message, ?ToolRegistry $registry = null ): array {
 		$calls = array();
 		foreach ( $message->getParts() as $part ) {
 			$function_call = $part->getFunctionCall();
 			if ( $function_call instanceof FunctionCall ) {
+				$name = self::normalizeFunctionName( (string) $function_call->getName() );
+				// A bare ability name (the model dropped `wpab__senroflux__`)
+				// resolves here, where every call name enters the Runner, so
+				// the plan verb, gate, tier, budget and stored step all see
+				// the full name.
 				$calls[] = array(
 					'id'   => (string) ( $function_call->getId() ?? '' ),
-					'name' => self::normalizeFunctionName( (string) $function_call->getName() ),
+					'name' => $registry?->resolveBareName( $name ) ?? $name,
 					'args' => $function_call->getArgs(),
 				);
 			}
@@ -2205,7 +2210,7 @@ final class Runner {
 		}
 
 		if ( ! $registry->admits( $name ) ) {
-			return ToolOutcome::unknownTool( $name );
+			return ToolOutcome::unknownTool( $call['name'], $registry->closeMatches( $call['name'] ) );
 		}
 		// Pass the model's args through verbatim: an EMPTY args object must
 		// stay an empty array, because core validates it against the ability's
