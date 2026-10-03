@@ -226,6 +226,15 @@ final class ToolExecutor {
 			}
 		}
 
+		// A boolean sent as text ("true"/"false"), only where the schema
+		// admits a boolean and not a string.
+		if ( is_string( $value ) && in_array( strtolower( $value ), array( 'true', 'false' ), true )
+			&& in_array( 'boolean', $types, true )
+			&& ! in_array( 'string', $types, true )
+		) {
+			return 'true' === strtolower( $value );
+		}
+
 		if ( ( is_int( $value ) || ( is_float( $value ) && is_finite( $value ) ) )
 			&& in_array( 'string', $types, true )
 			&& ! in_array( 'number', $types, true )
