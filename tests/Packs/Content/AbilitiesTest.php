@@ -2898,4 +2898,72 @@ final class AbilitiesTest extends TestCase {
 		$stored = $GLOBALS['senroflux_test_posts'][ $result['id'] ];
 		$this->assertStringContainsString( 'A brand new promise for this brand', $stored->post_content );
 	}
+
+	// --- preflight: the same input checks, before any park ------------------
+
+	public function test_preflight_refuses_invalid_create_with_the_same_error_execute_returns(): void {
+		$this->grant( 'edit_pages' );
+		$input = array(
+			'post_type' => 'page',
+			'title'     => 'T',
+			'content'   => '<!-- wp:video --><figure></figure><!-- /wp:video -->',
+		);
+
+		$pre  = ( new PagesPack() )->validateCall( 'senroflux/create-post', $input );
+		$exec = $this->ability( 'senroflux/create-post' )->execute( $input );
+
+		$this->assertInstanceOf( WP_Error::class, $pre );
+		$this->assertSame( $exec->get_error_code(), $pre->get_error_code() );
+		$this->assertSame( $exec->get_error_message(), $pre->get_error_message() );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'] );
+	}
+
+	public function test_preflight_passes_a_valid_create_and_writes_nothing(): void {
+		$result = ( new PagesPack() )->validateCall(
+			'senroflux/create-post',
+			array(
+				'post_type'       => 'page',
+				'title'           => 'T',
+				'content'         => $this->validContent(),
+				'no_image_reason' => 'short utility page',
+			)
+		);
+
+		$this->assertNull( $result );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'] );
+	}
+
+	public function test_preflight_has_no_opinion_on_other_abilities(): void {
+		$this->assertNull( ( new PagesPack() )->validateCall( 'senroflux/read-content', array( 'content' => '<!-- wp:video -->' ) ) );
+		$this->assertNull( ( new PagesPack() )->validateCall( 'woocommerce/product-create', array() ) );
+	}
+
+	public function test_preflight_leaves_the_stale_write_compare_to_execute(): void {
+		$this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post' );
+		$input = array(
+			'id'              => 100,
+			'title'           => 'Sneaky edit',
+			'content'         => $this->validContent(),
+			'no_image_reason' => 'short utility page',
+		);
+
+		$this->assertNull( ( new PagesPack() )->validateCall( 'senroflux/update-post', $input ), 'the run never read post 100, yet preflight passes it' );
+		$this->assertSame( 'stale_write', $this->ability( 'senroflux/update-post' )->execute( $input )->get_error_code() );
+	}
+
+	public function test_preflight_refuses_invalid_update_content(): void {
+		$this->seedPost();
+
+		$error = ( new PagesPack() )->validateCall(
+			'senroflux/update-post',
+			array(
+				'id'      => 100,
+				'content' => '<!-- wp:video --><figure></figure><!-- /wp:video -->',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'unknown_block', $error->get_error_code() );
+	}
 }

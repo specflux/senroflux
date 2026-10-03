@@ -293,7 +293,7 @@ final class Validator implements ContentValidator {
 		$allowed = array_flip( $this->vocabulary->blockNames() );
 		$index   = 0;
 
-		$walk = static function ( array $node, callable $recurse, bool $top ) use ( &$allowed, &$index ): ?array {
+		$walk = static function ( array $node, callable $recurse, bool $top, ?string $parent_name = null ) use ( &$allowed, &$index ): ?array {
 			$name = $node['blockName'] ?? null;
 			if ( ! is_string( $name ) ) {
 				if ( $top && '' === trim( (string) ( $node['innerHTML'] ?? '' ) ) ) {
@@ -305,7 +305,7 @@ final class Validator implements ContentValidator {
 					'name'  => 'core/freeform',
 				);
 			}
-			if ( ! str_starts_with( $name, 'core/' ) || ! isset( $allowed[ $name ] ) ) {
+			if ( ! str_starts_with( $name, 'core/' ) || ! isset( $allowed[ $name ] ) || ( 'core/list-item' === $name && 'core/list' !== $parent_name ) ) {
 				return array(
 					'index' => $index,
 					'name'  => $name,
@@ -315,7 +315,7 @@ final class Validator implements ContentValidator {
 			$children = $node['innerBlocks'] ?? array();
 			/** @var list<array<string,mixed>> $children */
 			foreach ( $children as $child ) {
-				$found = $recurse( $child, $recurse, false );
+				$found = $recurse( $child, $recurse, false, $name );
 				if ( null !== $found ) {
 					return $found;
 				}
@@ -854,7 +854,7 @@ final class Validator implements ContentValidator {
 				__( 'Block %1$d "%2$s" is not a posts-vocabulary block.', 'senroflux' ),
 				$data['index'] ?? 0,
 				$data['name'] ?? 'unknown'
-			),
+			) . $this->unknownBlockHint( (string) ( $data['name'] ?? '' ) ),
 			'disallowed_markup'      => $this->disallowedMarkupMessage( $data ),
 			'decorative_color'       => sprintf(
 				/* translators: %1$d: block index, %2$s: block name, %3$s: attribute. */
@@ -887,6 +887,21 @@ final class Validator implements ContentValidator {
 			),
 			'post_shape'             => $this->postShapeMessage( $data ),
 			default                  => __( 'Invalid post content.', 'senroflux' ),
+		};
+	}
+
+	/**
+	 * What to write instead of a block name the model keeps getting wrong:
+	 * the pack's feature patterns are core blocks carrying a metadata name,
+	 * never `senroflux/*` blocks (the forms the prose rules give).
+	 */
+	private function unknownBlockHint( string $name ): string {
+		return match ( true ) {
+			'senroflux/closing-cta' === $name => ' ' . __( 'Write a closing call to action as a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button.', 'senroflux' ),
+			'senroflux/pull-quote' === $name  => ' ' . __( 'Write a pull quote as a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.', 'senroflux' ),
+			str_starts_with( $name, 'senroflux/' ) => ' ' . __( 'Never write a block whose name starts with senroflux/; use core blocks.', 'senroflux' ),
+			'core/list-item' === $name        => ' ' . __( 'A core/list-item is only valid directly inside a core/list.', 'senroflux' ),
+			default                           => '',
 		};
 	}
 

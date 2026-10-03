@@ -127,7 +127,7 @@ final class VocabularyTest extends TestCase {
 	public function test_block_names_include_prose_and_feature_blocks(): void {
 		$names = ( new Vocabulary() )->blockNames();
 
-		foreach ( array( 'core/paragraph', 'core/heading', 'core/list', 'core/quote', 'core/image', 'core/code', 'core/group', 'core/buttons', 'core/button', 'core/pullquote' ) as $expected ) {
+		foreach ( array( 'core/paragraph', 'core/heading', 'core/list', 'core/quote', 'core/image', 'core/code', 'core/group', 'core/buttons', 'core/button', 'core/pullquote', 'core/list-item' ) as $expected ) {
 			$this->assertContains( $expected, $names );
 		}
 	}

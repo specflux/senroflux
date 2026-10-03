@@ -92,7 +92,10 @@ final class Vocabulary implements ContentVocabulary {
 
 	/**
 	 * Every block name the vocabulary admits: prose plus the feature
-	 * patterns' own constituent blocks (Validator step 2).
+	 * patterns' own constituent blocks (Validator step 2) and `core/list-item`,
+	 * which WordPress 6.1+ nests inside every `core/list`. It is deliberately
+	 * not prose: it is never a top-level block (the Validator admits it only
+	 * as a direct child of `core/list`).
 	 *
 	 * @return list<string>
 	 */
@@ -101,7 +104,7 @@ final class Vocabulary implements ContentVocabulary {
 			array_unique(
 				array_merge(
 					$this->proseBlockNames(),
-					array( 'core/group', 'core/buttons', 'core/button', 'core/pullquote' )
+					array( 'core/group', 'core/buttons', 'core/button', 'core/pullquote', 'core/list-item' )
 				)
 			)
 		);

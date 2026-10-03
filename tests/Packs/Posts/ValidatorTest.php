@@ -58,6 +58,63 @@ final class ValidatorTest extends TestCase {
 		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
 	}
 
+	private function listMarkup( string $items ): string {
+		return '<!-- wp:list --><ul class="wp-block-list">' . $items . '</ul><!-- /wp:list -->';
+	}
+
+	private function listItem( string $text, string $nested = '' ): string {
+		return '<!-- wp:list-item --><li>' . $text . $nested . '</li><!-- /wp:list-item -->';
+	}
+
+	public function test_a_real_two_item_list_is_valid(): void {
+		$content = $this->listMarkup( $this->listItem( 'One' ) . $this->listItem( 'Two' ) );
+		$result  = $this->validator->clean( $content );
+
+		$this->assertTrue( $result['ok'], $result['wp_error'] ? $result['wp_error']->get_error_message() : '' );
+		$this->assertSame( $content, $result['content'] );
+	}
+
+	public function test_a_nested_list_is_valid(): void {
+		$content = $this->listMarkup( $this->listItem( 'One', $this->listMarkup( $this->listItem( 'Inner' ) ) ) . $this->listItem( 'Two' ) );
+		$result  = $this->validator->clean( $content );
+
+		$this->assertTrue( $result['ok'], $result['wp_error'] ? $result['wp_error']->get_error_message() : '' );
+	}
+
+	public function test_a_stray_list_item_outside_a_list_is_refused(): void {
+		$result = $this->validator->clean( $this->listItem( 'Loose' ) );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
+		$this->assertStringContainsString( 'only valid directly inside a core/list', $result['wp_error']->get_error_message() );
+	}
+
+	public function test_a_list_item_inside_a_quote_is_refused(): void {
+		$content = '<!-- wp:quote --><blockquote class="wp-block-quote">' . $this->listItem( 'Loose' ) . '</blockquote><!-- /wp:quote -->';
+		$result  = $this->validator->clean( $content );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
+	}
+
+	public function test_a_senroflux_closing_cta_block_is_refused_with_the_core_form(): void {
+		$result = $this->validator->clean( '<!-- wp:senroflux/closing-cta --><div>x</div><!-- /wp:senroflux/closing-cta -->' );
+
+		$this->assertFalse( $result['ok'] );
+		$message = $result['wp_error']->get_error_message();
+		$this->assertStringContainsString( 'core/group', $message );
+		$this->assertStringContainsString( '{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}', $message );
+	}
+
+	public function test_a_senroflux_pull_quote_block_is_refused_with_the_core_form(): void {
+		$result = $this->validator->clean( '<!-- wp:senroflux/pull-quote --><div>x</div><!-- /wp:senroflux/pull-quote -->' );
+
+		$this->assertFalse( $result['ok'] );
+		$message = $result['wp_error']->get_error_message();
+		$this->assertStringContainsString( 'core/pullquote', $message );
+		$this->assertStringContainsString( '{"metadata":{"name":"senroflux/pull-quote"}}', $message );
+	}
+
 	public function test_disallowed_html_tag_is_refused(): void {
 		$content = '<!-- wp:paragraph --><p><script>alert(1)</script></p><!-- /wp:paragraph -->';
 		$result  = $this->validator->clean( $content );
