@@ -81,15 +81,18 @@ final class PostsPack extends Pack {
 	/**
 	 * space-bunny live runs (2026-09-28 bunny1-4, fix1) spent 228k-286k tokens
 	 * and 51-62 steps on one post against the shipped 250000/60; three of five
-	 * died of a budget.
+	 * died of a budget. Live J3 (three illustrated, tagged, scheduled posts in
+	 * one run) then ended at 384k-396k of 400000 tokens mid-work in two runs,
+	 * so the ceiling is 800000 tokens, 150 steps, 75 tool calls (the pack's
+	 * usual one-call-per-two-steps ratio).
 	 *
 	 * @return array<string,int>
 	 */
 	public function defaultBudget(): array {
 		return array(
-			Budget::MAX_STEPS      => 90,
-			Budget::MAX_TOOL_CALLS => 45,
-			Budget::MAX_TOKENS     => 400000,
+			Budget::MAX_STEPS      => 150,
+			Budget::MAX_TOOL_CALLS => 75,
+			Budget::MAX_TOKENS     => 800000,
 		);
 	}
 
