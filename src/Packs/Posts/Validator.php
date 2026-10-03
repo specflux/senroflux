@@ -854,7 +854,7 @@ final class Validator implements ContentValidator {
 				__( 'Block %1$d "%2$s" is not a posts-vocabulary block.', 'senroflux' ),
 				$data['index'] ?? 0,
 				$data['name'] ?? 'unknown'
-			),
+			) . $this->unknownBlockHint( (string) ( $data['name'] ?? '' ) ),
 			'disallowed_markup'      => $this->disallowedMarkupMessage( $data ),
 			'decorative_color'       => sprintf(
 				/* translators: %1$d: block index, %2$s: block name, %3$s: attribute. */
@@ -887,6 +887,21 @@ final class Validator implements ContentValidator {
 			),
 			'post_shape'             => $this->postShapeMessage( $data ),
 			default                  => __( 'Invalid post content.', 'senroflux' ),
+		};
+	}
+
+	/**
+	 * What to write instead of a block name the model keeps getting wrong:
+	 * the pack's feature patterns are core blocks carrying a metadata name,
+	 * never `senroflux/*` blocks (the forms the prose rules give).
+	 */
+	private function unknownBlockHint( string $name ): string {
+		return match ( true ) {
+			'senroflux/closing-cta' === $name => ' ' . __( 'Write a closing call to action as a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button.', 'senroflux' ),
+			'senroflux/pull-quote' === $name  => ' ' . __( 'Write a pull quote as a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.', 'senroflux' ),
+			str_starts_with( $name, 'senroflux/' ) => ' ' . __( 'Never write a block whose name starts with senroflux/; use core blocks.', 'senroflux' ),
+			'core/list-item' === $name        => ' ' . __( 'A core/list-item is only valid directly inside a core/list.', 'senroflux' ),
+			default                           => '',
 		};
 	}
 

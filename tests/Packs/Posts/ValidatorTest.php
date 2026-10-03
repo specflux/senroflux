@@ -86,6 +86,7 @@ final class ValidatorTest extends TestCase {
 
 		$this->assertFalse( $result['ok'] );
 		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
+		$this->assertStringContainsString( 'only valid directly inside a core/list', $result['wp_error']->get_error_message() );
 	}
 
 	public function test_a_list_item_inside_a_quote_is_refused(): void {
@@ -94,6 +95,24 @@ final class ValidatorTest extends TestCase {
 
 		$this->assertFalse( $result['ok'] );
 		$this->assertSame( 'unknown_block', $result['wp_error']->get_error_code() );
+	}
+
+	public function test_a_senroflux_closing_cta_block_is_refused_with_the_core_form(): void {
+		$result = $this->validator->clean( '<!-- wp:senroflux/closing-cta --><div>x</div><!-- /wp:senroflux/closing-cta -->' );
+
+		$this->assertFalse( $result['ok'] );
+		$message = $result['wp_error']->get_error_message();
+		$this->assertStringContainsString( 'core/group', $message );
+		$this->assertStringContainsString( '{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}', $message );
+	}
+
+	public function test_a_senroflux_pull_quote_block_is_refused_with_the_core_form(): void {
+		$result = $this->validator->clean( '<!-- wp:senroflux/pull-quote --><div>x</div><!-- /wp:senroflux/pull-quote -->' );
+
+		$this->assertFalse( $result['ok'] );
+		$message = $result['wp_error']->get_error_message();
+		$this->assertStringContainsString( 'core/pullquote', $message );
+		$this->assertStringContainsString( '{"metadata":{"name":"senroflux/pull-quote"}}', $message );
 	}
 
 	public function test_disallowed_html_tag_is_refused(): void {
