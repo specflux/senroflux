@@ -115,17 +115,47 @@ final class PostsPackTest extends TestCase {
 		$this->assertSame( 'posts/read-media', $pack->verbFor( 'senroflux/read-media', array() ) );
 	}
 
-	public function test_role_capabilities_require_upload_files_for_media_roles_only(): void {
+	public function test_role_capabilities_require_upload_files_for_every_image_role(): void {
 		$pack = new PostsPack();
 
 		$this->assertSame(
 			array(
+				'search'       => 'upload_files',
+				'missing-alt'  => 'upload_files',
 				'upload'       => 'upload_files',
 				'generate'     => 'upload_files',
+				'alt-text'     => 'upload_files',
+				'featured'     => 'upload_files',
+				'alt'          => 'upload_files',
+				'read-media'   => 'upload_files',
+				'stock-search' => 'upload_files',
 				'stock-import' => 'upload_files',
 			),
 			$pack->roleCapabilities()
 		);
+	}
+
+	/** Live J7: a Contributor guessed term names; list-terms is the Tier-0 read that shows the real ones. */
+	public function test_list_terms_is_a_tier_zero_read_wired_through_every_seam(): void {
+		$pack = new PostsPack();
+
+		$this->assertSame( 'posts/list-terms', $pack->verbFor( 'senroflux/list-terms', array() ) );
+		$this->assertSame( 0, $pack->verbMap()['posts/list-terms'] );
+		$this->assertSame( array( 'posts/list-terms' ), $pack->roleVerbs()['list-terms'] );
+		$this->assertSame( 'senroflux/list-terms', $pack->resolveAbilities()['list-terms'] );
+		$this->assertContains( 'senroflux/list-terms', $pack->allowList() );
+		$this->assertSame( 'senroflux/list-terms', $pack->gateVerbFor( 'posts/list-terms' ) );
+		$this->assertSame( 0, $pack->agentSafetyVerbMap()['senroflux/list-terms'] );
+		$this->assertArrayNotHasKey( 'list-terms', $pack->roleCapabilities(), 'not an image role: a Contributor keeps it' );
+	}
+
+	public function test_prose_rules_tell_the_model_to_list_terms_first_and_reuse_them(): void {
+		$prose = array_values( array_filter( ( new PostsPack() )->skills(), static fn ( $s ) => 'posts/prose-rules' === $s->id ) );
+
+		$this->assertCount( 1, $prose );
+		$this->assertStringContainsString( 'call list-terms for category and for post_tag and reuse an existing name', $prose[0]->body );
+		$this->assertStringContainsString( 'only if your account may create terms', $prose[0]->body );
+		$this->assertStringContainsString( 'posts/list-terms', $prose[0]->body, 'a plan step may name the verb' );
 	}
 
 	public function test_withheld_role_notice(): void {

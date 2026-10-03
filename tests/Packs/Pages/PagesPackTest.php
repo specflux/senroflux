@@ -166,7 +166,7 @@ final class PagesPackTest extends TestCase {
 		$this->assertSame( array( 'pages/media-stock-import' ), $pack->roleVerbs()['stock-import'] );
 
 		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
-		$this->assertArrayNotHasKey( 'stock-search', $pack->roleCapabilities() );
+		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-search'] );
 		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
@@ -261,13 +261,20 @@ final class PagesPackTest extends TestCase {
 		$this->assertSame( 'pages/read-media', $pack->verbFor( 'senroflux/read-media', array() ) );
 	}
 
-	public function test_role_capabilities_require_upload_files_for_media_roles_only(): void {
+	public function test_role_capabilities_require_upload_files_for_every_image_role(): void {
 		$pack = new PagesPack();
 
 		$this->assertSame(
 			array(
+				'search'       => 'upload_files',
+				'missing-alt'  => 'upload_files',
 				'upload'       => 'upload_files',
 				'generate'     => 'upload_files',
+				'alt-text'     => 'upload_files',
+				'featured'     => 'upload_files',
+				'alt'          => 'upload_files',
+				'read-media'   => 'upload_files',
+				'stock-search' => 'upload_files',
 				'stock-import' => 'upload_files',
 			),
 			$pack->roleCapabilities()

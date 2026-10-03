@@ -1841,7 +1841,7 @@ final class Runner {
 		// run's images budget is 0 (see ToolRegistry::forRun()) — see
 		// Pack::skills()'s $images_available parameter.
 		$images_available = 0 !== (int) ( $run->budget[ Budget::IMAGES ] ?? 0 );
-		$skills           = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale, $images_available );
+		$skills           = SkillSet::collect( $run->consumer, $run->goal, $pack, $run->skillsDisable, $run->contentLocale, $images_available, $run->withheldRoles );
 
 		$ceiling = SkillSet::ceilingError( $skills );
 		if ( null !== $ceiling ) {
@@ -3674,6 +3674,18 @@ final class Runner {
 					static fn ( string $verb ): bool => 'generate-image' !== $verb && ! str_ends_with( $verb, '/media-generate' )
 				)
 			);
+		}
+
+		// A role withheld at start (S6) has its tool dropped; its verbs are
+		// no more plannable than media-generate above.
+		$pack = is_callable( $this->pack_resolver ) ? ( $this->pack_resolver )( $run ) : null;
+		if ( is_object( $pack ) && method_exists( $pack, 'roleVerbs' ) && array() !== $run->withheldRoles ) {
+			$role_verbs = $pack->roleVerbs();
+			$gone       = array();
+			foreach ( $run->withheldRoles as $role ) {
+				$gone = array_merge( $gone, $role_verbs[ $role ] ?? array() );
+			}
+			$verbs = array_values( array_diff( $verbs, $gone ) );
 		}
 
 		return $verbs;

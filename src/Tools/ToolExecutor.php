@@ -202,6 +202,11 @@ final class ToolExecutor {
 	 * or float, use its string form. Live journey J9: regular_price 18 was
 	 * refused nine times for a {"type":"string"} property.
 	 *
+	 * Where the schema expects an array and the model wrapped it
+	 * (`{"item": [...]}`, live J7: create-post tags refused nine times), unwrap
+	 * it; a bare string for an array of strings becomes a one-name list.
+	 * Schemas that admit an object are never touched.
+	 *
 	 * Composite schemas (`allOf`/`anyOf`/`oneOf`, at any level) are repaired
 	 * against {@see self::compositeView()}, which only ever narrows: WooCommerce's
 	 * product-create/update inputs are a top-level `oneOf` of object branches
@@ -223,6 +228,28 @@ final class ToolExecutor {
 			$decoded = json_decode( $value, true );
 			if ( is_array( $decoded ) ) {
 				$value = $decoded;
+			}
+		}
+
+		// A list the model wrapped, only where the schema admits an array and
+		// no object: {"item": [...]} / {"items": "x"} become the list, and a
+		// bare string for an array of strings becomes a one-name list.
+		if ( in_array( 'array', $types, true ) && ! in_array( 'object', $types, true ) ) {
+			if ( is_array( $value ) && 1 === count( $value ) && ! array_is_list( $value ) ) {
+				$key = (string) array_key_first( $value );
+				if ( in_array( $key, array( 'item', 'items' ), true ) ) {
+					$inner = $value[ $key ];
+					if ( is_array( $inner ) && array_is_list( $inner ) ) {
+						$value = $inner;
+					} elseif ( is_scalar( $inner ) ) {
+						$value = array( $inner );
+					}
+				}
+			} elseif ( is_string( $value )
+				&& ! in_array( 'string', $types, true )
+				&& in_array( 'string', (array) ( is_array( $schema['items'] ?? null ) ? ( $schema['items']['type'] ?? array() ) : array() ), true )
+			) {
+				$value = array( $value );
 			}
 		}
 

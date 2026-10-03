@@ -158,8 +158,10 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertIsArray( $first );
 
 		// Budget::spentCount() reads the run's OWN step history: record the
-		// successful call the way Runner::executeCall() would.
-		$this->recordSuccessfulStep( 'senroflux/orders-refund' );
+		// successful call the way Runner::executeCall() does — under the
+		// mangled function name the model called (live J12 refunded twice
+		// because only the `ns/name` form was ever counted).
+		$this->recordSuccessfulStep( 'wpab__senroflux__orders-refund' );
 
 		$second = $this->callAbility(
 			'senroflux/orders-refund',

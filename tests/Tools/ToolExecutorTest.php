@@ -585,6 +585,73 @@ final class ToolExecutorTest extends TestCase {
 		$this->assertSame( 'error', $outcome->kind );
 	}
 
+	/** @return array<string,mixed> */
+	private function listSchema( string $item_type = 'string', string|array $type = 'array' ): array {
+		return array(
+			'type'       => 'object',
+			'properties' => array(
+				'tags' => array(
+					'type'  => $type,
+					'items' => array( 'type' => $item_type ),
+				),
+			),
+		);
+	}
+
+	/** Live J7: create-post got `"tags": {"item": [...]}` and `"categories": {"item": "Sustainability"}`. */
+	public function test_a_list_wrapped_in_item_or_items_is_unwrapped_for_an_array_schema(): void {
+		$seen = $this->registerRecordingAbility( $this->listSchema() );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => array( 'item' => array( 'A', 'B' ) ) ) );
+		$this->assertSame( array( 'A', 'B' ), $seen['received']['tags'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => array( 'items' => array( 'A' ) ) ) );
+		$this->assertSame( array( 'A' ), $seen['received']['tags'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => array( 'item' => 'Sustainability' ) ) );
+		$this->assertSame( array( 'Sustainability' ), $seen['received']['tags'] );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => '{"item":["A","B"]}' ) );
+		$this->assertSame( array( 'A', 'B' ), $seen['received']['tags'] );
+	}
+
+	public function test_a_bare_string_becomes_a_one_name_list_for_an_array_of_strings(): void {
+		$seen = $this->registerRecordingAbility( $this->listSchema() );
+
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => 'Kitchen' ) );
+		$this->assertSame( array( 'Kitchen' ), $seen['received']['tags'] );
+
+		$seen = $this->registerRecordingAbility( $this->listSchema( 'integer' ) );
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => 'Kitchen' ) );
+		$this->assertSame( 'Kitchen', $seen['received']['tags'], 'an array of integers is not a list of names' );
+	}
+
+	public function test_other_wrappers_are_left_alone_for_an_array_schema(): void {
+		$seen = $this->registerRecordingAbility( $this->listSchema() );
+
+		foreach ( array(
+			array(
+				'item'  => array( 'A' ),
+				'extra' => 1,
+			),
+			array( 'name' => array( 'A' ) ),
+			array( 'item' => array( 'k' => 'A' ) ),
+		) as $odd ) {
+			$this->executor->call( 'woocommerce/product-create', array( 'tags' => $odd ) );
+			$this->assertSame( $odd, $seen['received']['tags'] );
+		}
+	}
+
+	public function test_a_schema_admitting_an_object_or_a_string_is_left_alone_for_a_bare_value(): void {
+		$seen = $this->registerRecordingAbility( $this->listSchema( 'string', array( 'array', 'object' ) ) );
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => array( 'item' => array( 'A' ) ) ) );
+		$this->assertSame( array( 'item' => array( 'A' ) ), $seen['received']['tags'] );
+
+		$seen = $this->registerRecordingAbility( $this->listSchema( 'string', array( 'array', 'string' ) ) );
+		$this->executor->call( 'woocommerce/product-create', array( 'tags' => 'Kitchen' ) );
+		$this->assertSame( 'Kitchen', $seen['received']['tags'] );
+	}
+
 	/**
 	 * Live proof run: Woo's product-create input is a top-level `oneOf` of
 	 * object branches with no `properties` of its own, and one branch has no

@@ -632,6 +632,25 @@ abstract class Pack {
 	}
 
 	/**
+	 * The skills for one STARTED run: {@see skills()} plus knowledge of which
+	 * roles the run's account lost at start (S6). The base ignores the
+	 * withheld list; a pack that names withheld verbs in its skill bodies
+	 * overrides this so the model is never told to call a tool it was not
+	 * given.
+	 *
+	 * `@internal`: harness seam, not part of the third-party contract.
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   The run's withheld role names.
+	 * @return list<Skill>
+	 */
+	public function skillsForRun( bool $images_available, array $withheld_roles ): array {
+		unset( $withheld_roles );
+
+		return $this->skills( $images_available );
+	}
+
+	/**
 	 * The pages/site `copy-rules` skill body, shared. It points the model at
 	 * `list-patterns` for each pattern's copy limits instead of restating them:
 	 * {@see \Specflux\SenroFlux\Packs\Pages\Vocabulary::listPayload()} already

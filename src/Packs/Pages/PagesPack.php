@@ -306,17 +306,23 @@ final class PagesPack extends Pack {
 	}
 
 	/**
-	 * S6: `media-upload` and `generate-image` require `upload_files` — a role
-	 * that can `edit_pages` but not `upload_files` holds neither in stock
-	 * WordPress, but a custom role could, so this is withheld the same way
-	 * the posts pack withholds it.
+	 * S6: every image role requires `upload_files` — a role that can
+	 * `edit_pages` but not `upload_files` can add no image, so none of the
+	 * media tools are offered (same as the posts pack).
 	 *
 	 * @return array<string,string>
 	 */
 	public function roleCapabilities(): array {
 		return array(
+			'search'       => 'upload_files',
+			'missing-alt'  => 'upload_files',
 			'upload'       => 'upload_files',
 			'generate'     => 'upload_files',
+			'alt-text'     => 'upload_files',
+			'featured'     => 'upload_files',
+			'alt'          => 'upload_files',
+			'read-media'   => 'upload_files',
+			'stock-search' => 'upload_files',
 			'stock-import' => 'upload_files',
 		);
 	}
@@ -372,6 +378,17 @@ final class PagesPack extends Pack {
 	 * @return list<Skill>
 	 */
 	public function skills( bool $images_available = true ): array {
+		return $this->skillsForRun( $images_available, array() );
+	}
+
+	/**
+	 * {@see skills()} for a started run: no media rules naming withheld tools.
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   The run's withheld role names.
+	 * @return list<Skill>
+	 */
+	public function skillsForRun( bool $images_available, array $withheld_roles ): array {
 		$vocabulary = new Vocabulary();
 
 		return array(
@@ -394,7 +411,7 @@ final class PagesPack extends Pack {
 			new Skill(
 				'pages/media-rules',
 				'Media rules',
-				$this->mediaRulesBody( $images_available ),
+				$this->mediaRulesBody( $images_available, in_array( 'upload', $withheld_roles, true ) ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -444,7 +461,12 @@ final class PagesPack extends Pack {
 	 * money, and re-read after any change — nothing else re-reads an
 	 * attachment for you.
 	 */
-	private function mediaRulesBody( bool $images_available = true ): string {
+	private function mediaRulesBody( bool $images_available = true, bool $images_off = false ): string {
+		if ( $images_off ) {
+			// S6: the account cannot upload, so every media tool is withheld.
+			return 'This run cannot add images: leave every image slot empty and state no_image_reason on the page.';
+		}
+
 		if ( ! $images_available ) {
 			// 0.3 quality fix (images budget 0): no mention of the withheld
 			// media-generate ability — search then stock is the only path

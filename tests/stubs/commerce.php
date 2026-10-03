@@ -736,29 +736,6 @@ if ( ! isset( $GLOBALS['senroflux_test_product_cats'] ) ) {
 	$GLOBALS['senroflux_test_product_cats'] = array();
 }
 
-if ( ! function_exists( 'get_terms' ) ) {
-	/**
-	 * Only the `product_cat` taxonomy is modelled.
-	 *
-	 * @param array<string,mixed> $args
-	 * @return list<object>
-	 */
-	function get_terms( array $args = array() ): array {
-		unset( $args );
-		$terms = array();
-		foreach ( $GLOBALS['senroflux_test_product_cats'] as $id => $row ) {
-			$terms[] = (object) array(
-				'term_id' => (int) $id,
-				'name'    => (string) $row['name'],
-				'slug'    => (string) $row['slug'],
-				'count'   => (int) ( $row['count'] ?? 0 ),
-			);
-		}
-
-		return $terms;
-	}
-}
-
 if ( ! function_exists( 'wc_get_products' ) ) {
 	/**
 	 * Honours `category` (slugs), `s`, `limit`, `page` and `paginate` like

@@ -53,6 +53,7 @@ final class PostsPack extends Pack {
 				'read-media'   => 'read-media',
 				'terms'        => 'set-terms',
 				'new-term'     => 'create-term',
+				'list-terms'   => 'list-terms',
 				'stock-search' => 'stock-image-search',
 				'stock-import' => 'stock-image-import',
 			)
@@ -126,6 +127,7 @@ final class PostsPack extends Pack {
 			'read-media'         => array( 'attachment_id' ),
 			'set-terms'          => array( 'post_id', 'taxonomy', 'term_ids' ),
 			'create-term'        => array( 'taxonomy', 'name' ),
+			'list-terms'         => array( 'taxonomy', 'search' ),
 			'stock-image-search' => array( 'query' ),
 			'stock-image-import' => array( 'id', 'alt' ),
 			default              => array(),
@@ -178,6 +180,7 @@ final class PostsPack extends Pack {
 			'read-media'         => 'posts/read-media',
 			'set-terms'          => 'posts/set-terms',
 			'create-term'        => 'posts/create-term',
+			'list-terms'         => 'posts/list-terms',
 			'stock-image-search' => 'posts/media-stock-search',
 			'stock-image-import' => 'posts/media-stock-import',
 			default              => $ability,
@@ -222,6 +225,7 @@ final class PostsPack extends Pack {
 			'posts/list-missing-alt'   => 0,
 			'posts/generate-alt-text'  => 0,
 			'posts/read-media'         => 0,
+			'posts/list-terms'         => 0,
 			'posts/media-stock-search' => 0,
 			'posts/create-draft'       => 1,
 			'posts/update-draft'       => 1,
@@ -268,6 +272,7 @@ final class PostsPack extends Pack {
 			'read-media'   => array( 'posts/read-media' ),
 			'terms'        => array( 'posts/set-terms' ),
 			'new-term'     => array( 'posts/create-term' ),
+			'list-terms'   => array( 'posts/list-terms' ),
 			'stock-search' => array( 'posts/media-stock-search' ),
 			'stock-import' => array( 'posts/media-stock-import' ),
 		);
@@ -321,16 +326,24 @@ final class PostsPack extends Pack {
 	}
 
 	/**
-	 * S6: `media-upload` and `generate-image` require `upload_files` — a
-	 * Contributor holds `edit_posts` but not `upload_files` in stock
-	 * WordPress, so those two roles (and only those) are withheld for them.
+	 * S6: every image role requires `upload_files`. A Contributor holds
+	 * `edit_posts` but not `upload_files` in stock WordPress, so no image can
+	 * ever be added for them — searching, describing or attaching one is
+	 * pointless, and a live run spent its token budget doing exactly that.
 	 *
 	 * @return array<string,string>
 	 */
 	public function roleCapabilities(): array {
 		return array(
+			'search'       => 'upload_files',
+			'missing-alt'  => 'upload_files',
 			'upload'       => 'upload_files',
 			'generate'     => 'upload_files',
+			'alt-text'     => 'upload_files',
+			'featured'     => 'upload_files',
+			'alt'          => 'upload_files',
+			'read-media'   => 'upload_files',
+			'stock-search' => 'upload_files',
 			'stock-import' => 'upload_files',
 		);
 	}
@@ -359,13 +372,25 @@ final class PostsPack extends Pack {
 	 * @return list<Skill>
 	 */
 	public function skills( bool $images_available = true ): array {
+		return $this->skillsForRun( $images_available, array() );
+	}
+
+	/**
+	 * {@see skills()} for a started run: when the run's roles were withheld
+	 * the prose/media rules name none of their verbs.
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   The run's withheld role names.
+	 * @return list<Skill>
+	 */
+	public function skillsForRun( bool $images_available, array $withheld_roles ): array {
 		$vocabulary = new Vocabulary();
 
 		return array(
 			new Skill(
 				'posts/prose-rules',
 				'Prose rules',
-				$this->proseRulesBody( $images_available ),
+				$this->proseRulesBody( $images_available, $withheld_roles ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -381,7 +406,7 @@ final class PostsPack extends Pack {
 			new Skill(
 				'posts/media-rules',
 				'Media rules',
-				$this->mediaRulesBody( $images_available ),
+				$this->mediaRulesBody( $images_available, in_array( 'upload', $withheld_roles, true ) ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -393,8 +418,11 @@ final class PostsPack extends Pack {
 	 * The `posts/prose-rules` body: the shape constraints the model needs
 	 * (mirrors the pages pack's layout-rules — plain English plus the shape
 	 * lines the Validator's structural identity restates).
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   Roles withheld at start; their verbs are left out.
 	 */
-	private function proseRulesBody( bool $images_available = true ): string {
+	private function proseRulesBody( bool $images_available = true, array $withheld_roles = array() ): string {
 		$verbs = array(
 			'posts/read',
 			'posts/list-patterns',
@@ -403,6 +431,7 @@ final class PostsPack extends Pack {
 			'posts/list-missing-alt',
 			'posts/create-draft',
 			'posts/update-draft',
+			'posts/list-terms',
 			'posts/set-terms',
 			'posts/create-term',
 			'posts/media-upload',
@@ -424,6 +453,11 @@ final class PostsPack extends Pack {
 			// or unknown_tool refusal.
 			$verbs = array_values( array_diff( $verbs, array( 'posts/media-generate' ) ) );
 		}
+		// A role withheld at start (S6) is not in the tool surface either.
+		$role_verbs = $this->roleVerbs();
+		foreach ( $withheld_roles as $role ) {
+			$verbs = array_values( array_diff( $verbs, $role_verbs[ $role ] ?? array() ) );
+		}
 
 		return implode(
 			"\n",
@@ -432,7 +466,7 @@ final class PostsPack extends Pack {
 				'Use at most one closing call to action, placed at the end. Use at most ' . Vocabulary::RULES_MAX_PULL_QUOTE . ' pull quotes, and only for a line that already appears in the body.',
 				'Never write a block whose name starts with senroflux/. A closing call to action is a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button. A pull quote is a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.',
 				'Every core/image MUST carry non-empty, descriptive alt text in its attributes; an image with no alt text is refused.',
-				'A finished post has an excerpt, one real category (never Uncategorized) and two to four tags: pass them as `categories` and `tags` (names) on create-post, in the same write. A missing term is created for you. Use set-terms and create-term only to change the terms of a post that already exists.',
+				'A finished post has an excerpt, one real category (never Uncategorized) and two to four tags: pass them as `categories` and `tags` (names) on create-post, in the same write. Before choosing them, call list-terms for category and for post_tag and reuse an existing name; a name that does not exist yet is created only if your account may create terms, otherwise the write is refused and you must pick an existing one. Use set-terms and create-term only to change the terms of a post that already exists.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
 				'When you propose a plan, spell each step\'s verbs exactly as one of: ' . implode( ', ', $verbs ) . '. Any other word is refused as unknown_verb.',
 			)
@@ -464,7 +498,14 @@ final class PostsPack extends Pack {
 	 * and — since nothing else re-reads an attachment for you — re-read it
 	 * with `read-media` after changing it.
 	 */
-	private function mediaRulesBody( bool $images_available = true ): string {
+	private function mediaRulesBody( bool $images_available = true, bool $images_off = false ): string {
+		if ( $images_off ) {
+			// S6: the account cannot upload, so every media tool is withheld
+			// (see roleCapabilities()); naming any of them would only invite
+			// a call the run cannot make.
+			return 'This run cannot add images: write a text-only post — no image blocks, no featured image.';
+		}
+
 		if ( ! $images_available ) {
 			// 0.3 quality fix (images budget 0): no mention of the withheld
 			// media-generate ability — go straight to search then stock, the

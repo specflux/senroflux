@@ -319,14 +319,22 @@ final class SitePack extends Pack {
 	}
 
 	/**
-	 * S6: `media-upload` and `generate-image` require `upload_files`.
+	 * S6: every image role requires `upload_files`; without it no image can
+	 * be added, so no media tool is offered.
 	 *
 	 * @return array<string,string>
 	 */
 	public function roleCapabilities(): array {
 		return array(
+			'search'       => 'upload_files',
+			'missing-alt'  => 'upload_files',
 			'upload'       => 'upload_files',
 			'generate'     => 'upload_files',
+			'alt-text'     => 'upload_files',
+			'featured'     => 'upload_files',
+			'alt'          => 'upload_files',
+			'read-media'   => 'upload_files',
+			'stock-search' => 'upload_files',
 			'stock-import' => 'upload_files',
 		);
 	}
@@ -408,6 +416,17 @@ final class SitePack extends Pack {
 	 * @return list<Skill>
 	 */
 	public function skills( bool $images_available = true ): array {
+		return $this->skillsForRun( $images_available, array() );
+	}
+
+	/**
+	 * {@see skills()} for a started run: no media rules naming withheld tools.
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   The run's withheld role names.
+	 * @return list<Skill>
+	 */
+	public function skillsForRun( bool $images_available, array $withheld_roles ): array {
 		unset( $images_available );
 		$vocabulary = new Vocabulary();
 
@@ -439,7 +458,7 @@ final class SitePack extends Pack {
 			new Skill(
 				'site/media-rules',
 				'Media rules',
-				$this->mediaRulesBody(),
+				$this->mediaRulesBody( in_array( 'upload', $withheld_roles, true ) ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -516,7 +535,12 @@ final class SitePack extends Pack {
 	 * The `site/media-rules` body (0.3 quality feature 4, mirrors
 	 * PagesPack::mediaRulesBody()).
 	 */
-	private function mediaRulesBody(): string {
+	private function mediaRulesBody( bool $images_off = false ): string {
+		if ( $images_off ) {
+			// S6: the account cannot upload, so every media tool is withheld.
+			return 'This run cannot add images: leave every image slot empty and state no_image_reason on each page.';
+		}
+
 		return implode(
 			"\n",
 			array(

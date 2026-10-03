@@ -645,7 +645,7 @@ final class AbilitiesTest extends TestCase {
 	private function exhaustImagesBudget(): void {
 		$limit = Budget::defaults()[ Budget::IMAGES ];
 		for ( $i = 0; $i < $limit; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/generate-image', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__generate-image', null, 'ok' );
 		}
 	}
 
@@ -2938,22 +2938,112 @@ final class AbilitiesTest extends TestCase {
 		$this->assertNull( ( new PagesPack() )->validateCall( 'woocommerce/product-create', array() ) );
 	}
 
-	public function test_preflight_leaves_the_stale_write_compare_to_execute(): void {
+	/** Live J8: the run only listed the page, then an approved publish-post died unread at execute. */
+	private function parkedGate( bool $approved = false ): \Specflux\SenroFlux\Tools\BuiltinGate {
+		return new \Specflux\SenroFlux\Tools\BuiltinGate( active: true, tier: 2, verb: 'pages/publish', approvalId: 'builtin:1:call_x', approved: $approved );
+	}
+
+	/** @return array<string,mixed> */
+	private function publishInput(): array {
+		return array(
+			'id'              => 100,
+			'status'          => 'publish',
+			'content'         => $this->validContent(),
+			'no_image_reason' => 'short utility page',
+		);
+	}
+
+	private function callWithValidate( string $ability, array $input, ?\Specflux\SenroFlux\Tools\BuiltinGate $gate ): \Specflux\SenroFlux\Tools\ToolOutcome {
+		$pack = new PagesPack();
+
+		return ( new \Specflux\SenroFlux\Tools\ToolExecutor() )->call(
+			$ability,
+			$input,
+			$gate,
+			static fn ( string $name, array $args ): ?WP_Error => $pack->validateCall( $name, $args )
+		);
+	}
+
+	public function test_preflight_refuses_an_unread_write_with_the_unread_message_and_no_park(): void {
 		$this->seedPost();
-		$this->grant( 'edit_pages', 'edit_post' );
-		$input = array(
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+		$update = array(
 			'id'              => 100,
 			'title'           => 'Sneaky edit',
 			'content'         => $this->validContent(),
 			'no_image_reason' => 'short utility page',
 		);
 
-		$this->assertNull( ( new PagesPack() )->validateCall( 'senroflux/update-post', $input ), 'the run never read post 100, yet preflight passes it' );
+		$error = ( new PagesPack() )->validateCall( 'senroflux/update-post', $update );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'stale_write', $error->get_error_code() );
+		$this->assertSame( 'This run has not read this item yet. Read it with read-content by its id, then write again.', $error->get_error_message() );
+
+		foreach ( array(
+			'senroflux/update-post'  => $update,
+			'senroflux/publish-post' => $this->publishInput(),
+		) as $ability => $input ) {
+			$outcome = $this->callWithValidate( $ability, $input, $this->parkedGate() );
+			$this->assertSame( 'denied', $outcome->kind, $ability . ' must not park for approval' );
+			$this->assertSame( 'stale_write', $outcome->errorCode, $ability );
+		}
+	}
+
+	public function test_as_mode_unread_write_is_refused_before_check_permissions(): void {
+		$this->seedPost();
+		$this->grant(); // check_permissions() would refuse: the unread refusal must come first.
+
+		$outcome = $this->callWithValidate( 'senroflux/publish-post', $this->publishInput(), null );
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'stale_write', $outcome->errorCode );
+		$this->assertStringContainsString( 'has not read this item yet', (string) $outcome->errorMessage );
+	}
+
+	public function test_a_write_after_a_by_id_read_still_parks(): void {
+		$this->seedPost();
+		$this->primeRead( 100 );
+
+		$outcome = $this->callWithValidate( 'senroflux/publish-post', $this->publishInput(), $this->parkedGate() );
+
+		$this->assertSame( 'approval_required', $outcome->kind );
+	}
+
+	public function test_a_stale_write_still_parks_and_is_refused_only_at_execute(): void {
+		$this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post', 'publish_pages' );
+		$this->primeRead( 100, 'a-marker-the-post-has-since-moved-past' );
+
+		$parked = $this->callWithValidate( 'senroflux/publish-post', $this->publishInput(), $this->parkedGate() );
+		$this->assertSame( 'approval_required', $parked->kind );
+
+		$approved = $this->callWithValidate( 'senroflux/publish-post', $this->publishInput(), $this->parkedGate( true ) );
+		$this->assertSame( 'error', $approved->kind );
+		$this->assertStringContainsString( 'changed since the run last read it', (string) $approved->errorMessage );
+	}
+
+	public function test_preflight_leaves_the_stale_compare_and_a_missing_run_context_to_execute(): void {
+		$this->seedPost();
+		$this->grant( 'edit_pages', 'edit_post' );
+		$this->primeRead( 100, 'old' );
+		$input = array(
+			'id'              => 100,
+			'title'           => 'Edit',
+			'content'         => $this->validContent(),
+			'no_image_reason' => 'short utility page',
+		);
+
+		$this->assertNull( ( new PagesPack() )->validateCall( 'senroflux/update-post', $input ), 'a marker mismatch is execute-only' );
+		$this->assertSame( 'stale_write', $this->ability( 'senroflux/update-post' )->execute( $input )->get_error_code() );
+
+		Abilities::forgetRunContext();
+		$this->assertNull( ( new PagesPack() )->validateCall( 'senroflux/update-post', $input ), 'no run context: preflight fails open, execute still refuses' );
 		$this->assertSame( 'stale_write', $this->ability( 'senroflux/update-post' )->execute( $input )->get_error_code() );
 	}
 
 	public function test_preflight_refuses_invalid_update_content(): void {
 		$this->seedPost();
+		$this->primeRead( 100 );
 
 		$error = ( new PagesPack() )->validateCall(
 			'senroflux/update-post',
@@ -3099,6 +3189,22 @@ final class AbilitiesTest extends TestCase {
 		$this->tearDownTerms();
 	}
 
+	/** Live J7: `tags: {"item": [...]}` was refused nine times with a message that never said why. */
+	public function test_a_term_refusal_names_the_expected_list_shape(): void {
+		$this->termsSetUp();
+		$this->grant( 'edit_posts', 'assign_post_tags', 'assign_categories', 'manage_categories' );
+
+		$object = Abilities::preflight( 'create-post', $this->postWithTerms( array( 'tags' => array( 'item' => array( 'Composting' ) ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $object );
+		$this->assertStringContainsString( 'sent as an object', $object->get_error_message() );
+		$this->assertStringContainsString( 'must be a plain list of names, like ["Composting", "Kitchen"]', $object->get_error_message() );
+
+		$blank = Abilities::preflight( 'create-post', $this->postWithTerms( array( 'categories' => array( array( 'x' ) ) ) ) );
+		$this->assertInstanceOf( WP_Error::class, $blank );
+		$this->assertStringContainsString( 'categories must be a list of names, each a non-empty string, like ["Gardening", "Recipes"]', $blank->get_error_message() );
+		$this->tearDownTerms();
+	}
+
 	public function test_a_missing_create_capability_names_the_term_in_permission_and_preflight(): void {
 		$this->termsSetUp();
 		$GLOBALS['senroflux_test_terms']['category:news'] = 5;
@@ -3130,6 +3236,7 @@ final class AbilitiesTest extends TestCase {
 	public function test_update_with_uncategorized_is_allowed_and_a_missing_create_cap_is_refused_before_any_write(): void {
 		$this->termsSetUp();
 		$this->seedPost( 100, 'post' );
+		$this->primeRead( 100 );
 		$GLOBALS['senroflux_test_terms']['category:uncategorized'] = 1;
 		$this->grant( 'edit_posts', 'edit_post', 'assign_categories' );
 
