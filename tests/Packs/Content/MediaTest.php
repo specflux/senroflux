@@ -453,7 +453,7 @@ final class MediaTest extends TestCase {
 
 		// Six prior successful generations, exactly at the shipped default.
 		for ( $i = 0; $i < 6; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/generate-image', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__generate-image', null, 'ok' );
 		}
 
 		$result = $ability->execute( array( 'prompt' => 'a red bicycle' ) );
@@ -1218,7 +1218,7 @@ final class MediaTest extends TestCase {
 	 */
 	public function test_stock_image_import_does_not_spend_the_images_budget(): void {
 		for ( $i = 0; $i < 6; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/stock-image-import', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__stock-image-import', null, 'ok' );
 		}
 
 		$path = sys_get_temp_dir() . '/senroflux-generate-after-stock.jpg';
@@ -1249,7 +1249,7 @@ final class MediaTest extends TestCase {
 
 	public function test_the_fourth_stock_image_import_in_one_run_is_refused(): void {
 		for ( $i = 0; $i < Media::STOCK_IMPORT_CAP; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/stock-image-import', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__stock-image-import', null, 'ok' );
 		}
 
 		$detail = $this->eligibleDetail();
@@ -1273,7 +1273,7 @@ final class MediaTest extends TestCase {
 	private function exhaustImagesBudget(): void {
 		$limit = Budget::defaults()[ Budget::IMAGES ];
 		for ( $i = 0; $i < $limit; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/generate-image', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__generate-image', null, 'ok' );
 		}
 	}
 

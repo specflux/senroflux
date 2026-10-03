@@ -645,7 +645,7 @@ final class AbilitiesTest extends TestCase {
 	private function exhaustImagesBudget(): void {
 		$limit = Budget::defaults()[ Budget::IMAGES ];
 		for ( $i = 0; $i < $limit; $i++ ) {
-			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'senroflux/generate-image', null, 'ok' );
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__generate-image', null, 'ok' );
 		}
 	}
 

@@ -272,9 +272,14 @@ final class Budget {
 		return $spent;
 	}
 
-	/** The ability name's final segment (namespace stripped). */
+	/**
+	 * The ability name's final segment (namespace stripped). Steps store the
+	 * mangled function name the model called (`wpab__senroflux__orders-refund`),
+	 * so it is un-mangled first or nothing would ever be counted.
+	 */
 	private static function baseName( string $ability ): string {
-		$pos = strrpos( $ability, '/' );
+		$ability = \Specflux\SenroFlux\Tools\ToolRegistry::abilityName( $ability );
+		$pos     = strrpos( $ability, '/' );
 
 		return false === $pos ? $ability : substr( $ability, $pos + 1 );
 	}
