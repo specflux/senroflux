@@ -94,6 +94,65 @@ final class ContentSummaryTest extends TestCase {
 		$this->assertStringContainsString( 'Schedule &quot;Spring launch&quot; (post) for 2026-10-12 09:00:00 (site time)', $sum );
 	}
 
+	public function test_publish_post_card_lists_the_terms_it_sets_escaped(): void {
+		$this->seedPost( 300, 'Spring launch', 'post' );
+
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/publish-post',
+			array(
+				'id'         => 300,
+				'status'     => 'publish',
+				'categories' => array( 'News' ),
+				'tags'       => array( 'php', '<script>x</script>' ),
+			)
+		);
+
+		$this->assertStringContainsString( ' — categories: &quot;News&quot; — tags: &quot;php&quot;, &quot;&lt;script&gt;x&lt;/script&gt;&quot;', $sum );
+		$this->assertStringNotContainsString( '<script>', $sum );
+	}
+
+	public function test_create_post_card_shows_the_terms_and_passes_through_without_them(): void {
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/create-post',
+			array(
+				'post_type'  => 'post',
+				'title'      => 'Launch <b>',
+				'categories' => array( 'News' ),
+				'tags'       => array( 'php', 'woo' ),
+			)
+		);
+
+		$this->assertSame( 'Create draft &quot;Launch &lt;b&gt;&quot; (post) — categories: &quot;News&quot; — tags: &quot;php&quot;, &quot;woo&quot;', $sum );
+		$this->assertSame(
+			'plain',
+			ContentSummary::filter(
+				'plain',
+				'senroflux/create-post',
+				array(
+					'post_type' => 'post',
+					'title'     => 'T',
+				)
+			)
+		);
+	}
+
+	public function test_update_post_card_shows_the_stored_title_and_terms(): void {
+		$this->seedPost( 300, 'Spring launch', 'post' );
+
+		$sum = ContentSummary::filter(
+			'plain',
+			'senroflux/update-post',
+			array(
+				'id'   => 300,
+				'tags' => array( 'php' ),
+			)
+		);
+
+		$this->assertSame( 'Update &quot;Spring launch&quot; (post) — tags: &quot;php&quot;', $sum );
+	}
+
 	public function test_publish_post_card_is_inert_for_a_page(): void {
 		// A page's publish-post call is PublishSummary's card, not this
 		// class's — this class must pass it through unchanged.

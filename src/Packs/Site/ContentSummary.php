@@ -8,8 +8,12 @@
  * TARGET REPO PATH: src/Packs/Site/ContentSummary.php
  *
  * Hooks the same `agent_safety_approval_summary` filter (AS-11/AS-15) for
- * three cases:
+ * four cases:
  *
+ *   - `senroflux/create-post` and `senroflux/update-post` when the call
+ *     names `categories` or `tags`: the terms the write will set. Without
+ *     them there is no card here (the call stays as it was), and the
+ *     publish-post card below carries the same clause.
  *   - `senroflux/publish-post` when the target object is an ACTUAL blog
  *     post (`post_type` `post`, a posts-pack run): title + preview link,
  *     "as AS-11 does for pages" (S15/AS-15).
@@ -84,6 +88,8 @@ final class ContentSummary {
 
 		return match ( self::baseName( $verb ) ) {
 			'publish-post' => self::publishPostCard( $summary, $input ),
+			'create-post' => self::termsCard( $summary, $input, null ),
+			'update-post' => self::termsCard( $summary, $input, self::storedPost( $input ) ),
 			'update-navigation' => self::navigationCard( $input ),
 			'set-front-page' => self::frontPageCard( $input ),
 			default => $summary,
@@ -128,7 +134,75 @@ final class ContentSummary {
 			$row .= sprintf( ' · <a href="%s">edit</a>', esc_url( $edit ) );
 		}
 
-		return $row;
+		return $row . self::termsClause( $input );
+	}
+
+	/**
+	 * `create-post` / `update-post` carrying `categories` or `tags`: what the
+	 * write is, and the terms it will set. Passthrough when it sets none.
+	 * `$post` is the stored target of an update, null for a create.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termsCard( string $summary, array $input, ?object $post ): string {
+		$clause = self::termsClause( $input );
+		if ( '' === $clause ) {
+			return $summary;
+		}
+
+		if ( null === $post ) {
+			$title = is_string( $input['title'] ?? null ) && '' !== trim( $input['title'] ) ? trim( $input['title'] ) : __( 'Untitled', 'senroflux' );
+
+			return sprintf( 'Create draft &quot;%s&quot; (post)', esc_html( $title ) ) . $clause;
+		}
+
+		$title = self::field( $post, 'post_title' );
+		$title = is_string( $title ) && '' !== $title ? $title : __( 'Untitled', 'senroflux' );
+
+		return sprintf( 'Update &quot;%s&quot; (post)', esc_html( $title ) ) . $clause;
+	}
+
+	/**
+	 * The stored post an `id` input names, when it is an actual blog post.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function storedPost( array $input ): ?object {
+		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) || ! function_exists( 'get_post' ) ) {
+			return null;
+		}
+
+		$post = get_post( (int) $input['id'] );
+
+		return is_object( $post ) && 'post' === ( self::field( $post, 'post_type' ) ?? '' ) ? $post : null;
+	}
+
+	/**
+	 * " — categories: "A", "B" — tags: "x"" for the term names the call sets,
+	 * escaped, or '' when it names none. Names come from the call: they are
+	 * what will be set, shown beside the approval, not provenance.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termsClause( array $input ): string {
+		$clause = '';
+		foreach ( array( 'categories', 'tags' ) as $field ) {
+			if ( ! is_array( $input[ $field ] ?? null ) ) {
+				continue;
+			}
+
+			$names = array();
+			foreach ( $input[ $field ] as $name ) {
+				if ( is_string( $name ) && '' !== trim( $name ) ) {
+					$names[] = sprintf( '&quot;%s&quot;', esc_html( trim( $name ) ) );
+				}
+			}
+			if ( array() !== $names ) {
+				$clause .= sprintf( ' — %1$s: %2$s', $field, implode( ', ', $names ) );
+			}
+		}
+
+		return $clause;
 	}
 
 	/**

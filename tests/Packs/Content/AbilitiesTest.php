@@ -2966,4 +2966,192 @@ final class AbilitiesTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $error );
 		$this->assertSame( 'unknown_block', $error->get_error_code() );
 	}
+
+	// --- categories / tags on the write ---------------------------------------
+
+	private function termsSetUp(): void {
+		$GLOBALS['senroflux_test_terms']             = array();
+		$GLOBALS['senroflux_test_post_terms']        = array();
+		$GLOBALS['senroflux_test_next_term_id']      = 50;
+		$GLOBALS['senroflux_test_taxonomies']        = array();
+		$GLOBALS['senroflux_test_object_taxonomies'] = array( 'post' => array( 'category', 'post_tag' ) );
+	}
+
+	protected function tearDownTerms(): void {
+		unset( $GLOBALS['senroflux_test_taxonomies'], $GLOBALS['senroflux_test_object_taxonomies'] );
+	}
+
+	/** @return array<string,mixed> */
+	private function postWithTerms( array $extra = array() ): array {
+		return array_merge(
+			array(
+				'post_type' => 'post',
+				'title'     => 'Tagged',
+				'content'   => $this->validContent(),
+			),
+			$extra
+		);
+	}
+
+	public function test_term_inputs_are_declared_in_every_write_schema(): void {
+		foreach ( array( 'create-post', 'update-post', 'publish-post' ) as $name ) {
+			$schema = $this->ability( 'senroflux/' . $name )->get_input_schema();
+			$props  = 'create-post' === $name ? $schema['oneOf'][0]['properties'] : $schema['properties'];
+			foreach ( array( 'categories', 'tags' ) as $field ) {
+				$this->assertSame( 'array', $props[ $field ]['type'], "$name $field" );
+				$this->assertSame( array( 'type' => 'string' ), $props[ $field ]['items'], "$name $field" );
+				$this->assertNotSame( '', $props[ $field ]['description'], "$name $field" );
+			}
+		}
+	}
+
+	public function test_create_post_reuses_existing_terms_creates_missing_ones_and_sets_them(): void {
+		$this->termsSetUp();
+		$GLOBALS['senroflux_test_terms']['category:news'] = 5;
+		$GLOBALS['senroflux_test_terms']['post_tag:php']  = 6;
+		$this->grant( 'edit_posts', 'assign_categories', 'assign_post_tags', 'manage_categories' );
+
+		$result = $this->ability( 'senroflux/create-post' )->execute(
+			$this->postWithTerms(
+				array(
+					'categories' => array( 'NEWS', 'Guides' ),
+					'tags'       => array( 'PHP', 'Woo', 'WordPress' ),
+				)
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( array( 'NEWS', 'Guides' ), $result['categories'] );
+		$this->assertSame( array( 5, 50 ), $GLOBALS['senroflux_test_post_terms'][100]['category'], 'existing reused, missing created' );
+		$this->assertSame( array( 6, 51, 52 ), $GLOBALS['senroflux_test_post_terms'][100]['post_tag'] );
+		$this->assertSame( 52, $GLOBALS['senroflux_test_next_term_id'] - 1 + 0 );
+		$this->assertCount( 5, $GLOBALS['senroflux_test_terms'], 'only the three missing names were created' );
+		$this->tearDownTerms();
+	}
+
+	public function test_update_post_replaces_the_terms_of_the_named_taxonomy_only(): void {
+		$this->termsSetUp();
+		$this->seedPost( 100, 'post' );
+		$this->primeRead( 100 );
+		$GLOBALS['senroflux_test_post_terms'][100] = array(
+			'post_tag' => array( 1, 2 ),
+			'category' => array( 9 ),
+		);
+		$this->grant( 'edit_posts', 'edit_post', 'assign_post_tags' );
+
+		$result = $this->ability( 'senroflux/update-post' )->execute(
+			array(
+				'id'   => 100,
+				'tags' => array( 'solo' ),
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame( array( 50 ), $GLOBALS['senroflux_test_post_terms'][100]['post_tag'] );
+		$this->assertSame( array( 9 ), $GLOBALS['senroflux_test_post_terms'][100]['category'] );
+		$this->tearDownTerms();
+	}
+
+	/**
+	 * @return array<string,array{0:array<string,mixed>,1:list<string>}>
+	 */
+	public static function refusedTermInputs(): array {
+		return array(
+			'unsupported type'       => array(
+				array(
+					'post_type'  => 'page',
+					'categories' => array( 'News' ),
+				),
+				array( 'edit_pages', 'assign_categories', 'manage_categories' ),
+			),
+			'too many categories'    => array( array( 'categories' => array( 'a', 'b', 'c', 'd' ) ), array( 'assign_categories', 'manage_categories' ) ),
+			'too many tags'          => array( array( 'tags' => array( 'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i' ) ), array( 'assign_post_tags' ) ),
+			'blank name'             => array( array( 'tags' => array( 'ok', '   ' ) ), array( 'assign_post_tags' ) ),
+			'empty list'             => array( array( 'tags' => array() ), array( 'assign_post_tags' ) ),
+			'duplicate'              => array( array( 'tags' => array( 'Woo', 'woo' ) ), array( 'assign_post_tags' ) ),
+			'name too long'          => array( array( 'tags' => array( str_repeat( 'x', 61 ) ) ), array( 'assign_post_tags' ) ),
+			'only Uncategorized'     => array( array( 'categories' => array( ' uncategorized ' ) ), array( 'assign_categories', 'manage_categories' ) ),
+			'cannot create category' => array( array( 'categories' => array( 'Brand New' ) ), array( 'assign_categories' ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider refusedTermInputs
+	 * @param array<string,mixed> $extra Input overrides.
+	 * @param list<string>        $caps  Capabilities granted.
+	 */
+	public function test_invalid_term_inputs_are_refused_in_preflight_and_write_nothing( array $extra, array $caps ): void {
+		$this->termsSetUp();
+		$this->grant( 'edit_posts', ...$caps );
+		$input = $this->postWithTerms( $extra );
+		if ( 'page' === ( $extra['post_type'] ?? '' ) ) {
+			$input['content'] = $this->validContentWithImage();
+		}
+
+		$pre = Abilities::preflight( 'create-post', $input );
+
+		$this->assertInstanceOf( WP_Error::class, $pre );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_terms'], 'no term created' );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'], 'no post created' );
+		$this->assertInstanceOf( WP_Error::class, $this->ability( 'senroflux/create-post' )->execute( $input ) );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_terms'] );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_inserted_posts'] );
+		$this->tearDownTerms();
+	}
+
+	public function test_a_missing_create_capability_names_the_term_in_permission_and_preflight(): void {
+		$this->termsSetUp();
+		$GLOBALS['senroflux_test_terms']['category:news'] = 5;
+		$this->grant( 'edit_posts', 'assign_categories' );
+		$input = $this->postWithTerms( array( 'categories' => array( 'News', 'Brand New' ) ) );
+
+		$permission = $this->ability( 'senroflux/create-post' )->check_permissions( $input );
+		$pre        = Abilities::preflight( 'create-post', $input );
+
+		foreach ( array( $permission, $pre ) as $refusal ) {
+			$this->assertInstanceOf( WP_Error::class, $refusal );
+			$this->assertSame( 'term_create_forbidden', $refusal->get_error_code() );
+			$this->assertStringContainsString( '"Brand New"', $refusal->get_error_message() );
+		}
+
+		$this->grant( 'edit_posts' );
+		$this->assertFalse( $this->ability( 'senroflux/create-post' )->check_permissions( $this->postWithTerms( array( 'categories' => array( 'News' ) ) ) ), 'assigning needs the assign capability' );
+		$this->tearDownTerms();
+	}
+
+	public function test_a_flat_taxonomy_may_be_created_with_the_assign_capability_like_core_rest(): void {
+		$this->termsSetUp();
+		$this->grant( 'edit_posts', 'assign_post_tags' );
+
+		$this->assertNull( Abilities::preflight( 'create-post', $this->postWithTerms( array( 'tags' => array( 'fresh' ) ) ) ) );
+		$this->tearDownTerms();
+	}
+
+	public function test_update_with_uncategorized_is_allowed_and_a_missing_create_cap_is_refused_before_any_write(): void {
+		$this->termsSetUp();
+		$this->seedPost( 100, 'post' );
+		$GLOBALS['senroflux_test_terms']['category:uncategorized'] = 1;
+		$this->grant( 'edit_posts', 'edit_post', 'assign_categories' );
+
+		$this->assertNull(
+			Abilities::preflight(
+				'update-post',
+				array(
+					'id'         => 100,
+					'categories' => array( 'Uncategorized' ),
+				)
+			)
+		);
+
+		$refused = Abilities::preflight(
+			'update-post',
+			array(
+				'id'         => 100,
+				'categories' => array( 'Nope' ),
+			)
+		);
+		$this->assertSame( 'term_create_forbidden', $refused->get_error_code() );
+		$this->assertCount( 1, $GLOBALS['senroflux_test_terms'] );
+		$this->tearDownTerms();
+	}
 }
