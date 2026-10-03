@@ -2254,9 +2254,14 @@ final class Media {
 		return false;
 	}
 
-	/** The ability name's final segment (namespace stripped). */
+	/**
+	 * The ability name's final segment (namespace stripped). Steps store the
+	 * mangled function name the model called (`wpab__senroflux__stock-image-search`),
+	 * so it is un-mangled first or nothing would ever match.
+	 */
 	private static function baseAbilityName( string $ability ): string {
-		$pos = strrpos( $ability, '/' );
+		$ability = \Specflux\SenroFlux\Tools\ToolRegistry::abilityName( $ability );
+		$pos     = strrpos( $ability, '/' );
 
 		return false === $pos ? $ability : substr( $ability, $pos + 1 );
 	}
