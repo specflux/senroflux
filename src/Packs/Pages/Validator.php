@@ -9,6 +9,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\BlockRoundTrip;
 use Specflux\SenroFlux\Packs\Content\ImageAlt;
 use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
 use WP_Error;
@@ -294,9 +295,9 @@ class Validator implements ContentValidator {
 		}
 
 		$reserialized = $this->serialize( $blocks );
-		if ( $this->normalize( $content ) !== $this->normalize( $reserialized ) ) {
+		if ( ! BlockRoundTrip::matches( $content, $reserialized ) ) {
 			return $this->refuse(
-				new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ), array( 'status' => 400 ) )
+				new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ) . ' ' . BlockRoundTrip::hint( $content, $reserialized ), array( 'status' => 400 ) )
 			);
 		}
 
@@ -435,14 +436,6 @@ class Validator implements ContentValidator {
 	 */
 	private function isPatternBlock( array $block ): bool {
 		return is_string( $block['blockName'] ?? null );
-	}
-
-	/**
-	 * Collapse all whitespace runs to a single space and trim — the documented
-	 * normalisation the round-trip compare uses (the prototype's `$norm`).
-	 */
-	private function normalize( string $text ): string {
-		return (string) preg_replace( '/\s+/', ' ', trim( $text ) );
 	}
 
 	/**

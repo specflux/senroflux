@@ -37,6 +37,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Posts;
 
+use Specflux\SenroFlux\Packs\BlockRoundTrip;
 use Specflux\SenroFlux\Packs\Content\ImageAlt;
 use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
 use WP_Error;
@@ -169,8 +170,8 @@ final class Validator implements ContentValidator {
 		}
 
 		$reserialized = $this->serialize( $blocks );
-		if ( $this->normalize( $content ) !== $this->normalize( $reserialized ) ) {
-			return $this->refuse( new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ), array( 'status' => 400 ) ) );
+		if ( ! BlockRoundTrip::matches( $content, $reserialized ) ) {
+			return $this->refuse( new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ) . ' ' . BlockRoundTrip::hint( $content, $reserialized ), array( 'status' => 400 ) ) );
 		}
 
 		$block_error = $this->checkBlockNames( $blocks );
@@ -248,10 +249,6 @@ final class Validator implements ContentValidator {
 	 */
 	private function isPatternBlock( array $block ): bool {
 		return is_string( $block['blockName'] ?? null );
-	}
-
-	private function normalize( string $text ): string {
-		return (string) preg_replace( '/\s+/', ' ', trim( $text ) );
 	}
 
 	/**
