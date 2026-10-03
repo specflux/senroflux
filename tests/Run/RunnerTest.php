@@ -347,7 +347,94 @@ final class RunnerTest extends TestCase {
 		$kinds = array_column( $result['new_steps'], 'kind' );
 		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), $kinds );
 		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
-		$this->assertSame( array( 'error' => 'other-plugin/refund' ), $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response'] ?? null, 'unknown_tool outcome, executor never reached' );
+		$error = (string) ( $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response']['error'] ?? '' );
+		$this->assertStringStartsWith( 'Unknown tool "wpab__other-plugin__refund". Call one of the tools you were given, by its exact name.', $error, 'unknown_tool outcome, executor never reached' );
+	}
+
+	private function allowStockSearch( string ...$abilities ): array {
+		$executed = array();
+		foreach ( $abilities as $name ) {
+			$ability = new SenroFlux_Test_Fake_Ability(
+				$name,
+				execute_result: array( 'results' => array() ),
+				output_schema: array(
+					'type'       => 'object',
+					'properties' => array( 'results' => array( 'type' => 'array' ) ),
+				)
+			);
+
+			$ability->on_execute = static function ( $input ) use ( &$executed, $name ): void {
+				$executed[] = array( $name, $input );
+			};
+
+			$GLOBALS['senroflux_test_abilities'][ $name ] = $ability;
+		}
+		remove_all_filters( 'senroflux_verb_map' );
+		add_filter(
+			'senroflux_verb_map',
+			static fn (): array => array_fill_keys( $abilities, 0 ),
+			10,
+			0
+		);
+
+		return array( &$executed );
+	}
+
+	public function test_a_bare_tool_name_resolves_to_the_one_allowed_tool_and_is_stored_under_the_full_name(): void {
+		$state  = $this->allowStockSearch( 'agsafe-smoke/stock-image-search' );
+		$run_id = $this->createRun();
+
+		$this->gateway->script[] = self::callTurn( 'stock-image-search', array( 'query' => 'desk stretch' ) );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( array( 'agsafe-smoke/stock-image-search', array( 'query' => 'desk stretch' ) ) ), $state[0] );
+		$this->assertSame( 'tool_result', $result['new_steps'][2]['kind'] );
+		$this->assertSame( 'ok', $result['new_steps'][2]['status'] );
+		$this->assertSame( 'wpab__agsafe-smoke__stock-image-search', $result['new_steps'][2]['tool_name'] );
+		$names = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::ToolResult === $step->kind ) {
+				$names[] = $step->toolName;
+			}
+		}
+		$this->assertSame( array( 'wpab__agsafe-smoke__stock-image-search' ), $names );
+	}
+
+	public function test_an_ambiguous_bare_tool_name_is_refused_naming_the_exact_tools(): void {
+		$state  = $this->allowStockSearch( 'agsafe-smoke/stock-image-search', 'agsafe-two/stock-image-search' );
+		$run_id = $this->store->createRun( 1, 'test-consumer', 'Find a photo', array( 'agsafe-smoke/*', 'agsafe-two/*' ), Budget::defaults() );
+
+		$this->gateway->script[] = self::callTurn( 'stock-image-search', array( 'query' => 'desk' ) );
+		$this->gateway->script[] = self::textTurn( 'Could not.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array(), $state[0], 'an ambiguous name must never execute' );
+		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
+		$error = (string) ( $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response']['error'] ?? '' );
+		$this->assertStringStartsWith( 'Unknown tool "stock-image-search". Call one of the tools you were given, by its exact name.', $error );
+		$this->assertStringContainsString( 'wpab__agsafe-smoke__stock-image-search', $error );
+		$this->assertStringContainsString( 'wpab__agsafe-two__stock-image-search', $error );
+	}
+
+	public function test_an_unknown_tool_name_is_refused_with_a_helpful_message(): void {
+		$run_id = $this->createRun();
+
+		$this->gateway->script[] = self::callTurn( 'teleport-user', array() );
+		$this->gateway->script[] = self::textTurn( 'Could not.' );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
+		$this->assertSame(
+			array( 'error' => 'Unknown tool "teleport-user". Call one of the tools you were given, by its exact name.' ),
+			$result['new_steps'][2]['message']['parts'][0]['functionResponse']['response'] ?? null
+		);
 	}
 
 	public function test_reject_resume_writes_rejected_by_user_result(): void {

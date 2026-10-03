@@ -285,7 +285,7 @@ final class InjectionTest extends TestCase {
 		}
 
 		$this->assertSame(
-			array( array( 'error' => 'other-plugin/wipe' ) ),
+			array( array( 'error' => 'Unknown tool "wpab__other-plugin__wipe". Call one of the tools you were given, by its exact name.' ) ),
 			$refusals,
 			'an ability outside the allow globs is unknown to the run: refused by name, never resolved'
 		);

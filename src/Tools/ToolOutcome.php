@@ -62,9 +62,24 @@ final class ToolOutcome {
 
 	/**
 	 * Unknown ability — never executed.
+	 *
+	 * @param list<string> $suggestions Exact names of the closest tools the run was given.
 	 */
-	public static function unknownTool( string $name ): self {
-		return new self( 'unknown_tool', errorMessage: $name );
+	public static function unknownTool( string $name, array $suggestions = array() ): self {
+		$message = sprintf(
+			/* translators: %s: the tool name the model called. */
+			__( 'Unknown tool "%s". Call one of the tools you were given, by its exact name.', 'senroflux' ),
+			$name
+		);
+		if ( array() !== $suggestions ) {
+			$message .= ' ' . sprintf(
+				/* translators: %s: comma-separated exact tool names. */
+				__( 'Closest matches: %s.', 'senroflux' ),
+				implode( ', ', $suggestions )
+			);
+		}
+
+		return new self( 'unknown_tool', errorMessage: $message );
 	}
 
 	/**
