@@ -254,10 +254,21 @@ if ( ! function_exists( 'download_url' ) ) {
 }
 
 if ( ! function_exists( 'get_taxonomy' ) ) {
+	/**
+	 * False by default, which forces the assign/manage-terms fallback caps in
+	 * Media; a test may script `$GLOBALS['senroflux_test_taxonomies'][$name]`.
+	 */
 	function get_taxonomy( string $taxonomy ): object|false {
-		unset( $taxonomy );
+		return $GLOBALS['senroflux_test_taxonomies'][ $taxonomy ] ?? false;
+	}
+}
 
-		return false; // Forces the assign/manage-terms fallback caps in Media.
+if ( ! function_exists( 'is_object_in_taxonomy' ) ) {
+	/** Only `post` carries categories and tags unless a test scripts otherwise. */
+	function is_object_in_taxonomy( string $object_type, string $taxonomy ): bool {
+		$map = $GLOBALS['senroflux_test_object_taxonomies'] ?? array( 'post' => array( 'category', 'post_tag' ) );
+
+		return in_array( $taxonomy, $map[ $object_type ] ?? array(), true );
 	}
 }
 

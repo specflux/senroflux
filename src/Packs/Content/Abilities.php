@@ -198,6 +198,31 @@ final class Abilities {
 	private const NO_IMAGE_MAX_SECTIONS = 2;
 
 	/**
+	 * The write inputs that name terms, and the taxonomy each sets.
+	 *
+	 * @var array<string,string>
+	 */
+	private const TERM_FIELDS = array(
+		'categories' => 'category',
+		'tags'       => 'post_tag',
+	);
+
+	/**
+	 * The most names each term input accepts.
+	 *
+	 * @var array<string,int>
+	 */
+	private const TERM_LIMITS = array(
+		'categories' => 3,
+		'tags'       => 8,
+	);
+
+	/**
+	 * The longest term name, in characters.
+	 */
+	private const TERM_NAME_MAX = 60;
+
+	/**
 	 * Plain field name => the field it reads.
 	 *
 	 * @var array<string,string>
@@ -449,7 +474,8 @@ final class Abilities {
 	 * approval. Null for any other ability, and when the call passes.
 	 *
 	 * Left to execute alone: the capability gate (the permission callback owns
-	 * it) and the stale-write compare, which reads the run's tracker and is
+	 * it; the one exception is creating a missing term, which the shared term
+	 * checks refuse here too) and the stale-write compare, which reads the run's tracker and is
 	 * meaningful only at write time, after any approval wait. `@internal`.
 	 *
 	 * @param string              $base_name The ability's final segment, e.g. `create-post`.
@@ -537,7 +563,7 @@ final class Abilities {
 					return self::executeCreatePost( is_array( $input ) ? $input : array() );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					return self::mayCreate( is_array( $input ) ? $input : array() );
+					return self::createPermission( is_array( $input ) ? $input : array() );
 				},
 				// NOT destructive. `create-post` only ever makes a NEW draft
 				// (`status_not_allowed` refuses anything else), so it destroys
@@ -959,7 +985,7 @@ final class Abilities {
 			'slug'    => array( 'type' => 'string' ),
 			'parent'  => array( 'type' => 'integer' ),
 			'excerpt' => array( 'type' => 'string' ),
-		);
+		) + self::termsSchema();
 
 		return array(
 			'type'     => 'object',
@@ -1143,6 +1169,16 @@ final class Abilities {
 				// 0.3 quality fix 2: echoes the caller's `no_image_reason` back
 				// when it was the reason a page write with no image was accepted.
 				'no_image_reason' => array( 'type' => 'string' ),
+				// The term names the write set, present only when it sent
+				// `categories` or `tags`.
+				'categories'      => array(
+					'type'  => 'array',
+					'items' => array( 'type' => 'string' ),
+				),
+				'tags'            => array(
+					'type'  => 'array',
+					'items' => array( 'type' => 'string' ),
+				),
 			),
 		);
 	}
@@ -1184,6 +1220,27 @@ final class Abilities {
 				'parent'          => array( 'type' => 'integer' ),
 				'excerpt'         => array( 'type' => 'string' ),
 				'no_image_reason' => self::noImageReasonSchema(),
+			) + self::termsSchema(),
+		);
+	}
+
+	/**
+	 * The `categories` / `tags` inputs shared by create-post, update-post and
+	 * publish-post: term NAMES, resolved or created on write.
+	 *
+	 * @return array<string,array<string,mixed>>
+	 */
+	private static function termsSchema(): array {
+		return array(
+			'categories' => array(
+				'type'        => 'array',
+				'items'       => array( 'type' => 'string' ),
+				'description' => __( 'Category names, at most 3, each up to 60 characters. An existing category is reused and a missing one is created; the post\'s categories become exactly this list. Only for a post type that has categories.', 'senroflux' ),
+			),
+			'tags'       => array(
+				'type'        => 'array',
+				'items'       => array( 'type' => 'string' ),
+				'description' => __( 'Tag names, at most 8, each up to 60 characters. An existing tag is reused and a missing one is created; the post\'s tags become exactly this list. Only for a post type that has tags.', 'senroflux' ),
 			),
 		);
 	}
@@ -1208,6 +1265,16 @@ final class Abilities {
 				// 0.3 quality fix 2: echoes the caller's `no_image_reason` back
 				// when it was the reason a page write with no image was accepted.
 				'no_image_reason' => array( 'type' => 'string' ),
+				// The term names the write set, present only when it sent
+				// `categories` or `tags`.
+				'categories'      => array(
+					'type'  => 'array',
+					'items' => array( 'type' => 'string' ),
+				),
+				'tags'            => array(
+					'type'  => 'array',
+					'items' => array( 'type' => 'string' ),
+				),
 			),
 		);
 	}
@@ -1701,7 +1768,29 @@ final class Abilities {
 	private static function mayCreate( array $input ): bool {
 		$post_type = (string) ( $input['post_type'] ?? 'page' );
 
-		return self::allowedPostType( $post_type ) && current_user_can( self::createCap( $post_type ) );
+		return self::allowedPostType( $post_type )
+			&& current_user_can( self::createCap( $post_type ) )
+			&& null === self::termCapabilityError( $input );
+	}
+
+	/**
+	 * The create-post permission callback: {@see mayCreate()}, plus the
+	 * refusal naming a term the person may not create when that is the only
+	 * thing missing (a bare `false` would not say which name).
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function createPermission( array $input ): bool|WP_Error {
+		if ( self::mayCreate( $input ) ) {
+			return true;
+		}
+
+		$post_type = (string) ( $input['post_type'] ?? 'page' );
+		if ( ! self::allowedPostType( $post_type ) || ! current_user_can( self::createCap( $post_type ) ) ) {
+			return false;
+		}
+
+		return self::termRefusal( $input );
 	}
 
 	/**
@@ -1730,6 +1819,10 @@ final class Abilities {
 	private static function updatePermission( array $input, bool $publish_tier ): bool|WP_Error {
 		if ( self::mayUpdate( $input, $publish_tier ) ) {
 			return true;
+		}
+
+		if ( self::mayUpdateTarget( $input, $publish_tier ) ) {
+			return self::termRefusal( $input );
 		}
 
 		$post = is_numeric( $input['id'] ?? null ) && function_exists( 'get_post' ) ? get_post( (int) $input['id'] ) : null;
@@ -1776,6 +1869,17 @@ final class Abilities {
 	 * @param bool                $publish_tier Whether this is the publish-post gate.
 	 */
 	private static function mayUpdate( array $input, bool $publish_tier ): bool {
+		return self::mayUpdateTarget( $input, $publish_tier ) && null === self::termCapabilityError( $input );
+	}
+
+	/**
+	 * {@see mayUpdate()} without the term capabilities: the routing and
+	 * per-post gate alone.
+	 *
+	 * @param array<string,mixed> $input        Call input.
+	 * @param bool                $publish_tier Whether this is the publish-post gate.
+	 */
+	private static function mayUpdateTarget( array $input, bool $publish_tier ): bool {
 		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) ) {
 			return false;
 		}
@@ -1906,12 +2010,286 @@ final class Abilities {
 	}
 
 	/**
+	 * The term names a call asks for, per taxonomy, leniently read: anything
+	 * that is not a non-empty string is skipped (the strict refusals live in
+	 * {@see termChecks()}). Feeds the capability decision.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,list<string>> Taxonomy => trimmed names.
+	 */
+	private static function requestedTerms( array $input ): array {
+		$requested = array();
+		foreach ( self::TERM_FIELDS as $field => $taxonomy ) {
+			if ( ! is_array( $input[ $field ] ?? null ) ) {
+				continue;
+			}
+
+			$names = array();
+			foreach ( $input[ $field ] as $name ) {
+				if ( is_string( $name ) && '' !== trim( $name ) ) {
+					$names[] = trim( $name );
+				}
+			}
+			$requested[ $taxonomy ] = $names;
+		}
+
+		return $requested;
+	}
+
+	/**
+	 * Whether a taxonomy is hierarchical. Mirrors how core's REST terms
+	 * controller picks its create capability.
+	 */
+	private static function taxonomyIsHierarchical( string $taxonomy ): bool {
+		$object = function_exists( 'get_taxonomy' ) ? get_taxonomy( $taxonomy ) : false;
+
+		$fields = is_object( $object ) ? get_object_vars( $object ) : array();
+
+		return isset( $fields['hierarchical'] ) ? (bool) $fields['hierarchical'] : 'category' === $taxonomy;
+	}
+
+	/**
+	 * A taxonomy capability by its `cap` key, with the stock capability as
+	 * the fallback when the taxonomy object is unavailable.
+	 */
+	private static function taxonomyCap( string $taxonomy, string $key, string $fallback ): string {
+		$object = function_exists( 'get_taxonomy' ) ? get_taxonomy( $taxonomy ) : false;
+		if ( is_object( $object ) && isset( $object->cap->$key ) && is_string( $object->cap->$key ) ) {
+			return $object->cap->$key;
+		}
+
+		return $fallback;
+	}
+
+	/**
+	 * The id of the existing term a name resolves to (`term_exists()`: a
+	 * case-insensitive match), or null when none does.
+	 */
+	private static function existingTermId( string $name, string $taxonomy ): ?int {
+		$found = function_exists( 'term_exists' ) ? term_exists( $name, $taxonomy ) : null;
+		if ( is_array( $found ) && isset( $found['term_id'] ) ) {
+			return (int) $found['term_id'];
+		}
+
+		return is_numeric( $found ) && (int) $found > 0 ? (int) $found : null;
+	}
+
+	/**
+	 * The capability half of a call's term inputs. Assigning needs the
+	 * taxonomy's `assign_terms`; creating a missing name needs what core's
+	 * REST terms controller requires in
+	 * `WP_REST_Terms_Controller::create_item_permissions_check()`: `edit_terms`
+	 * for a hierarchical taxonomy (categories, `manage_categories`),
+	 * `assign_terms` for a flat one (tags). A name the person may assign but
+	 * not create is refused BY NAME, never dropped.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termCapabilityError( array $input ): ?WP_Error {
+		foreach ( self::requestedTerms( $input ) as $taxonomy => $names ) {
+			$assign = self::taxonomyCap( $taxonomy, 'assign_terms', 'category' === $taxonomy ? 'assign_categories' : 'assign_post_tags' );
+			if ( ! current_user_can( $assign ) ) {
+				return self::forbidden();
+			}
+
+			$create = self::taxonomyIsHierarchical( $taxonomy )
+				? self::taxonomyCap( $taxonomy, 'edit_terms', 'manage_categories' )
+				: $assign;
+			foreach ( $names as $name ) {
+				if ( null === self::existingTermId( $name, $taxonomy ) && ! current_user_can( $create ) ) {
+					return new WP_Error(
+						'term_create_forbidden',
+						sprintf(
+							/* translators: 1: term name, 2: taxonomy slug. */
+							__( 'You may assign existing terms but not create new ones, and "%1$s" does not exist in %2$s yet. Use an existing name, or leave it out.', 'senroflux' ),
+							$name,
+							$taxonomy
+						),
+						array( 'status' => 403 )
+					);
+				}
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Every check on a call's `categories` / `tags`, the SAME code execute and
+	 * {@see preflight()} run: the post type must carry the taxonomy, each list
+	 * is non-empty and within its limit, names are non-empty, at most 60
+	 * characters and not duplicates (case-insensitive), a create never offers
+	 * "Uncategorized" as its only category (refused, so the model picks a real
+	 * one; an update may set it deliberately), and creating a missing term is
+	 * permitted. Reads only.
+	 *
+	 * @param string              $post_type The post type being written.
+	 * @param array<string,mixed> $input     Call input.
+	 * @param bool                $creating  True for create-post.
+	 * @return array<string,list<string>>|WP_Error Taxonomy => trimmed names.
+	 */
+	private static function termChecks( string $post_type, array $input, bool $creating ): array|WP_Error {
+		$terms = array();
+		foreach ( self::TERM_FIELDS as $field => $taxonomy ) {
+			if ( ! array_key_exists( $field, $input ) || null === $input[ $field ] ) {
+				continue;
+			}
+
+			$invalid = static fn ( string $message ): WP_Error => new WP_Error( 'invalid_terms', $message, array( 'status' => 400 ) );
+
+			if ( ! function_exists( 'is_object_in_taxonomy' ) || ! is_object_in_taxonomy( $post_type, $taxonomy ) ) {
+				/* translators: 1: input name, 2: post type. */
+				return $invalid( sprintf( __( 'A %2$s has no %1$s: leave that input out.', 'senroflux' ), $field, $post_type ) );
+			}
+
+			$given = $input[ $field ];
+			if ( ! is_array( $given ) || array() === $given ) {
+				/* translators: %s: input name. */
+				return $invalid( sprintf( __( '%s must list at least one name, or be left out.', 'senroflux' ), $field ) );
+			}
+
+			if ( count( $given ) > self::TERM_LIMITS[ $field ] ) {
+				/* translators: 1: input name, 2: limit. */
+				return $invalid( sprintf( __( 'Send at most %2$d %1$s.', 'senroflux' ), $field, self::TERM_LIMITS[ $field ] ) );
+			}
+
+			$names = array();
+			$seen  = array();
+			foreach ( $given as $name ) {
+				$name = is_string( $name ) ? trim( $name ) : '';
+				if ( '' === $name ) {
+					/* translators: %s: input name. */
+					return $invalid( sprintf( __( 'Every name in %s must be a non-empty string.', 'senroflux' ), $field ) );
+				}
+				if ( mb_strlen( $name ) > self::TERM_NAME_MAX ) {
+					/* translators: 1: term name, 2: limit. */
+					return $invalid( sprintf( __( 'The name "%1$s" is longer than %2$d characters.', 'senroflux' ), $name, self::TERM_NAME_MAX ) );
+				}
+				if ( isset( $seen[ mb_strtolower( $name ) ] ) ) {
+					/* translators: 1: term name, 2: input name. */
+					return $invalid( sprintf( __( 'The name "%1$s" appears twice in %2$s.', 'senroflux' ), $name, $field ) );
+				}
+				$seen[ mb_strtolower( $name ) ] = true;
+				$names[]                        = $name;
+			}
+
+			if ( $creating && 'categories' === $field && 1 === count( $names ) && self::isUncategorized( $names[0] ) ) {
+				return $invalid( __( 'Uncategorized is the default, not a category choice: name a real category.', 'senroflux' ) );
+			}
+
+			$terms[ $taxonomy ] = $names;
+		}
+
+		if ( array() === $terms ) {
+			return $terms;
+		}
+
+		$capability = self::termCapabilityError( $input );
+
+		return $capability ?? $terms;
+	}
+
+	/**
+	 * Whether a category name is WordPress's default "Uncategorized" (by its
+	 * stock name or the site's current default category name).
+	 */
+	private static function isUncategorized( string $name ): bool {
+		$default = function_exists( 'get_cat_name' ) && function_exists( 'get_option' ) ? (string) get_cat_name( (int) get_option( 'default_category' ) ) : '';
+
+		return 'uncategorized' === mb_strtolower( $name ) || ( '' !== $default && mb_strtolower( $default ) === mb_strtolower( $name ) );
+	}
+
+	/**
+	 * Resolve each name to a term id, creating the missing ones. Runs before
+	 * the post is written so a failure leaves no post behind.
+	 *
+	 * @param array<string,list<string>> $terms Taxonomy => names, from {@see termChecks()}.
+	 * @return array<string,list<int>>|WP_Error Taxonomy => term ids.
+	 */
+	private static function resolveTerms( array $terms ): array|WP_Error {
+		$resolved = array();
+		foreach ( $terms as $taxonomy => $names ) {
+			$ids = array();
+			foreach ( $names as $name ) {
+				$id = self::existingTermId( $name, $taxonomy );
+				if ( null === $id ) {
+					$inserted = function_exists( 'wp_insert_term' ) ? wp_insert_term( $name, $taxonomy ) : new WP_Error( 'gateway_unavailable', __( 'Terms are not available.', 'senroflux' ), array( 'status' => 400 ) );
+					if ( $inserted instanceof WP_Error ) {
+						// A concurrent create of the same name: reuse its term.
+						$raced = $inserted->get_error_data( 'term_exists' );
+						if ( ! is_numeric( $raced ) ) {
+							return $inserted;
+						}
+						$id = (int) $raced;
+					} else {
+						$id = (int) ( $inserted['term_id'] ?? 0 );
+					}
+				}
+				$ids[] = $id;
+			}
+			$resolved[ $taxonomy ] = $ids;
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * Replace the post's terms in each taxonomy with the resolved ids.
+	 *
+	 * @param int                     $post_id  The written post.
+	 * @param array<string,list<int>> $resolved Taxonomy => term ids.
+	 */
+	private static function applyTerms( int $post_id, array $resolved ): ?WP_Error {
+		foreach ( $resolved as $taxonomy => $ids ) {
+			if ( ! function_exists( 'wp_set_post_terms' ) ) {
+				break;
+			}
+
+			$result = wp_set_post_terms( $post_id, $ids, $taxonomy, false );
+			if ( $result instanceof WP_Error ) {
+				return $result;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * The `categories` / `tags` echo of a write: the names it set.
+	 *
+	 * @param array<string,list<string>> $terms Taxonomy => names.
+	 * @return array<string,list<string>>
+	 */
+	private static function termsEcho( array $terms ): array {
+		$echo = array();
+		foreach ( self::TERM_FIELDS as $field => $taxonomy ) {
+			if ( isset( $terms[ $taxonomy ] ) ) {
+				$echo[ $field ] = $terms[ $taxonomy ];
+			}
+		}
+
+		return $echo;
+	}
+
+	/**
+	 * A permission callback's answer when only the term capabilities fail: the
+	 * message naming a term the person may not create, else a bare false.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termRefusal( array $input ): bool|WP_Error {
+		$error = self::termCapabilityError( $input );
+
+		return null !== $error && 'term_create_forbidden' === $error->get_error_code() ? $error : false;
+	}
+
+	/**
 	 * Every input check create-post runs before it writes — the SAME code
 	 * execute and {@see preflight()} both call, so a rule is never stated
 	 * twice. Reads only (slug lookup, theme patterns, media); never writes.
 	 *
 	 * @param array<string,mixed> $input Call input.
-	 * @return array{content:string,content_ignored:bool,no_image_reason:?string}|WP_Error
+	 * @return array{content:string,content_ignored:bool,no_image_reason:?string,terms:array<string,list<string>>}|WP_Error
 	 */
 	private static function createContentChecks( array $input ): array|WP_Error {
 		if ( ( $input['status'] ?? 'draft' ) !== 'draft' ) {
@@ -1926,6 +2304,11 @@ final class Abilities {
 		$post_type = (string) ( $input['post_type'] ?? 'page' );
 		$slug      = isset( $input['slug'] ) ? (string) $input['slug'] : '';
 		$title     = (string) ( $input['title'] ?? '' );
+
+		$terms = self::termChecks( $post_type, $input, true );
+		if ( is_wp_error( $terms ) ) {
+			return $terms;
+		}
 
 		$collision = self::slugCollision( $post_type, $slug, $title );
 		if ( null !== $collision ) {
@@ -1977,6 +2360,7 @@ final class Abilities {
 			'content'         => $clean['content'],
 			'content_ignored' => null !== $resolved && $resolved['content_ignored'],
 			'no_image_reason' => is_string( $image_check ) ? $image_check : null,
+			'terms'           => $terms,
 		);
 	}
 
@@ -1994,13 +2378,19 @@ final class Abilities {
 
 		// Re-checked here, not only in permission_callback: execute is reachable
 		// on its own and a write must never rely on an earlier gate having run.
-		if ( ! self::mayCreate( $input ) ) {
-			return self::forbidden();
+		$permission = self::createPermission( $input );
+		if ( true !== $permission ) {
+			return $permission instanceof WP_Error ? $permission : self::forbidden();
 		}
 
 		$checked = self::createContentChecks( $input );
 		if ( is_wp_error( $checked ) ) {
 			return $checked;
+		}
+
+		$resolved = self::resolveTerms( $checked['terms'] );
+		if ( is_wp_error( $resolved ) ) {
+			return $resolved;
 		}
 
 		$post_type       = (string) ( $input['post_type'] ?? 'page' );
@@ -2025,6 +2415,11 @@ final class Abilities {
 
 		if ( is_wp_error( $id ) ) {
 			return $id;
+		}
+
+		$term_error = self::applyTerms( (int) $id, $resolved );
+		if ( null !== $term_error ) {
+			return $term_error;
 		}
 
 		// One-H1 fix (0.3 quality feature 2): a hero pattern's own H1 plus
@@ -2052,7 +2447,7 @@ final class Abilities {
 			$result['no_image_reason'] = $image_check;
 		}
 
-		return $result;
+		return $result + self::termsEcho( $checked['terms'] );
 	}
 
 	/**
@@ -2461,7 +2856,7 @@ final class Abilities {
 	 * @param array<string,mixed> $input  Call input.
 	 * @param WP_Post|array<mixed> $post   The target post.
 	 * @param mixed               $status Requested status.
-	 * @return array{content:?string,final_content:string,content_ignored:bool,no_image_reason:?string}|WP_Error
+	 * @return array{content:?string,final_content:string,content_ignored:bool,no_image_reason:?string,terms:array<string,list<string>>}|WP_Error
 	 */
 	private static function updateContentChecks( array $input, mixed $post, mixed $status ): array|WP_Error {
 		$validator = self::currentValidator();
@@ -2483,6 +2878,11 @@ final class Abilities {
 		$new_content     = null !== $resolved ? $resolved['content'] : ( isset( $input['content'] ) ? (string) $input['content'] : '' );
 		$content_ignored = null !== $resolved && $resolved['content_ignored'];
 		$post_type       = array( 'post_type' => (string) ( $post->post_type ?? 'page' ) );
+
+		$terms = self::termChecks( $post_type['post_type'], $input, false );
+		if ( is_wp_error( $terms ) ) {
+			return $terms;
+		}
 
 		// One-H1 fix (0.3 quality feature 2): tracks whichever content ends
 		// up stored — the newly validated markup, or (unchanged) the
@@ -2553,6 +2953,7 @@ final class Abilities {
 			'final_content'   => $final_content,
 			'content_ignored' => $content_ignored,
 			'no_image_reason' => $no_image_reason,
+			'terms'           => $terms,
 		);
 	}
 
@@ -2578,8 +2979,9 @@ final class Abilities {
 		// Per-post `edit_post`, the S4 public/transition routing, and the
 		// type's publish cap on a publish/future transition. Re-checked here
 		// for the same reason as create.
-		if ( ! self::mayUpdate( $input, $publish_tier ) ) {
-			return self::forbidden();
+		$permission = self::updatePermission( $input, $publish_tier );
+		if ( true !== $permission ) {
+			return self::mayUpdateTarget( $input, $publish_tier ) && $permission instanceof WP_Error ? $permission : self::forbidden();
 		}
 
 		// S8: refuse when $post's CURRENT marker differs from what this run's
@@ -2629,9 +3031,19 @@ final class Abilities {
 			$args['post_status'] = (string) $status;
 		}
 
+		$resolved = self::resolveTerms( $checked['terms'] );
+		if ( is_wp_error( $resolved ) ) {
+			return $resolved;
+		}
+
 		$updated = wp_update_post( $args, true );
 		if ( is_wp_error( $updated ) ) {
 			return $updated;
+		}
+
+		$term_error = self::applyTerms( (int) ( $post->ID ?? 0 ), $resolved );
+		if ( null !== $term_error ) {
+			return $term_error;
 		}
 
 		if ( function_exists( 'update_post_meta' ) && HeroTemplate::shouldAssign( (string) ( $post->post_type ?? '' ), $final_content ) ) {
@@ -2657,7 +3069,7 @@ final class Abilities {
 			$result['no_image_reason'] = $no_image_reason;
 		}
 
-		return $result;
+		return $result + self::termsEcho( $checked['terms'] );
 	}
 
 	/**

@@ -155,14 +155,15 @@ final class PostsPackTest extends TestCase {
 	 * Live J1: four runs, never a category or tag — nothing told the model a
 	 * finished post has them, or how to get a term id.
 	 */
-	public function test_prose_rules_ask_for_a_category_and_tags_via_create_term_and_set_terms(): void {
+	public function test_prose_rules_ask_for_terms_on_create_post_not_a_term_round_trip(): void {
 		$skills = ( new PostsPack() )->skills();
 		$prose  = array_values( array_filter( $skills, static fn ( $s ) => 'posts/prose-rules' === $s->id ) );
 
 		$this->assertCount( 1, $prose );
-		$this->assertStringContainsString( 'category other than Uncategorized', $prose[0]->body );
-		$this->assertStringContainsString( 'create-term', $prose[0]->body );
-		$this->assertStringContainsString( 'set-terms', $prose[0]->body );
+		$this->assertStringContainsString( 'one real category (never Uncategorized)', $prose[0]->body );
+		$this->assertStringContainsString( 'two to four tags', $prose[0]->body );
+		$this->assertStringContainsString( '`categories` and `tags` (names) on create-post, in the same write', $prose[0]->body );
+		$this->assertStringContainsString( 'only to change the terms of a post that already exists', $prose[0]->body );
 	}
 
 	public function test_skills_returns_three_pack_skills_never_content_language(): void {
