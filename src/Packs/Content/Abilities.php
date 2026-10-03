@@ -3016,6 +3016,9 @@ final class Abilities {
 		if ( null !== $date ) {
 			$args['post_date']     = $date;
 			$args['post_date_gmt'] = function_exists( 'get_gmt_from_date' ) ? get_gmt_from_date( $date ) : $date;
+			// wp_update_post() replaces a never-dated draft's date with "now"
+			// unless edit_date is set — and "future" at "now" publishes.
+			$args['edit_date'] = true;
 		}
 		if ( isset( $input['slug'] ) ) {
 			$args['post_name'] = (string) $input['slug'];
@@ -3058,10 +3061,15 @@ final class Abilities {
 		$fresh = function_exists( 'get_post' ) ? get_post( (int) ( $post->ID ?? 0 ) ) : null;
 		self::recordReadMarker( (int) ( $post->ID ?? 0 ), is_object( $fresh ) ? (string) $fresh->post_modified_gmt : '' );
 
+		// What was stored, read back — never the status that was asked for.
+		$stored = is_object( $fresh ) ? $fresh : $post;
 		$result = array(
 			'id'     => (int) ( $post->ID ?? 0 ),
-			'status' => is_string( $status ) ? $status : (string) ( $post->post_status ?? '' ),
+			'status' => (string) ( $stored->post_status ?? '' ),
 		);
+		if ( null !== $date ) {
+			$result['date'] = (string) ( $stored->post_date ?? '' );
+		}
 		if ( $content_ignored ) {
 			$result['content_ignored'] = true;
 		}
