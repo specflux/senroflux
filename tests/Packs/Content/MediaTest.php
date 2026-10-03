@@ -47,6 +47,7 @@ final class MediaTest extends TestCase {
 		$GLOBALS['senroflux_test_user_caps']          = array();
 		$GLOBALS['senroflux_test_postmeta']           = array();
 		$GLOBALS['senroflux_test_terms']              = array();
+		$GLOBALS['senroflux_test_term_rows']          = array();
 		$GLOBALS['senroflux_test_post_terms']         = array();
 
 		$GLOBALS['senroflux_test_transients'] = array();
@@ -107,7 +108,7 @@ final class MediaTest extends TestCase {
 	// Registration + permission callbacks
 	// ------------------------------------------------------------------
 
-	public function test_all_twelve_abilities_are_registered(): void {
+	public function test_all_thirteen_abilities_are_registered(): void {
 		foreach (
 			array(
 				'senroflux/media-search',
@@ -120,6 +121,7 @@ final class MediaTest extends TestCase {
 				'senroflux/read-media',
 				'senroflux/set-terms',
 				'senroflux/create-term',
+				'senroflux/list-terms',
 				'senroflux/stock-image-search',
 				'senroflux/stock-image-import',
 			) as $name
@@ -289,26 +291,116 @@ final class MediaTest extends TestCase {
 		$this->assertTrue( (bool) $ability->check_permissions( $input ) );
 	}
 
-	public function test_create_term_requires_the_manage_terms_cap(): void {
+	public function test_create_term_requires_the_manage_terms_cap_for_a_category_and_says_so(): void {
 		$ability = $this->ability( 'senroflux/create-term' );
+		$input   = array(
+			'taxonomy' => 'category',
+			'name'     => 'News',
+		);
 
-		$this->assertFalse(
-			(bool) $ability->check_permissions(
-				array(
-					'taxonomy' => 'category',
-					'name'     => 'News',
-				)
-			)
-		);
+		$refusal = $ability->check_permissions( $input );
+		$this->assertInstanceOf( WP_Error::class, $refusal );
+		$this->assertSame( 'term_create_forbidden', $refusal->get_error_code() );
+		$this->assertStringContainsString( 'can\'t create categories', $refusal->get_error_message() );
+		$this->assertStringContainsString( 'list-terms', $refusal->get_error_message() );
+
+		$this->grant( 'assign_categories' );
+		$this->assertInstanceOf( WP_Error::class, $ability->check_permissions( $input ), 'assigning is not creating' );
+
 		$this->grant( 'manage_categories' );
-		$this->assertTrue(
-			(bool) $ability->check_permissions(
+		$this->assertTrue( $ability->check_permissions( $input ) );
+	}
+
+	/** A flat taxonomy is created with the assign cap, like core REST and create-post. */
+	public function test_create_term_for_a_tag_needs_only_the_assign_cap(): void {
+		$ability = $this->ability( 'senroflux/create-term' );
+		$input   = array(
+			'taxonomy' => 'post_tag',
+			'name'     => 'Kitchen',
+		);
+
+		$this->assertFalse( (bool) $ability->check_permissions( $input ) );
+		$this->grant( 'assign_post_tags' );
+		$this->assertTrue( $ability->check_permissions( $input ) );
+	}
+
+	// ------------------------------------------------------------------
+	// list-terms
+	// ------------------------------------------------------------------
+
+	public function test_list_terms_permission_is_the_taxonomys_assign_cap(): void {
+		$ability = $this->ability( 'senroflux/list-terms' );
+
+		$this->assertFalse( (bool) $ability->check_permissions( array( 'taxonomy' => 'category' ) ) );
+		$this->grant( 'assign_post_tags' );
+		$this->assertFalse( (bool) $ability->check_permissions( array( 'taxonomy' => 'category' ) ), 'another taxonomy\'s cap is not enough' );
+		$this->assertTrue( (bool) $ability->check_permissions( array( 'taxonomy' => 'post_tag' ) ) );
+		$this->assertFalse( (bool) $ability->check_permissions( array( 'taxonomy' => 'product_cat' ) ), 'only category and post_tag' );
+		$this->grant( 'assign_categories' );
+		$this->assertTrue( (bool) $ability->check_permissions( array( 'taxonomy' => 'category' ) ) );
+	}
+
+	public function test_list_terms_returns_names_and_counts_most_used_first_and_schema_valid(): void {
+		$GLOBALS['senroflux_test_term_rows'] = array(
+			'category' => array(
+				'Recipes'          => 3,
+				'Food &amp; Drink' => 12,
+				'Gardening'        => 7,
+			),
+		);
+
+		$result = $this->ability( 'senroflux/list-terms' )->execute( array( 'taxonomy' => 'category' ) );
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertSame(
+			array(
 				array(
-					'taxonomy' => 'category',
-					'name'     => 'News',
-				)
+					'name'  => 'Food & Drink',
+					'count' => 12,
+				),
+				array(
+					'name'  => 'Gardening',
+					'count' => 7,
+				),
+				array(
+					'name'  => 'Recipes',
+					'count' => 3,
+				),
+			),
+			$result['terms']
+		);
+
+		$narrowed = $this->ability( 'senroflux/list-terms' )->execute(
+			array(
+				'taxonomy' => 'category',
+				'search'   => 'garden',
 			)
 		);
+		$this->assertSame( array( 'Gardening' ), array_column( $narrowed['terms'], 'name' ) );
+	}
+
+	public function test_list_terms_returns_at_most_fifty_and_refuses_another_taxonomy(): void {
+		$rows = array();
+		for ( $i = 1; $i <= 60; $i++ ) {
+			$rows[ 'tag ' . $i ] = $i;
+		}
+		$GLOBALS['senroflux_test_term_rows'] = array( 'post_tag' => $rows );
+
+		$result = $this->ability( 'senroflux/list-terms' )->execute( array( 'taxonomy' => 'post_tag' ) );
+		$this->assertCount( 50, $result['terms'] );
+		$this->assertSame( 60, $result['terms'][0]['count'] );
+
+		$this->assertInstanceOf( WP_Error::class, $this->ability( 'senroflux/list-terms' )->execute( array( 'taxonomy' => 'nav_menu' ) ) );
+	}
+
+	/** Real WordPress refuses an undeclared input field before execute runs; the stub does not. */
+	public function test_list_terms_schema_declares_every_field(): void {
+		$schema = $this->ability( 'senroflux/list-terms' )->get_input_schema();
+
+		$this->assertFalse( $schema['additionalProperties'] );
+		$this->assertSame( array( 'taxonomy', 'search' ), array_keys( $schema['properties'] ) );
+		$this->assertSame( array( 'category', 'post_tag' ), $schema['properties']['taxonomy']['enum'] );
+		$this->assertSame( array( 'taxonomy' ), $schema['required'] );
 	}
 
 	// ------------------------------------------------------------------

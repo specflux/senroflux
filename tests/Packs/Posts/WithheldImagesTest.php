@@ -80,6 +80,7 @@ final class WithheldImagesTest extends TestCase {
 		}
 		$this->assertContains( 'senroflux/create-post', $allow );
 		$this->assertContains( 'senroflux/set-terms', $allow );
+		$this->assertContains( 'senroflux/list-terms', $allow );
 		$this->assertEqualsCanonicalizing( self::IMAGE_ROLES, $withheld );
 		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( $withheld ) );
 	}

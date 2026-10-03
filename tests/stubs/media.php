@@ -350,3 +350,47 @@ if ( ! function_exists( 'wp_set_post_terms' ) ) {
 		return $GLOBALS['senroflux_test_post_terms'][ $post_id ][ $taxonomy ];
 	}
 }
+
+if ( ! function_exists( 'get_terms' ) ) {
+	/**
+	 * Honours `taxonomy`, `search` (substring of the name), `orderby=count`
+	 * (most used first), `number`. Rows are scripted in
+	 * `$GLOBALS['senroflux_test_term_rows'][$taxonomy]` as name => count;
+	 * `product_cat` reads the commerce stub's `senroflux_test_product_cats`.
+	 *
+	 * @param array<string,mixed> $args
+	 * @return list<object>
+	 */
+	function get_terms( array $args = array() ): array {
+		$taxonomy = (string) ( $args['taxonomy'] ?? '' );
+		$terms    = array();
+		if ( 'product_cat' === $taxonomy ) {
+			foreach ( $GLOBALS['senroflux_test_product_cats'] ?? array() as $id => $row ) {
+				$terms[] = (object) array(
+					'term_id' => (int) $id,
+					'name'    => (string) $row['name'],
+					'slug'    => (string) $row['slug'],
+					'count'   => (int) ( $row['count'] ?? 0 ),
+				);
+			}
+
+			return $terms;
+		}
+
+		foreach ( $GLOBALS['senroflux_test_term_rows'][ $taxonomy ] ?? array() as $name => $count ) {
+			if ( isset( $args['search'] ) && false === stripos( (string) $name, (string) $args['search'] ) ) {
+				continue;
+			}
+			$terms[] = (object) array(
+				'term_id' => count( $terms ) + 1,
+				'name'    => (string) $name,
+				'count'   => (int) $count,
+			);
+		}
+		if ( 'count' === ( $args['orderby'] ?? '' ) ) {
+			usort( $terms, static fn ( $a, $b ) => $b->count <=> $a->count );
+		}
+
+		return isset( $args['number'] ) ? array_slice( $terms, 0, (int) $args['number'] ) : $terms;
+	}
+}

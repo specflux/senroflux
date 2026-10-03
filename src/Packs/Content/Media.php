@@ -28,7 +28,8 @@ defined( 'ABSPATH' ) || exit;
  * `stock-image-import` added by the stock-photo-fallback build plan):
  * `media-search`, `media-upload`, `generate-image`, `generate-alt-text`,
  * `set-featured-image`, `list-missing-alt`, `update-alt`, `read-media`,
- * `set-terms`, `create-term`, `stock-image-search`, `stock-image-import`.
+ * `set-terms`, `create-term`, `list-terms`, `stock-image-search`,
+ * `stock-image-import`.
  *
  * TARGET REPO PATH: src/Packs/Content/Media.php
  *
@@ -82,6 +83,16 @@ final class Media {
 	 * attachments (S5).
 	 */
 	public const ATTACHMENT_CAP = 25;
+
+	/**
+	 * The taxonomies `list-terms` answers for: the two a post carries.
+	 */
+	private const LISTABLE_TAXONOMIES = array( 'category', 'post_tag' );
+
+	/**
+	 * `list-terms` never returns more than this many terms.
+	 */
+	private const LIST_TERMS_LIMIT = 50;
 
 	/**
 	 * The `media-alt:` key prefix inside a run's `objects_json` map — kept
@@ -278,7 +289,7 @@ final class Media {
 	}
 
 	/**
-	 * Register the twelve abilities. Idempotent per request.
+	 * Register the thirteen abilities. Idempotent per request.
 	 */
 	public static function register(): void {
 		if ( self::$registered ) {
@@ -300,6 +311,7 @@ final class Media {
 		self::registerReadMedia();
 		self::registerSetTerms();
 		self::registerCreateTerm();
+		self::registerListTerms();
 		self::registerStockImageSearch();
 		self::registerStockImageImport();
 	}
@@ -758,6 +770,66 @@ final class Media {
 						'readonly'    => false,
 						'destructive' => false,
 						'idempotent'  => false,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * Tier-0 read: the names a post may be filed under. A model that cannot
+	 * see them guesses, and a guess at a category a Contributor may not
+	 * create is refused (live J7: create-term refused five times).
+	 */
+	private static function registerListTerms(): void {
+		wp_register_ability(
+			'senroflux/list-terms',
+			array(
+				'label'               => __( 'List terms', 'senroflux' ),
+				'description'         => __( 'List the existing categories or tags, most used first (up to 50), optionally narrowed by a search word. Call this before choosing terms for a post and reuse an existing name.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'required'             => array( 'taxonomy' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'taxonomy' => array(
+							'type' => 'string',
+							'enum' => self::LISTABLE_TAXONOMIES,
+						),
+						'search'   => array( 'type' => 'string' ),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'terms' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'terms' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'name', 'count' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'name'  => array( 'type' => 'string' ),
+									'count' => array( 'type' => 'integer' ),
+								),
+							),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeListTerms( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					return self::mayListTerms( is_array( $input ) ? $input : array() );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
+						'destructive' => false,
+						'idempotent'  => true,
 					)
 				),
 			)
@@ -1825,6 +1897,51 @@ final class Media {
 		return array( 'term_id' => (int) ( $inserted['term_id'] ?? 0 ) );
 	}
 
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array{terms:list<array{name:string,count:int}>}|WP_Error
+	 */
+	private static function executeListTerms( array $input ): array|WP_Error {
+		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
+		if ( ! in_array( $taxonomy, self::LISTABLE_TAXONOMIES, true ) ) {
+			return new WP_Error( 'invalid_input', __( 'taxonomy must be category or post_tag.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+		if ( ! function_exists( 'get_terms' ) ) {
+			return new WP_Error( 'gateway_unavailable', __( 'Terms are not available.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$args   = array(
+			'taxonomy'   => $taxonomy,
+			'hide_empty' => false,
+			'number'     => self::LIST_TERMS_LIMIT,
+			'orderby'    => 'count',
+			'order'      => 'DESC',
+		);
+		$search = is_string( $input['search'] ?? null ) ? trim( $input['search'] ) : '';
+		if ( '' !== $search ) {
+			$args['search'] = $search;
+		}
+
+		$found = get_terms( $args );
+		if ( $found instanceof WP_Error ) {
+			return $found;
+		}
+
+		$terms = array();
+		foreach ( is_array( $found ) ? $found : array() as $term ) {
+			$row = is_object( $term ) ? get_object_vars( $term ) : array();
+			if ( ! isset( $row['name'] ) ) {
+				continue;
+			}
+			$terms[] = array(
+				'name'  => html_entity_decode( (string) $row['name'], ENT_QUOTES ),
+				'count' => (int) ( $row['count'] ?? 0 ),
+			);
+		}
+
+		return array( 'terms' => array_slice( $terms, 0, self::LIST_TERMS_LIMIT ) );
+	}
+
 	// ------------------------------------------------------------------
 	// Permissions
 	// ------------------------------------------------------------------
@@ -1852,12 +1969,50 @@ final class Media {
 	}
 
 	/**
+	 * Creating a term needs what core's REST terms controller requires: the
+	 * taxonomy's manage cap for a hierarchical one (categories), its assign
+	 * cap for a flat one (tags) — the same rule create-post applies to a new
+	 * name. A refused category says so, instead of a bare denial.
+	 *
 	 * @param array<string,mixed> $input Call input.
 	 */
-	private static function mayCreateTerm( array $input ): bool {
+	private static function mayCreateTerm( array $input ): bool|WP_Error {
+		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
+		if ( ! function_exists( 'current_user_can' ) ) {
+			return false;
+		}
+
+		$object       = function_exists( 'get_taxonomy' ) ? get_taxonomy( $taxonomy ) : false;
+		$fields       = is_object( $object ) ? get_object_vars( $object ) : array();
+		$hierarchical = isset( $fields['hierarchical'] ) ? (bool) $fields['hierarchical'] : 'category' === $taxonomy;
+
+		if ( ! $hierarchical ) {
+			return current_user_can( self::assignTermsCap( $taxonomy ) );
+		}
+		if ( current_user_can( self::manageTermsCap( $taxonomy ) ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'term_create_forbidden',
+			'category' === $taxonomy
+				? __( 'Your account can\'t create categories. Call list-terms and use a category that already exists.', 'senroflux' )
+				: __( 'Your account can\'t create terms in this taxonomy. Call list-terms and use one that already exists.', 'senroflux' ),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * Listing names is what assigning them needs: the taxonomy's `assign_terms`.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function mayListTerms( array $input ): bool {
 		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
 
-		return function_exists( 'current_user_can' ) && current_user_can( self::manageTermsCap( $taxonomy ) );
+		return in_array( $taxonomy, self::LISTABLE_TAXONOMIES, true )
+			&& function_exists( 'current_user_can' )
+			&& current_user_can( self::assignTermsCap( $taxonomy ) );
 	}
 
 	private static function assignTermsCap( string $taxonomy ): string {
@@ -1868,7 +2023,7 @@ final class Media {
 			}
 		}
 
-		return 'assign_categories';
+		return 'post_tag' === $taxonomy ? 'assign_post_tags' : 'assign_categories';
 	}
 
 	private static function manageTermsCap( string $taxonomy ): string {
