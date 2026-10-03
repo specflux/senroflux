@@ -26,7 +26,11 @@ defined( 'ABSPATH' ) || exit;
  *  1. the grant's correlation is the run currently being ticked — a stale
  *     context, another run's grant, or no run in flight at all is a refusal;
  *  2. the object id carried by the call's arguments is one the run itself
- *     wrote (present in `objects_json`).
+ *     wrote (present in `objects_json`) OR one the CURRENTLY ACCEPTED plan
+ *     names under a step whose verbs map to this call's gate verb. The plan
+ *     is what the human actually read, which is what lets a pre-approval
+ *     cover an edit to an EXISTING object (live J10). Its objects come from
+ *     the stored plan step on the server, never from the call.
  *
  * A call whose arguments carry NO object id (a create) is allowed on (1)
  * alone and fenced by `remaining_count`; S14 settles that explicitly, so it is
@@ -64,6 +68,22 @@ final class GrantEligibility {
 	private static $object_id_key = null;
 
 	/**
+	 * Object-id PREFIX resolver: (ability id, call args) => the string the
+	 * pack prepends to the extracted id (`term:`), or ''.
+	 *
+	 * @var callable(string,array<string,mixed>):string|null
+	 */
+	private static $object_id_prefix = null;
+
+	/**
+	 * The accepted plan's named objects: gate verb => qualified object ids,
+	 * read at filter time (a re-plan swaps the accepted plan mid-run).
+	 *
+	 * @var callable():array<string,list<string>>|null
+	 */
+	private static $plan_objects = null;
+
+	/**
 	 * Register the filter. Called once from the composition root; the callback
 	 * is inert (answers false) until a tick opens a run context.
 	 */
@@ -77,18 +97,30 @@ final class GrantEligibility {
 	 * @param string                                   $correlation_id  The run's correlation id.
 	 * @param callable():array<string,mixed>           $objects         Written-object map provider.
 	 * @param callable(string,array<string,mixed>):string $object_id_key Object-id key resolver.
+	 * @param callable(string,array<string,mixed>):string|null $object_id_prefix Object-id prefix resolver.
+	 * @param callable():array<string,list<string>>|null $plan_objects Accepted plan's objects, by gate verb.
 	 */
-	public static function useRun( string $correlation_id, callable $objects, callable $object_id_key ): void {
-		self::$correlation   = '' !== $correlation_id ? $correlation_id : null;
-		self::$objects       = $objects;
-		self::$object_id_key = $object_id_key;
+	public static function useRun(
+		string $correlation_id,
+		callable $objects,
+		callable $object_id_key,
+		?callable $object_id_prefix = null,
+		?callable $plan_objects = null
+	): void {
+		self::$correlation      = '' !== $correlation_id ? $correlation_id : null;
+		self::$objects          = $objects;
+		self::$object_id_key    = $object_id_key;
+		self::$object_id_prefix = $object_id_prefix;
+		self::$plan_objects     = $plan_objects;
 	}
 
 	/** Close the run context (a tick's `finally`). */
 	public static function forgetRun(): void {
-		self::$correlation   = null;
-		self::$objects       = null;
-		self::$object_id_key = null;
+		self::$correlation      = null;
+		self::$objects          = null;
+		self::$object_id_key    = null;
+		self::$object_id_prefix = null;
+		self::$plan_objects     = null;
 	}
 
 	/**
@@ -124,7 +156,8 @@ final class GrantEligibility {
 			return false;
 		}
 
-		// (2) The object, when the call names one, must be one this run wrote.
+		// (2) The object, when the call names one, must be one this run wrote
+		// or the accepted plan names for this verb.
 		/** @var array<string,mixed> $call_args */
 		$call_args = is_array( $args ) ? $args : array();
 		$object_id = self::objectIdIn( $verb, $call_args );
@@ -132,7 +165,15 @@ final class GrantEligibility {
 			return true;
 		}
 
-		return array_key_exists( $object_id, self::runObjects() );
+		// The id as the run tracks it: objects_json keys and plan `objects`
+		// both carry the pack's prefix, the call's arguments do not.
+		$object_id = self::prefixFor( $verb, $call_args ) . $object_id;
+
+		if ( array_key_exists( $object_id, self::runObjects() ) ) {
+			return true;
+		}
+
+		return in_array( $object_id, self::planObjects()[ $verb ] ?? array(), true );
 	}
 
 	/**
@@ -167,6 +208,37 @@ final class GrantEligibility {
 		}
 
 		$objects = ( self::$objects )();
+
+		return is_array( $objects ) ? $objects : array();
+	}
+
+	/**
+	 * The pack's id prefix for this call, or ''.
+	 *
+	 * @param string              $verb The ability id.
+	 * @param array<string,mixed> $args The call arguments.
+	 */
+	private static function prefixFor( string $verb, array $args ): string {
+		if ( ! is_callable( self::$object_id_prefix ) ) {
+			return '';
+		}
+
+		$prefix = ( self::$object_id_prefix )( $verb, $args );
+
+		return is_string( $prefix ) ? $prefix : '';
+	}
+
+	/**
+	 * The accepted plan's named objects by gate verb, as they stand now.
+	 *
+	 * @return array<string,list<string>>
+	 */
+	private static function planObjects(): array {
+		if ( ! is_callable( self::$plan_objects ) ) {
+			return array();
+		}
+
+		$objects = ( self::$plan_objects )();
 
 		return is_array( $objects ) ? $objects : array();
 	}
