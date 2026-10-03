@@ -227,6 +227,31 @@ if ( ! function_exists( 'wp_update_post' ) ) {
 		$id = (int) ( $postarr['ID'] ?? 0 );
 		if ( isset( $GLOBALS['senroflux_test_posts'][ $id ] ) ) {
 			$post = $GLOBALS['senroflux_test_posts'][ $id ];
+			// Real wp_update_post() (wp-includes/post.php): a never-dated
+			// draft gets "now" instead of the passed date unless edit_date is
+			// set, and wp_insert_post() publishes a `future` post whose date
+			// is not ahead. Without both, a scheduling bug passes here.
+			$clear_date = in_array( (string) ( $post->post_status ?? '' ), array( 'draft', 'pending', 'auto-draft' ), true )
+				&& empty( $postarr['edit_date'] )
+				&& '0000-00-00 00:00:00' === (string) ( $post->post_date_gmt ?? '0000-00-00 00:00:00' );
+			unset( $postarr['edit_date'] );
+			if ( $clear_date ) {
+				$postarr['post_date']     = gmdate( 'Y-m-d H:i:s', class_exists( \Specflux\SenroFlux\Run\Clock::class ) ? \Specflux\SenroFlux\Run\Clock::now() : time() );
+				$postarr['post_date_gmt'] = '';
+			}
+			if ( 'future' === ( $postarr['post_status'] ?? null ) ) {
+				$gmt = (string) ( $postarr['post_date_gmt'] ?? '' );
+				$at  = '' === $gmt ? false : strtotime( $gmt . ' UTC' );
+				$now = class_exists( \Specflux\SenroFlux\Run\Clock::class ) ? \Specflux\SenroFlux\Run\Clock::now() : time();
+				if ( false === $at || $at <= $now ) {
+					$postarr['post_status'] = 'publish';
+				}
+			}
+			foreach ( array( 'post_date', 'post_date_gmt' ) as $date_key ) {
+				if ( array_key_exists( $date_key, $postarr ) ) {
+					$post->{$date_key} = $postarr[ $date_key ];
+				}
+			}
 			foreach ( $postarr as $key => $value ) {
 				if ( 'ID' === $key ) {
 					continue;
