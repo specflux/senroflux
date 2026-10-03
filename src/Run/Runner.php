@@ -3046,7 +3046,8 @@ final class Runner {
 			// accepts is the tier the fence enforces.
 			$this->packVerbMap( $run ),
 			$this->knownVerbs( $run, $registry ),
-			$this->remainingQuestions( $run )
+			$this->remainingQuestions( $run ),
+			$this->objectLookup()
 		);
 		if ( is_wp_error( $payload ) ) {
 			$code = (string) $payload->get_error_code();
@@ -3812,10 +3813,31 @@ final class Runner {
 	 * @return array<string,mixed>
 	 */
 	private function planUi( array $payload, int $step_id, int $remaining, int $run_id ): array {
+		$lookup = $this->objectLookup();
+		$steps  = array();
+		foreach ( (array) ( $payload['steps'] ?? array() ) as $step ) {
+			if ( is_array( $step ) && isset( $step['objects'] ) && is_array( $step['objects'] ) ) {
+				// The card shows what the human is naming, not bare ids.
+				$step['objects'] = array_map(
+					static function ( $object_id ) use ( $lookup ): array {
+						$found = $lookup( (string) $object_id );
+
+						return array(
+							'id'    => (string) $object_id,
+							'title' => (string) ( $found['title'] ?? '' ),
+							'type'  => (string) ( $found['object_type'] ?? 'unknown' ),
+						);
+					},
+					$step['objects']
+				);
+			}
+			$steps[] = $step;
+		}
+
 		return array(
 			'step_id'              => $step_id,
 			'goal'                 => (string) ( $payload['goal'] ?? '' ),
-			'steps'                => (array) ( $payload['steps'] ?? array() ),
+			'steps'                => $steps,
 			'assumptions'          => (array) ( $payload['assumptions'] ?? array() ),
 			'remaining_plans'      => $remaining,
 			'preapprove_available' => $this->preapprovalEnabled(),
@@ -3823,6 +3845,16 @@ final class Runner {
 				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
 				: '',
 		);
+	}
+
+	/**
+	 * The report's object lookup (id => object_type/title/…), the one place
+	 * that can name every pack's ids.
+	 *
+	 * @return callable(string|int):array<string,mixed>
+	 */
+	private function objectLookup(): callable {
+		return is_callable( $this->post_lookup ) ? $this->post_lookup : Report::wpPostLookup();
 	}
 
 	/**

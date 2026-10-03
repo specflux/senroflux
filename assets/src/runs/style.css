@@ -480,6 +480,15 @@
 	margin-block: 4px;
 }
 
+.senroflux-plan-objects {
+	margin-block: 2px;
+	margin-inline-start: 16px;
+	margin-inline-end: 0;
+	padding: 0;
+	color: #646970;
+	overflow-wrap: anywhere;
+}
+
 .senroflux-plan-approval-count {
 	font-weight: 600;
 	color: #8a4b00;

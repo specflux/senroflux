@@ -114,3 +114,26 @@ describe( 'Agent Safety mode shows no approval-count paragraph at all', () => {
 		expect( container.querySelector( '.senroflux-plan-approval-count' ) ).toBeNull();
 	} );
 } );
+
+describe( 'a step naming N existing objects asks once per object per verb', () => {
+	const objects = ( n ) => Array.from( { length: n }, ( _, i ) => ( { id: String( i + 1 ), title: '', type: 'product' } ) );
+
+	it( 'counts max(1, named objects) for each qualifying verb', () => {
+		const steps = [
+			{ text: 'Price three products', verbs: [ 'commerce/price-change' ], tier: 2, objects: objects( 3 ) },
+			{ text: 'Price one without naming', verbs: [ 'commerce/price-change' ], tier: 2 },
+			{ text: 'Read', verbs: [ 'commerce/product-read' ], tier: 0, objects: objects( 4 ) },
+		];
+
+		// 3 + 1 + 0: the Tier 0 read still counts nothing however many it names.
+		expect( planApprovalCount( { steps }, 'built_in' ) ).toBe( 4 );
+	} );
+
+	it( 'multiplies every qualifying verb of the step', () => {
+		const steps = [
+			{ text: 'Update two', verbs: [ 'posts/update-draft', 'posts/set-featured-image' ], tier: 1, objects: objects( 2 ) },
+		];
+
+		expect( planApprovalCount( { steps }, 'built_in' ) ).toBe( 4 );
+	} );
+} );
