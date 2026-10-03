@@ -9,6 +9,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs;
 
+use Specflux\SenroFlux\Packs\Content\Abilities;
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Setup\Checks;
@@ -699,14 +700,19 @@ abstract class Pack {
 	 * every admitted call, in AS and built-in gate modes alike, after the S7
 	 * plan fence and the gate's own approval decision but before the
 	 * ability's own permission/execute pair — so a refusal here can never be
-	 * bypassed by anything downstream. The base returns null (no opinion)
-	 * for every call, which is every pre-S19 pack's unchanged behaviour.
+	 * bypassed by anything downstream. The base refuses an invalid
+	 * `senroflux/` content write (create-post, update-post, publish-post) via
+	 * {@see Abilities::preflight()} — the same input checks the ability's
+	 * execute runs — so a call that could never succeed is never parked for
+	 * approval; every other ability gets no opinion (null).
 	 *
 	 * @param string               $ability The concrete ability id the model called.
 	 * @param array<string,mixed>  $input   The call input.
 	 */
 	public function validateCall( string $ability, array $input ): ?WP_Error {
-		unset( $ability, $input );
+		if ( 0 === strpos( $ability, 'senroflux/' ) ) {
+			return Abilities::preflight( $this->baseName( $ability ), $input );
+		}
 
 		return null;
 	}

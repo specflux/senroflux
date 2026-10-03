@@ -443,6 +443,43 @@ final class Abilities {
 	}
 
 	/**
+	 * The side-effect-free half of a content write: runs the input checks
+	 * create-post, update-post and publish-post run before they persist
+	 * anything, so the harness can refuse an invalid call BEFORE it parks for
+	 * approval. Null for any other ability, and when the call passes.
+	 *
+	 * Left to execute alone: the capability gate (the permission callback owns
+	 * it) and the stale-write compare, which reads the run's tracker and is
+	 * meaningful only at write time, after any approval wait. `@internal`.
+	 *
+	 * @param string              $base_name The ability's final segment, e.g. `create-post`.
+	 * @param array<string,mixed> $input     Call input.
+	 */
+	public static function preflight( string $base_name, array $input ): ?WP_Error {
+		if ( 'create-post' === $base_name ) {
+			if ( array_key_exists( 'pack', $input ) ) {
+				return self::packArgRefused();
+			}
+			$checked = self::createContentChecks( $input );
+
+			return is_wp_error( $checked ) ? $checked : null;
+		}
+
+		if ( ! in_array( $base_name, array( 'update-post', 'publish-post' ), true ) ) {
+			return null;
+		}
+
+		$target = self::updateTarget( $input, 'publish-post' === $base_name );
+		if ( is_wp_error( $target ) ) {
+			return $target;
+		}
+
+		$checked = self::updateContentChecks( $input, $target['post'], $target['status'] );
+
+		return is_wp_error( $checked ) ? $checked : null;
+	}
+
+	/**
 	 * senroflux/read-content — three-mode oneOf (by id / by slug / query).
 	 */
 	private static function registerReadContent(): void {
@@ -1869,23 +1906,14 @@ final class Abilities {
 	}
 
 	/**
-	 * create-post execute: draft-only, slug/title collision checked, content
-	 * validated, insert as draft.
+	 * Every input check create-post runs before it writes — the SAME code
+	 * execute and {@see preflight()} both call, so a rule is never stated
+	 * twice. Reads only (slug lookup, theme patterns, media); never writes.
 	 *
 	 * @param array<string,mixed> $input Call input.
-	 * @return array<string,mixed>|WP_Error
+	 * @return array{content:string,content_ignored:bool,no_image_reason:?string}|WP_Error
 	 */
-	private static function executeCreatePost( array $input ): array|WP_Error {
-		if ( array_key_exists( 'pack', $input ) ) {
-			return self::packArgRefused();
-		}
-
-		// Re-checked here, not only in permission_callback: execute is reachable
-		// on its own and a write must never rely on an earlier gate having run.
-		if ( ! self::mayCreate( $input ) ) {
-			return self::forbidden();
-		}
-
+	private static function createContentChecks( array $input ): array|WP_Error {
 		if ( ( $input['status'] ?? 'draft' ) !== 'draft' ) {
 			return new WP_Error( 'status_not_allowed', __( 'Only draft is allowed on create.', 'senroflux' ), array( 'status' => 400 ) );
 		}
@@ -1909,9 +1937,8 @@ final class Abilities {
 			return $resolved;
 		}
 
-		$content         = null !== $resolved ? $resolved['content'] : (string) ( $input['content'] ?? '' );
-		$content_ignored = null !== $resolved && $resolved['content_ignored'];
-		$clean           = $validator->clean( $content, array( 'post_type' => $post_type ) );
+		$content = null !== $resolved ? $resolved['content'] : (string) ( $input['content'] ?? '' );
+		$clean   = $validator->clean( $content, array( 'post_type' => $post_type ) );
 		if ( ! $clean['ok'] ) {
 			/** @var WP_Error $error */
 			$error = $clean['wp_error'];
@@ -1945,6 +1972,43 @@ final class Abilities {
 		if ( null !== $hero_check ) {
 			return $hero_check;
 		}
+
+		return array(
+			'content'         => $clean['content'],
+			'content_ignored' => null !== $resolved && $resolved['content_ignored'],
+			'no_image_reason' => is_string( $image_check ) ? $image_check : null,
+		);
+	}
+
+	/**
+	 * create-post execute: draft-only, slug/title collision checked, content
+	 * validated, insert as draft.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeCreatePost( array $input ): array|WP_Error {
+		if ( array_key_exists( 'pack', $input ) ) {
+			return self::packArgRefused();
+		}
+
+		// Re-checked here, not only in permission_callback: execute is reachable
+		// on its own and a write must never rely on an earlier gate having run.
+		if ( ! self::mayCreate( $input ) ) {
+			return self::forbidden();
+		}
+
+		$checked = self::createContentChecks( $input );
+		if ( is_wp_error( $checked ) ) {
+			return $checked;
+		}
+
+		$post_type       = (string) ( $input['post_type'] ?? 'page' );
+		$slug            = isset( $input['slug'] ) ? (string) $input['slug'] : '';
+		$title           = (string) ( $input['title'] ?? '' );
+		$clean           = array( 'content' => $checked['content'] );
+		$content_ignored = $checked['content_ignored'];
+		$image_check     = $checked['no_image_reason'];
 
 		$id = wp_insert_post(
 			array(
@@ -2341,16 +2405,15 @@ final class Abilities {
 	}
 
 	/**
-	 * update-post / publish-post execute (S4 split). `$publish_tier` selects
-	 * which ability's status allow-list and routing gate applies; everything
-	 * else — content validation, the omitted/empty-content contract, the
-	 * publish-time stored-content re-check — is shared.
+	 * The input checks update-post/publish-post run BEFORE their permission
+	 * gate: the target resolves to an allowed post type, the status is on the
+	 * ability's allow-list, and a schedule would actually schedule.
 	 *
 	 * @param array<string,mixed> $input        Call input.
 	 * @param bool                $publish_tier Whether this is publish-post.
-	 * @return array<string,mixed>|WP_Error
+	 * @return array{post:WP_Post|array<mixed>,status:mixed}|WP_Error
 	 */
-	private static function executeUpdateLike( array $input, bool $publish_tier ): array|WP_Error {
+	private static function updateTarget( array $input, bool $publish_tier ): array|WP_Error {
 		if ( array_key_exists( 'pack', $input ) ) {
 			return self::packArgRefused();
 		}
@@ -2383,32 +2446,27 @@ final class Abilities {
 			return $schedule_refusal;
 		}
 
-		// Per-post `edit_post`, the S4 public/transition routing, and the
-		// type's publish cap on a publish/future transition. Re-checked here
-		// for the same reason as create.
-		if ( ! self::mayUpdate( $input, $publish_tier ) ) {
-			return self::forbidden();
-		}
+		return array(
+			'post'   => $post,
+			'status' => $status,
+		);
+	}
 
-		// S8: refuse when $post's CURRENT marker differs from what this run's
-		// tracker last recorded for it, or when the run never read it at all.
-		// Checked BEFORE content validation — a stale write is refused on
-		// staleness alone, never masked by an unrelated shape refusal.
-		if ( self::isStaleWrite( (int) ( $post->ID ?? 0 ), (string) ( $post->post_modified_gmt ?? '' ) ) ) {
-			return array_key_exists( (string) ( $post->ID ?? 0 ), self::currentObjects() )
-				? self::staleWriteError()
-				: self::unreadWriteError();
-		}
-
+	/**
+	 * The content checks update-post/publish-post run before they write — the
+	 * SAME code execute and {@see preflight()} call. Reads only. `content` is
+	 * the cleaned markup to store, or null when the call leaves content
+	 * untouched.
+	 *
+	 * @param array<string,mixed> $input  Call input.
+	 * @param WP_Post|array<mixed> $post   The target post.
+	 * @param mixed               $status Requested status.
+	 * @return array{content:?string,final_content:string,content_ignored:bool,no_image_reason:?string}|WP_Error
+	 */
+	private static function updateContentChecks( array $input, mixed $post, mixed $status ): array|WP_Error {
 		$validator = self::currentValidator();
 		if ( null === $validator ) {
 			return self::packUnresolved();
-		}
-
-		$args = array( 'ID' => (int) ( $post->ID ?? 0 ) );
-
-		if ( isset( $input['title'] ) ) {
-			$args['post_title'] = (string) $input['title'];
 		}
 
 		// `content` omitted OR an empty string means "content unchanged": the
@@ -2439,6 +2497,7 @@ final class Abilities {
 		// image at all. A metadata-only update, or one that leaves content
 		// untouched, never reaches this branch.
 		$no_image_reason = null;
+		$stored_content  = null;
 
 		if ( '' !== $new_content ) {
 			$clean = $validator->clean( $new_content, $post_type );
@@ -2472,8 +2531,8 @@ final class Abilities {
 				$no_image_reason = $image_check;
 			}
 
-			$args['post_content'] = $clean['content'];
-			$final_content        = $clean['content'];
+			$stored_content = $clean['content'];
+			$final_content  = $clean['content'];
 		} elseif ( self::isTransitionStatus( $status ) ) {
 			// Fail closed (§0.2): "content unchanged" must never be a way to
 			// put unvalidated markup live. On a transition to publish/future
@@ -2488,6 +2547,68 @@ final class Abilities {
 				return $error;
 			}
 		}
+
+		return array(
+			'content'         => $stored_content,
+			'final_content'   => $final_content,
+			'content_ignored' => $content_ignored,
+			'no_image_reason' => $no_image_reason,
+		);
+	}
+
+	/**
+	 * update-post / publish-post execute (S4 split). `$publish_tier` selects
+	 * which ability's status allow-list and routing gate applies; everything
+	 * else — content validation, the omitted/empty-content contract, the
+	 * publish-time stored-content re-check — is shared.
+	 *
+	 * @param array<string,mixed> $input        Call input.
+	 * @param bool                $publish_tier Whether this is publish-post.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeUpdateLike( array $input, bool $publish_tier ): array|WP_Error {
+		$target = self::updateTarget( $input, $publish_tier );
+		if ( is_wp_error( $target ) ) {
+			return $target;
+		}
+
+		$post   = $target['post'];
+		$status = $target['status'];
+
+		// Per-post `edit_post`, the S4 public/transition routing, and the
+		// type's publish cap on a publish/future transition. Re-checked here
+		// for the same reason as create.
+		if ( ! self::mayUpdate( $input, $publish_tier ) ) {
+			return self::forbidden();
+		}
+
+		// S8: refuse when $post's CURRENT marker differs from what this run's
+		// tracker last recorded for it, or when the run never read it at all.
+		// Checked BEFORE content validation — a stale write is refused on
+		// staleness alone, never masked by an unrelated shape refusal.
+		if ( self::isStaleWrite( (int) ( $post->ID ?? 0 ), (string) ( $post->post_modified_gmt ?? '' ) ) ) {
+			return array_key_exists( (string) ( $post->ID ?? 0 ), self::currentObjects() )
+				? self::staleWriteError()
+				: self::unreadWriteError();
+		}
+
+		$checked = self::updateContentChecks( $input, $post, $status );
+		if ( is_wp_error( $checked ) ) {
+			return $checked;
+		}
+
+		$args = array( 'ID' => (int) ( $post->ID ?? 0 ) );
+
+		if ( isset( $input['title'] ) ) {
+			$args['post_title'] = (string) $input['title'];
+		}
+
+		if ( null !== $checked['content'] ) {
+			$args['post_content'] = $checked['content'];
+		}
+		$final_content   = $checked['final_content'];
+		$content_ignored = $checked['content_ignored'];
+		$no_image_reason = $checked['no_image_reason'];
 
 		$date = self::requestedDate( $input );
 		if ( null !== $date ) {

@@ -253,4 +253,63 @@ final class GateModeTest extends TestCase {
 		$fresh = $this->store->getRun( $run_id );
 		$this->assertSame( 'gate_mode_changed', $fresh->error['code'] ?? null );
 	}
+
+	// ------------------------------------------------------------------
+	// An invalid write is refused before the park, never after a click
+	// ------------------------------------------------------------------
+
+	public function test_a_pack_refused_write_never_parks_in_built_in_mode(): void {
+		$pack = new class() extends \Specflux\SenroFlux\Packs\Pack {
+			public function __construct() {
+				parent::__construct( array() );
+			}
+
+			public function name(): string {
+				return 'fixture';
+			}
+
+			public function verbMap(): array {
+				return array( 'agsafe-smoke/write' => 1 );
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?\WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+
+			public function validateCall( string $ability, array $input ): ?\WP_Error {
+				unset( $input );
+
+				return 'agsafe-smoke/write' === $ability ? new \WP_Error( 'bad_markup', 'The post content is not well-formed block markup.' ) : null;
+			}
+		};
+
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new ApprovalBridge(),
+			null,
+			null,
+			null,
+			static fn (): \Specflux\SenroFlux\Packs\Pack => $pack,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			null,
+			fn (): GateMode => GateMode::BuiltIn
+		);
+		$run_id = $this->createRun( GateMode::BuiltIn );
+
+		$this->gateway->script[] = self::planTurn( 'call_p', array( 'agsafe-smoke/write' ) );
+		$runner->tick( $run_id, 0, null );
+		$run                     = $this->store->getRun( $run_id );
+		$this->gateway->script[] = self::callTurn( 'call_w', 'agsafe-smoke/write' );
+		$this->gateway->script[] = self::textTurn( 'Giving up.' );
+		$result                  = $runner->tick( $run_id, (int) $run->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertIsArray( $result );
+		$this->assertNotSame( 'awaiting_approval', $result['run']['status'] );
+		$this->assertNotContains( 'approval', array_column( $result['new_steps'], 'kind' ) );
+	}
 }

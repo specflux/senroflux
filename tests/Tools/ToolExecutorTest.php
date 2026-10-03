@@ -731,4 +731,104 @@ final class ToolExecutorTest extends TestCase {
 
 		$this->assertSame( '18', $seen['received']['regular_price'] );
 	}
+
+	// --- refusals run before the built-in park -------------------------------
+
+	private function parkedGate( bool $approved = false ): BuiltinGate {
+		return new BuiltinGate( active: true, tier: 1, verb: 'agsafe-smoke/write', approvalId: 'builtin:1:call_x', approved: $approved );
+	}
+
+	public function test_a_validate_refusal_beats_the_built_in_park(): void {
+		$permission_checked                  = false;
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/write',
+				permission_result: static function () use ( &$permission_checked ) {
+					$permission_checked = true;
+
+					return true;
+				}
+			),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(),
+			$this->parkedGate(),
+			static fn (): WP_Error => new WP_Error( 'bad_markup', 'The post content is not well-formed block markup.' )
+		);
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'bad_markup', $outcome->errorCode );
+		$this->assertFalse( $permission_checked );
+	}
+
+	public function test_a_call_that_passes_validate_still_parks_in_built_in_mode(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write' ),
+		);
+
+		$outcome = $this->executor->call( 'agsafe-smoke/write', array(), $this->parkedGate(), static fn () => null );
+
+		$this->assertSame( 'approval_required', $outcome->kind );
+	}
+
+	public function test_the_history_placeholder_refusal_beats_the_built_in_park(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write' ),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array( 'content' => sprintf( ToolExecutor::HISTORY_PLACEHOLDER_FORMAT, 120 ) ),
+			$this->parkedGate()
+		);
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertSame( 'history_placeholder', $outcome->errorCode );
+	}
+
+	public function test_validate_runs_again_on_the_approved_re_entry(): void {
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/write', execute_result: array( 'ok' => true ) ),
+		);
+		$calls                               = 0;
+		$validate                            = static function () use ( &$calls ): ?WP_Error {
+			++$calls;
+
+			return 2 === $calls ? new WP_Error( 'site_changed', 'No longer valid.' ) : null;
+		};
+
+		$first  = $this->executor->call( 'agsafe-smoke/write', array(), $this->parkedGate(), $validate );
+		$second = $this->executor->call( 'agsafe-smoke/write', array(), $this->parkedGate( true ), $validate );
+
+		$this->assertSame( 'approval_required', $first->kind );
+		$this->assertSame( 'denied', $second->kind );
+		$this->assertSame( 'site_changed', $second->errorCode );
+		$this->assertSame( 2, $calls );
+	}
+
+	public function test_as_mode_validate_refuses_before_check_permissions_is_called(): void {
+		$permission_checked                  = false;
+		$GLOBALS['senroflux_test_abilities'] = array(
+			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/write',
+				permission_result: static function () use ( &$permission_checked ) {
+					$permission_checked = true;
+
+					return new WP_Error( 'approval_required', 'parked', array( 'approval_id' => 'as:1' ) );
+				}
+			),
+		);
+
+		$outcome = $this->executor->call(
+			'agsafe-smoke/write',
+			array(),
+			null,
+			static fn (): WP_Error => new WP_Error( 'bad_markup', 'nope' )
+		);
+
+		$this->assertSame( 'denied', $outcome->kind );
+		$this->assertFalse( $permission_checked );
+	}
 }
