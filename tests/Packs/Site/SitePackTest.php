@@ -171,7 +171,9 @@ final class SitePackTest extends TestCase {
 
 		$this->assertStringContainsString( 'naming a `layout`', $bodies );
 		$this->assertStringContainsString( 'To rewrite an existing page', $bodies );
-		$this->assertStringContainsString( 'first visit', $bodies );
+		$this->assertStringNotContainsString( 'what the first visit is', $bodies );
+		$this->assertStringContainsString( 'as far as the supplied facts say', $bodies );
+		$this->assertStringContainsString( 'answer only from supplied facts', $bodies );
 		$this->assertStringContainsString( 'tel:', $bodies );
 		$this->assertStringNotContainsString( 'theme ones first', $bodies );
 		$this->assertStringNotContainsString( '{pattern, slots}', $bodies );

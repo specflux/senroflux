@@ -589,7 +589,7 @@ final class ThemePatterns {
 			'repeatable'    => array(),
 			'constraints'   => array(
 				'slots'  => array(),
-				'stated' => self::statedLines( $slots ),
+				'stated' => self::statedLines( $slots, self::isFaqPattern( $name, (string) ( $entry['title'] ?? '' ), $categories ) ),
 			),
 			'categories'    => $categories,
 			'theme_derived' => true,
@@ -612,10 +612,20 @@ final class ThemePatterns {
 	}
 
 	/**
+	 * Whether a theme pattern is an FAQ: its slug, title or a category names one.
+	 *
+	 * @param array<string> $categories The pattern's categories.
+	 */
+	private static function isFaqPattern( string $name, string $title, array $categories ): bool {
+		return 1 === preg_match( '/\bfaqs?\b/i', $name . ' ' . $title . ' ' . implode( ' ', $categories ) );
+	}
+
+	/**
 	 * @param list<array<string,mixed>> $slots {@see textSlots()}.
+	 * @param bool                      $faq   Whether the pattern is an FAQ, which adds the supplied-facts line.
 	 * @return list<string>
 	 */
-	private static function statedLines( array $slots ): array {
+	private static function statedLines( array $slots, bool $faq = false ): array {
 		$lines = array();
 		foreach ( $slots as $slot ) {
 			if ( 'text' === $slot['kind'] ) {
@@ -640,6 +650,10 @@ final class ThemePatterns {
 					$slot['index'] + 1
 				);
 			}
+		}
+
+		if ( $faq ) {
+			$lines[] = __( 'FAQ answers: only from supplied facts; leave out a question you cannot answer from them.', 'senroflux' );
 		}
 
 		return $lines;

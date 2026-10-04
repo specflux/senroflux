@@ -116,7 +116,7 @@ final class SkillSetTest extends TestCase {
 		foreach ( array( 'who each is for', 'address', 'hours', 'tone', 'proof point' ) as $fact ) {
 			$this->assertStringContainsString( $fact, $workflow );
 		}
-		$this->assertStringContainsString( 'Never invent a missing fact', $workflow );
+		$this->assertStringContainsString( 'Never invent a policy, process step, duration', $workflow );
 		$this->assertStringContainsString( 'senroflux/suggest-brief-addition', $workflow );
 	}
 

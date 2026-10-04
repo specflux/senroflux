@@ -578,7 +578,7 @@ HTML
 <div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
 <!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
 <!-- wp:paragraph --><p>Open with the point a visitor came for: what this is, who it suits and what they get from it. Use the business's own facts, such as its services, place, hours and people, and name them exactly.</p><!-- /wp:paragraph -->
-<!-- wp:paragraph --><p>Then answer the next question they would ask, such as what happens at a first visit, how long it takes or how to book. One idea per paragraph, no filler, and nothing invented.</p><!-- /wp:paragraph -->
+<!-- wp:paragraph --><p>Then answer the next question they would ask, if the supplied facts answer it, such as how to book. One idea per paragraph, no filler, and nothing invented.</p><!-- /wp:paragraph -->
 </div><!-- /wp:group -->
 HTML
 			,
@@ -745,7 +745,7 @@ HTML
 			'slug'        => 'faq',
 			'name'        => 'senroflux/faq',
 			'title'       => 'FAQ',
-			'description' => __( 'An FAQ: an H2 heading and two-to-eight collapsible details blocks.', 'senroflux' ),
+			'description' => __( 'An FAQ: an H2 heading and two-to-eight collapsible details blocks. Answer only from supplied facts; leave out a question you cannot answer from them.', 'senroflux' ),
 			'markup'      => <<<'HTML'
 <!-- wp:group {"metadata":{"name":"senroflux/faq"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
 <div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
@@ -765,7 +765,7 @@ HTML
 				),
 				'stated' => array(
 					'Question: asks what a reader actually asks, at most 11 words.',
-					'Answer: direct, up to 70 words.',
+					'Answer: direct, up to 70 words, only from supplied facts; leave out a question you cannot answer from them.',
 				),
 			),
 		);

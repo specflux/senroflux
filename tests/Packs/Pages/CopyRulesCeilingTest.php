@@ -170,8 +170,59 @@ final class CopyRulesCeilingTest extends TestCase {
 	public function test_pages_pack_skills_ask_for_depth_on_each_page(): void {
 		$bodies = implode( "\n", array_map( static fn ( $s ) => $s->body, ( new PagesPack() )->skills() ) );
 
-		$this->assertStringContainsString( 'first visit', $bodies );
+		$this->assertStringNotContainsString( 'what happens at the first visit', $bodies );
+		$this->assertStringContainsString( 'as far as the supplied facts say', $bodies );
 		$this->assertStringContainsString( 'who it is for', $bodies );
+	}
+
+	/**
+	 * Live proof S9 (Northside Physio): pages said "no referral is needed",
+	 * "it takes about an hour" and "usually the same working day" though the
+	 * owner never said any of it. The never-invent rule lives once, in the
+	 * base workflow skill; each pack only points at it.
+	 */
+	public function test_the_never_invent_rule_appears_exactly_once_in_a_run_s_assembled_skills(): void {
+		$rule = 'Use only facts the site, brief or answers gave. Never invent a policy, process step, duration, frequency, referral, insurance or payment rule, access or parking detail, guarantee, credential, result or price. A visitor question (first visit, referral, how long) with no supplied answer: ask one question if any remain, else leave it out.';
+
+		foreach ( array( new PagesPack(), new SitePack() ) as $pack ) {
+			$bodies = implode( "\n", array_map( static fn ( $s ) => $s->body, SkillSet::collect( 'test', 'a goal', $pack ) ) );
+
+			$this->assertSame( 1, substr_count( $bodies, $rule ), get_class( $pack ) . ' carries the rule once' );
+		}
+	}
+
+	public function test_pack_layout_rules_point_at_the_rule_for_faq_and_what_to_expect_sections(): void {
+		foreach ( array( new PagesPack(), new SitePack() ) as $pack ) {
+			$bodies = implode( "\n", array_map( static fn ( $s ) => $s->body, $pack->skills() ) );
+
+			$this->assertStringContainsString( 'In faq and what-to-expect sections, answer only from supplied facts; omit a question they cannot answer.', $bodies );
+		}
+	}
+
+	public function test_the_faq_descriptions_carry_the_supplied_facts_rule(): void {
+		$faq = null;
+		foreach ( ( new \Specflux\SenroFlux\Packs\Pages\Vocabulary() )->curated() as $pattern ) {
+			if ( 'faq' === $pattern['slug'] ) {
+				$faq = $pattern;
+			}
+		}
+
+		$this->assertNotNull( $faq );
+		$this->assertStringContainsString( 'Answer only from supplied facts; leave out a question you cannot answer from them.', $faq['description'] );
+		$this->assertContains( 'Answer: direct, up to 70 words, only from supplied facts; leave out a question you cannot answer from them.', $faq['constraints']['stated'] );
+	}
+
+	public function test_a_theme_faq_pattern_states_the_supplied_facts_rule_and_other_patterns_do_not(): void {
+		$vocabulary = new \Specflux\SenroFlux\Packs\Pages\Vocabulary();
+		$rule       = 'FAQ answers: only from supplied facts; leave out a question you cannot answer from them.';
+
+		$faq = $vocabulary->resolveThemePattern( 'twentytwentyfive/text-faqs' );
+		$cta = $vocabulary->resolveThemePattern( 'twentytwentyfive/cta-centered-heading' );
+
+		$this->assertNotNull( $faq );
+		$this->assertNotNull( $cta );
+		$this->assertContains( $rule, $faq['constraints']['stated'] );
+		$this->assertNotContains( $rule, $cta['constraints']['stated'] );
 	}
 
 	public function test_pages_pack_skills_rewrite_existing_pages_with_layouts(): void {

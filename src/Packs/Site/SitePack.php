@@ -487,10 +487,10 @@ final class SitePack extends Pack {
 			array(
 				'Write each page as `sections` items, each naming a `layout` (hero, text, text-with-image, services, faq, cta) with its fields; the theme builds the design. Hero first. Give each image slot its own image, except services (all or none). Write `markup` only if no layout fits, or for homepage page-links or intro.',
 				'To rewrite an existing page, send new `sections` layouts with update-post or publish-post, keeping its facts; never edit the markup read-content returns.',
-				'Tell a visitor, per service, who it is for and what happens; what the first visit is; how to book. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between. A Contact page states every contact detail given.',
+				'Tell a visitor, per service, who it is for, what happens and how to book, as far as the supplied facts say. In faq and what-to-expect sections, answer only from supplied facts; omit a question they cannot answer. Name every service the brief lists on Home and Services. Use services, text and faq layouts; most pages need 5–7 sections. Never put two text sections back to back; add faq, services or text-with-image between. A Contact page states every contact detail given.',
 				'If the brief gives a phone number or email, the cta button links to it (tel: or mailto:) and the text states it.',
-				'Markup patterns: hero, cover-hero, text-section, media-text, feature-grid, pricing-table, faq, testimonials, cta, page-links, intro. At most one cta, page-links. A page is 2–8 sections, none twice except text-section. Images belong only in a layout\'s slot, cover-hero or media-text. No colour except cover-hero\'s overlayColor. Spacing/typography: standard preset slugs only. Re-read every object after writing.',
-				'A pattern is NOT a block: it is a core/group (or core/cover, core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Allowed blocks: core/group, core/heading, core/paragraph, core/buttons, core/button, core/columns, core/column, core/list, core/details, core/quote, core/cover, core/media-text.',
+				'Markup patterns: at most one cta, page-links. A page is 2–8 sections, none twice except text-section. No colour except cover-hero\'s overlayColor. Spacing/typography: standard preset slugs only. Re-read every object after writing.',
+				'A pattern is NOT a block: it is a core/group (or core/cover, core/media-text) you write yourself out of core blocks. Never write a block whose name starts with senroflux/. Use only core/group, heading, paragraph, buttons, button, columns, column, list, details, quote, cover, media-text.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Give every top-level group `{"metadata":{"name":"senroflux/<slug>"},"layout":{"type":"constrained"}}`. Write list items as plain <li> inside one core/list block; never core/list-item. Close everything you open; markup that fails a parse-and-reserialise round trip is refused as invalid_markup.',
 				'Give a block ONLY the attributes its shape names below; any other is refused as unknown_pattern. Only hero, cover-hero, cta and page-links give their buttons block `{"layout":{"type":"flex"}}`. For exact sample markup, call site/list-patterns.',
 				'Shapes (">" = child, "(n–m)" = how many of that child):',
@@ -508,7 +508,7 @@ final class SitePack extends Pack {
 				// 0.3 quality fix (instruction ceiling): see the matching note
 				// in PagesPack::layoutRulesBody() — the full verb list now
 				// travels on the propose-plan tool's own declaration instead.
-				'Spell each plan step\'s verbs exactly as the propose-plan tool lists them; any other word is refused as unknown_verb.',
+				'Spell plan verbs exactly as the propose-plan tool lists them; any other word is refused as unknown_verb.',
 			)
 		);
 	}
@@ -563,7 +563,7 @@ final class SitePack extends Pack {
 				'If navigation kind is "page_list", call update-navigation to list the real pages when stock_sample_page is not null; otherwise page_list is fine.',
 				'Delete nothing. Name leftover default-install objects in `left_for_you` for the human to remove.',
 				'Update the navigation only after every planned page is published; a link to an unpublished page is refused.',
-				'Only call set-style when asked for a different look; read-style first, even if read earlier this run.',
+				'Call set-style only when asked for a different look; read-style first.',
 			)
 		);
 	}
