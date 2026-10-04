@@ -4,7 +4,7 @@
  * looked for a `pack` field before this fix).
  */
 
-import { startRun, fetchSetupState } from '../api';
+import { startRun, fetchSetupState, tickRun } from '../api';
 
 describe( 'startRun', () => {
 	const config = { consumer: 'senroflux-admin', nonce: 'abc123', ajaxUrl: 'https://example.test/wp-admin/admin-ajax.php' };
@@ -123,5 +123,36 @@ describe( 'fetchSetupState (stage 22b, J1)', () => {
 		expect( body.get( 'action' ) ).toBe( 'senroflux_setup_panel' );
 		expect( body.get( 'nonce' ) ).toBe( 'abc123' );
 		expect( state.start_enabled ).toBe( true );
+	} );
+} );
+
+describe( 'an expired session', () => {
+	const config = { consumer: 'senroflux-admin', nonce: 'stale', ajaxUrl: 'https://example.test/wp-admin/admin-ajax.php' };
+
+	it( 'turns admin-ajax\'s bare "-1" 403 into a reload instruction', async () => {
+		// Live J5 (simulated 24h gap): a tab left open past its nonce clicked
+		// Approve, admin-ajax answered "-1" with HTTP 403, and the screen only
+		// had the internal code to show.
+		global.fetch = jest.fn().mockResolvedValue( {
+			status: 403,
+			json: () => Promise.resolve( -1 ),
+		} );
+
+		await expect( tickRun( 7, 12, { action: 'approve' }, config ) ).rejects.toMatchObject( {
+			code: 'senroflux_session_expired',
+			message: 'This page has expired. Reload it to continue.',
+		} );
+	} );
+
+	it( 'keeps the server\'s own message for an ordinary refusal', async () => {
+		global.fetch = jest.fn().mockResolvedValue( {
+			status: 409,
+			json: () => Promise.resolve( { success: false, data: { code: 'senroflux_conflict', message: 'The run advanced.' } } ),
+		} );
+
+		await expect( tickRun( 7, 12, null, config ) ).rejects.toMatchObject( {
+			code: 'senroflux_conflict',
+			message: 'The run advanced.',
+		} );
 	} );
 } );

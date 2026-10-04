@@ -15,6 +15,7 @@
  */
 
 import apiFetch from '@wordpress/api-fetch';
+import { __ } from '@wordpress/i18n';
 
 const NAMESPACE = '/senroflux/v1';
 
@@ -57,8 +58,15 @@ function postAjax( action, fields, config ) {
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 			body,
 		} )
-		.then( ( response ) => response.json() )
-		.then( ( json ) => {
+		.then( ( response ) => response.json().then( ( json ) => ( { status: response.status, json } ) ) )
+		.then( ( { status, json } ) => {
+			// check_ajax_referer() answers a stale nonce (a tab left open past
+			// its session) with a bare "-1" and HTTP 403: say what to do.
+			if ( 403 === status && -1 === json ) {
+				const expired = new Error( __( 'This page has expired. Reload it to continue.', 'senroflux' ) );
+				expired.code = 'senroflux_session_expired';
+				throw expired;
+			}
 			if ( ! json || true !== json.success ) {
 				const data = ( json && json.data ) || {};
 				const error = new Error( data.message || 'senroflux_request_failed' );
