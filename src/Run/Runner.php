@@ -3909,12 +3909,44 @@ final class Runner {
 			'goal'                 => (string) ( $payload['goal'] ?? '' ),
 			'steps'                => $steps,
 			'assumptions'          => (array) ( $payload['assumptions'] ?? array() ),
+			'adopted'              => self::planUiObjectRows( $payload, 'adopted', $lookup ),
+			'left_for_you'         => self::planUiObjectRows( $payload, 'left_for_you', $lookup ),
 			'remaining_plans'      => $remaining,
 			'preapprove_available' => $this->preapprovalEnabled(),
 			'review_url'           => function_exists( 'admin_url' )
 				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
 				: '',
 		);
+	}
+
+	/**
+	 * The plan card's `adopted` / `left_for_you` rows: `{ id, title, status }`.
+	 * The status (and the title, when the object resolves) is read from the
+	 * object NOW through the lookup, so a status the model wrote is never
+	 * shown; an id that does not resolve keeps the plan's title and a null
+	 * status.
+	 *
+	 * @param array<string,mixed> $payload The plan payload.
+	 * @param string              $key     `adopted` or `left_for_you`.
+	 * @param callable            $lookup  The object lookup.
+	 * @return list<array{id:string,title:string,status:?string}>
+	 */
+	private static function planUiObjectRows( array $payload, string $key, callable $lookup ): array {
+		$rows = array();
+		foreach ( self::planObjectList( $payload, $key ) as $entry ) {
+			$found  = $lookup( $entry['id'] );
+			$known  = 'unknown' !== (string) ( $found['object_type'] ?? 'unknown' );
+			$title  = (string) ( $found['title'] ?? '' );
+			$status = (string) ( $found['status'] ?? '' );
+
+			$rows[] = array(
+				'id'     => $entry['id'],
+				'title'  => $known && '' !== $title ? $title : $entry['title'],
+				'status' => $known && '' !== $status ? $status : null,
+			);
+		}
+
+		return $rows;
 	}
 
 	/**

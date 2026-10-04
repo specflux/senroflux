@@ -181,6 +181,44 @@ function planObjectLabel( object ) {
 	return '' !== title ? `${ title } (${ label })` : label;
 }
 
+const PLAN_STATUS_LABELS = () => ( {
+	publish: __( 'published', 'senroflux' ),
+	draft: __( 'draft', 'senroflux' ),
+	pending: __( 'pending review', 'senroflux' ),
+	private: __( 'private', 'senroflux' ),
+	future: __( 'scheduled', 'senroflux' ),
+	trash: __( 'in the trash', 'senroflux' ),
+} );
+
+/**
+ * One adopted / left-alone page on the plan card: title, "#ID" and the
+ * object's current status in words. The status is the server's lookup, not
+ * the model's claim; an unknown status code is shown as-is.
+ */
+function PlanExistingList( { heading, rows } ) {
+	if ( ! Array.isArray( rows ) || 0 === rows.length ) {
+		return null;
+	}
+	const labels = PLAN_STATUS_LABELS();
+	return (
+		<>
+			<h4>{ heading }</h4>
+			<ul>
+				{ rows.map( ( row, index ) => {
+					const status = 'string' === typeof row?.status && '' !== row.status ? row.status : '';
+					return (
+						<li key={ `${ row?.id }-${ index }` } data-senroflux-content dir="auto">
+							{ [ row?.title, `#${ row?.id }`, labels[ status ] ?? status ]
+								.filter( ( part ) => 'string' === typeof part && '' !== part )
+								.join( ' · ' ) }
+						</li>
+					);
+				} ) }
+			</ul>
+		</>
+	);
+}
+
 /**
  * S5 plan shape: `{ "plan": { "action": "accept" | "accept_preapprove" |
  * "veto", "note"? } }`. The pre-approve radio's visibility is decided
@@ -259,6 +297,8 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 					) }
 				</p>
 			) }
+			<PlanExistingList heading={ __( 'Existing pages kept', 'senroflux' ) } rows={ payload.adopted } />
+			<PlanExistingList heading={ __( 'Left as they are', 'senroflux' ) } rows={ payload.left_for_you } />
 			{ assumptions.length > 0 && (
 				<>
 					<h4>{ __( 'Assumptions', 'senroflux' ) }</h4>

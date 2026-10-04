@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import ParkCard from '../components/ParkCard';
 
 /**
@@ -194,5 +194,44 @@ describe( 'the plan card names the existing objects a step will change', () => {
 
 		expect( container.querySelector( 'img' ) ).toBeNull();
 		expect( screen.getByText( '<img src=x onerror=alert(1)> (#5)' ) ).toBeInTheDocument();
+	} );
+} );
+
+describe( 'the plan card lists the existing pages it keeps and leaves alone', () => {
+	const plan = {
+		steps: [ { text: 'Edit the About page', verbs: [ 'posts/update' ], tier: 1 } ],
+		adopted: [ { id: '10', title: 'About', status: 'publish' } ],
+		left_for_you: [
+			{ id: '2', title: 'Sample Page', status: 'publish' },
+			{ id: '3', title: 'Privacy Policy', status: 'draft' },
+			{ id: '9', title: 'Gone', status: null },
+		],
+	};
+
+	it( 'renders both lists with title, #id and status in words', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const kept = screen.getByRole( 'heading', { name: 'Existing pages kept' } ).nextElementSibling;
+		expect( kept.tagName ).toBe( 'UL' );
+		expect( within( kept ).getByText( 'About · #10 · published' ) ).toHaveAttribute( 'data-senroflux-content' );
+
+		const left = screen.getByRole( 'heading', { name: 'Left as they are' } ).nextElementSibling;
+		expect( left.tagName ).toBe( 'UL' );
+		expect( within( left ).getByText( 'Sample Page · #2 · published' ) ).toBeInTheDocument();
+		expect( within( left ).getByText( 'Privacy Policy · #3 · draft' ) ).toBeInTheDocument();
+		expect( within( left ).getByText( 'Gone · #9' ) ).toBeInTheDocument();
+	} );
+
+	it( 'renders neither heading for empty or missing lists', () => {
+		render(
+			<ParkCard
+				kind="plan"
+				gateMode="agent_safety"
+				payload={ { steps: [], adopted: [], left_for_you: undefined } }
+			/>
+		);
+
+		expect( screen.queryByRole( 'heading', { name: 'Existing pages kept' } ) ).toBeNull();
+		expect( screen.queryByRole( 'heading', { name: 'Left as they are' } ) ).toBeNull();
 	} );
 } );

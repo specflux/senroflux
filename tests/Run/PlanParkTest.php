@@ -397,6 +397,89 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame( array( '12' ), $this->planSteps( $run_id )[0]->messageArray['steps'][0]['objects'] );
 	}
 
+	public function test_plan_card_carries_adopted_and_left_for_you_with_server_resolved_status(): void {
+		$run_id = $this->createRun();
+		$args   = self::planNaming( array( '12' ) );
+
+		$args['adopted']      = array(
+			array(
+				'id'     => '12',
+				'title'  => 'Model title',
+				'status' => 'trash', // A model-written status must be ignored.
+			),
+		);
+		$args['left_for_you'] = array(
+			array(
+				'id'    => '12',
+				'title' => 'Ceramic Mug',
+			),
+			array(
+				'id'    => '555',
+				'title' => 'Gone Page',
+			),
+		);
+
+		$this->gateway->script[] = self::planTurn( 'call_p', $args );
+
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			$this->bridge,
+			static fn ( string|int $id ): array => '12' === (string) $id
+				? array(
+					'object_type' => 'product',
+					'title'       => 'Ceramic Mug',
+					'status'      => 'publish',
+				)
+				: array(
+					'object_type' => 'unknown',
+					'title'       => '',
+					'status'      => '',
+				)
+		);
+		$result = $runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$ui = $result['ui']['plan'] ?? array();
+		$this->assertSame(
+			array(
+				array(
+					'id'     => '12',
+					'title'  => 'Ceramic Mug',
+					'status' => 'publish',
+				),
+			),
+			$ui['adopted'] ?? null
+		);
+		$this->assertSame(
+			array(
+				array(
+					'id'     => '12',
+					'title'  => 'Ceramic Mug',
+					'status' => 'publish',
+				),
+				array(
+					'id'     => '555',
+					'title'  => 'Gone Page',
+					'status' => null,
+				),
+			),
+			$ui['left_for_you'] ?? null
+		);
+	}
+
+	public function test_plan_card_has_empty_adopted_and_left_for_you_when_the_plan_names_none(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn( 'call_p', self::validPlanArgs() );
+
+		$result = $this->runner->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array(), $result['ui']['plan']['adopted'] ?? null );
+		$this->assertSame( array(), $result['ui']['plan']['left_for_you'] ?? null );
+	}
+
 	public function test_a_plan_naming_an_unknown_object_is_refused_not_parked(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::planTurn( 'call_p', self::planNaming( array( '12', '777' ) ) );
