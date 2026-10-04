@@ -37,6 +37,30 @@ final class PlanObjectsTest extends TestCase {
 		);
 	}
 
+	public function test_steps_sent_as_an_object_with_string_keys_do_not_fatal(): void {
+		// Live S9 (Ollie, 3eaefae): the model sent "steps" as a JSON object;
+		// `$step_index + 1` on a string key was an uncaught TypeError that
+		// took the whole tick down with "There has been a critical error".
+		$plan          = self::plan( array( 'objects' => array( '12' ) ) );
+		$plan['steps'] = array( 'first' => $plan['steps'][0] );
+
+		$result = PlanTools::validateProposePlan( $plan, null, null, null, null, self::lookup() );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( '12' ), $result['steps'][0]['objects'] );
+	}
+
+	public function test_an_over_long_step_sent_with_a_string_key_is_refused_not_fatal(): void {
+		$plan                     = self::plan( array() );
+		$plan['steps'][0]['text'] = str_repeat( 'a', 400 );
+		$plan['steps']            = array( 'first' => $plan['steps'][0] );
+
+		$result = PlanTools::validateProposePlan( $plan, null, null, null, null, self::lookup() );
+
+		$this->assertInstanceOf( \WP_Error::class, $result );
+		$this->assertStringContainsString( 'step 1 "text"', $result->get_error_message() );
+	}
+
 	public function test_ids_are_normalised_to_deduplicated_strings(): void {
 		$result = PlanTools::validateProposePlan(
 			self::plan( array( 'objects' => array( 12, '13', ' 12 ', 'term:7' ) ) ),

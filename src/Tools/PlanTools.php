@@ -383,6 +383,9 @@ final class PlanTools {
 		if ( ! is_array( $steps ) ) {
 			return $invalid( __( '"steps" must be an array of steps.', 'senroflux' ) );
 		}
+		// A model can send "steps" as a JSON object; its string keys must not
+		// reach the 1-based step numbering below (string + int is a fatal).
+		$steps = array_values( $steps );
 
 		$normalized_steps = array();
 		foreach ( $steps as $step_index => $step ) {
