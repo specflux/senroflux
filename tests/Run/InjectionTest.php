@@ -301,10 +301,11 @@ final class InjectionTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'call_r', 'wpab__senroflux__read-content', array( 'id' => 11 ) );
 		$this->gateway->script[] = self::textTurn( 'Read it.' );
+		$this->gateway->script[] = self::textTurn( 'Read it.' );
 
 		$this->runner->tick( $run_id, 0, null );
 
-		$this->assertCount( 2, $this->gateway->systemInstructions );
+		$this->assertCount( 3, $this->gateway->systemInstructions, 'read, the no-write nudge, then the final text' );
 		$this->assertSame(
 			$this->gateway->systemInstructions[0],
 			$this->gateway->systemInstructions[1],

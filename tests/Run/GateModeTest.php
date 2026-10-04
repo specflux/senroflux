@@ -147,6 +147,7 @@ final class GateModeTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'call_1', 'agsafe-smoke/read' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -231,6 +232,7 @@ final class GateModeTest extends TestCase {
 	public function test_a_gate_mode_flip_between_ticks_fails_the_run_with_a_partial_report(): void {
 		$run_id = $this->createRun( GateMode::BuiltIn );
 
+		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$in_progress             = $this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $in_progress['run']['status'] );

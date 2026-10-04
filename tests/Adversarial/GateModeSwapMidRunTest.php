@@ -83,6 +83,7 @@ final class GateModeSwapMidRunTest extends TestCase {
 		);
 
 		$this->gateway->script[] = self::textTurn( 'Working…' );
+		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$first                   = $this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $first['run']['status'] );
 
@@ -119,6 +120,7 @@ final class GateModeSwapMidRunTest extends TestCase {
 			GateMode::AgentSafety
 		);
 
+		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$first                   = $this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $first['run']['status'] );

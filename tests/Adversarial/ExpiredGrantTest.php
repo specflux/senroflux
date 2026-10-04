@@ -130,6 +130,7 @@ final class ExpiredGrantTest extends TestCase {
 
 		$finished_run_id         = $this->createRun();
 		$this->gateway->script[] = new ModelTurn( new ModelMessage( array( new MessagePart( 'Done.' ) ) ), 10, 5 );
+		$this->gateway->script[] = new ModelTurn( new ModelMessage( array( new MessagePart( 'Done.' ) ) ), 10, 5 );
 		$this->runner->tick( $finished_run_id, 0, null );
 		$this->assertSame( 'completed', $this->store->getRun( $finished_run_id )->status->value );
 

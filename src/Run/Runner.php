@@ -711,6 +711,22 @@ final class Runner {
 						);
 					}
 
+					// Live proof S9: a narration-only turn ("…so I'll write around
+					// it. Saving a shorter brief addition.") ended the run
+					// `completed` at step 17 with nothing built. Before any
+					// write has landed, nudge ONCE per run; a second text-only
+					// turn is a deliberate stop and completes as before.
+					if ( ! $this->hasOkWrite( $run ) && ! $this->textOnlyAlreadyNudged( $run ) ) {
+						$this->appendTextOnlyNudge( $run, $new_steps );
+						$this->store->updateRun( $run->id, array( 'status' => RunStatus::Running->value ) );
+						$run           = $this->refresh( $run );
+						$pending_calls = null;
+
+						// Straight back to the model: the budget gates at the
+						// top of the loop still bound it.
+						continue;
+					}
+
 					// S12: a finish attempt may be parked by a verify nudge.
 					if ( $this->finishAttempt( $run, $new_steps ) ) {
 						// Nudged: S12 says KEEP RUNNING. Saying so explicitly
@@ -4455,6 +4471,69 @@ final class Runner {
 		}
 
 		return $nudged;
+	}
+
+	/**
+	 * Has any Tier >= 1 tool call succeeded in this run? Reads the same
+	 * `plan_verb` tier the write tracker and {@see writesFinished()} use, so a
+	 * write that returned no trackable object id still counts.
+	 */
+	private function hasOkWrite( Run $run ): bool {
+		$verb_map = $this->packVerbMap( $run );
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::ToolResult !== $step->kind || 'ok' !== $step->status || null === $step->messageArray ) {
+				continue;
+			}
+			$verb = $step->messageArray['plan_verb'] ?? null;
+			if ( is_string( $verb ) && VerbTier::tierFor( $verb, $verb_map, $run->id ) >= VerbTier::TIER_1 ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Has the text-only-turn nudge already been sent in this run? Unlike the
+	 * empty-turn nudge it is never reset: one per run.
+	 */
+	private function textOnlyAlreadyNudged( Run $run ): bool {
+		foreach ( $this->store->getSteps( $run->id ) as $step ) {
+			if ( StepKind::System === $step->kind && 'text_only_nudge' === ( $step->messageArray['note'] ?? null ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Append the text-only-turn nudge: an audit-only system note plus a real
+	 * history-bearing user turn (same pairing, same wire-validity reason, as
+	 * {@see appendEmptyTurnNudge()}).
+	 *
+	 * @param list<array<string,mixed>> $new_steps Accumulator.
+	 */
+	private function appendTextOnlyNudge( Run $run, array &$new_steps ): void {
+		$payload = array( 'note' => 'text_only_nudge' );
+
+		$new_steps[] = array(
+			'seq'         => $this->store->appendSystemNote( $run->id, $payload ),
+			'kind'        => StepKind::System->value,
+			'message'     => $payload,
+			'tool_name'   => null,
+			'approval_id' => null,
+			'status'      => 'ok',
+		);
+		$new_steps[] = $this->appendStep(
+			$run->id,
+			StepKind::User,
+			new UserMessage(
+				array(
+					new MessagePart( 'You replied without calling a tool and nothing has been written yet. If the work is not finished, call the next tool now. If you are deliberately stopping without changing anything, reply again with your final summary.' ),
+				)
+			)
+		);
 	}
 
 	/**

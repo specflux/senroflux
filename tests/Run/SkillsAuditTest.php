@@ -78,6 +78,7 @@ final class SkillsAuditTest extends TestCase {
 	public function test_first_tick_writes_the_seq0_instruction_record(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = $this->textTurn( 'Done.' );
+		$this->gateway->script[] = $this->textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -96,7 +97,7 @@ final class SkillsAuditTest extends TestCase {
 
 		// Seq 0 does NOT shift the optimistic lock: the goal user step is seq 1.
 		$this->assertSame( 1, $steps[1]->seq );
-		$this->assertSame( 2, $this->store->getRun( $run_id )->stepCount, 'seq0 + user step... minus seq0 itself' );
+		$this->assertSame( 5, $this->store->getRun( $run_id )->stepCount, 'goal, model, nudge note, nudge, model: seq0 itself is not counted' );
 
 		// The model received the rendered instruction, harness skill first.
 		$this->assertStringContainsString( '# Identity', $this->gateway->systemInstructions[0] ?? '' );
@@ -104,6 +105,7 @@ final class SkillsAuditTest extends TestCase {
 
 	public function test_skills_drift_appends_a_skills_changed_note(): void {
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
 		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
 		$this->runner->tick( $run_id, 0, null );
 		$this->gateway->script = array( $this->textTurn( 'Turn two.' ) );
@@ -140,7 +142,7 @@ final class SkillsAuditTest extends TestCase {
 		$this->assertContains( 'consumer/extra', $note->messageArray['ids'] ?? array() );
 
 		// The run CONTINUES with the new text: the second model call got it.
-		$this->assertStringContainsString( 'Extra guidance.', $this->gateway->systemInstructions[1] ?? '' );
+		$this->assertStringContainsString( 'Extra guidance.', $this->gateway->systemInstructions[2] ?? '' );
 	}
 
 	public function test_a_ceiling_breach_fails_the_run_without_truncating(): void {
@@ -235,13 +237,14 @@ final class SkillsAuditTest extends TestCase {
 		$this->store->updateRun( $run_id, array( 'skills_disable_json' => array( 'pack/optional' ) ) );
 
 		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
+		$this->gateway->script[] = $this->textTurn( 'Turn one.' );
 		$runner->tick( $run_id, 0, null );
 
 		$this->store->updateRun( $run_id, array( 'status' => RunStatus::Running->value ) );
 		$this->gateway->script[] = $this->textTurn( 'Turn two.' );
 		$runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, null );
 
-		$this->assertCount( 2, $this->gateway->systemInstructions );
+		$this->assertCount( 3, $this->gateway->systemInstructions );
 		foreach ( $this->gateway->systemInstructions as $index => $instruction ) {
 			$this->assertStringContainsString(
 				'Pack tone guidance.',

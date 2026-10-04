@@ -233,6 +233,7 @@ final class PluginContentRunContextTest extends TestCase {
 			)
 		);
 		$gateway->script[] = self::textTurn( 'Updated the page.' );
+		$gateway->script[] = self::textTurn( 'Updated the page.' );
 
 		$result = Plugin::instance()->tick( $run_id, 0, null );
 

@@ -191,6 +191,7 @@ final class SiteReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_read', 'wpab__senroflux__read-navigation', array() ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'The navigation lists Home. Nothing to change.' );
+		$this->gateway->script[] = self::textTurn( 'The navigation lists Home. Nothing to change.' );
 
 		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 

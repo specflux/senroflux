@@ -107,6 +107,7 @@ final class TransientModelErrorTest extends TestCase {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::timeoutError();
 		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
+		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
 
 		$first = $this->runner->tick( $run_id, 0, null );
 
@@ -118,23 +119,24 @@ final class TransientModelErrorTest extends TestCase {
 		$second = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertSame( 'completed', $second['run']['status'] );
-		$this->assertSame( array( 'model' ), array_column( $second['new_steps'], 'kind' ) );
-		$this->assertCount( 2, $this->gateway->calls, 'exactly one retry call after the transient failure' );
+		$this->assertSame( array( 'model', 'system', 'user', 'model' ), array_column( $second['new_steps'], 'kind' ) );
+		$this->assertCount( 3, $this->gateway->calls, 'the failed attempt, the retry, and the no-write nudge turn' );
 	}
 
 	public function test_retry_marker_is_never_sent_to_the_model_as_history(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::timeoutError();
 		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
+		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
 
 		$this->runner->tick( $run_id, 0, null );
 		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
-		// Two generateTurn() calls: the failed attempt and the retry. Both
-		// carry only the seeded goal — the system note the failure left
-		// behind never re-enters the prompt.
-		$this->assertCount( 2, $this->gateway->histories );
-		foreach ( $this->gateway->histories as $history ) {
+		// The failed attempt and the retry both carry only the seeded goal —
+		// the system note the failure left behind never re-enters the prompt.
+		// A third call is the no-write nudge turn.
+		$this->assertCount( 3, $this->gateway->histories );
+		foreach ( array_slice( $this->gateway->histories, 0, 2 ) as $history ) {
 			$this->assertCount( 1, $history, 'history must contain only the seeded goal, never the transient-error note' );
 		}
 
@@ -159,6 +161,7 @@ final class TransientModelErrorTest extends TestCase {
 		for ( $i = 0; $i < 5; $i++ ) {
 			$this->gateway->script[] = self::rateLimitError();
 		}
+		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
 		$this->gateway->script[] = self::textTurn( 'Published three pages.' );
 
 		$result = null;

@@ -367,6 +367,7 @@ final class VerificationReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_l', 'wpab__agsafe-smoke__list', array() ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 

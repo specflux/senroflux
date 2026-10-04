@@ -195,6 +195,7 @@ final class GrantsTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'c1', 'wpab__agsafe-smoke__read' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -246,6 +247,7 @@ final class GrantsTest extends TestCase {
 
 	public function test_a_conflict_never_rewrites_the_outcome_of_a_finished_run(): void {
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $this->store->getRun( $run_id )->status->value );
@@ -320,6 +322,7 @@ final class GrantsTest extends TestCase {
 		list( $run_id ) = $this->parkPlan( array( array( 'agsafe-smoke/publish' ) ) );
 
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
 
 		$report = $this->store->getRun( $run_id )->result;
@@ -349,6 +352,7 @@ final class GrantsTest extends TestCase {
 		$this->gateway->script[] = self::callTurn( 'call_p', PlanTools::FUNCTION_NAME, $args );
 		$this->runner->tick( $run_id, 0, null );
 
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
 
@@ -1018,6 +1022,7 @@ final class GrantsTest extends TestCase {
 	public function test_completing_revokes_the_runs_grants(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$this->runner->tick( $run_id, 0, null );
 
@@ -1111,6 +1116,7 @@ final class GrantsTest extends TestCase {
 		$this->grants->enabled   = false;
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$this->runner->tick( $run_id, 0, null );
 
@@ -1121,6 +1127,7 @@ final class GrantsTest extends TestCase {
 		senroflux_test_no_agent_safety();
 
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );

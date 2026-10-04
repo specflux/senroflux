@@ -68,6 +68,7 @@ final class ModelPinRunnerTest extends TestCase {
 		);
 
 		$this->gateway->script[] = self::textTurn( 'First turn.' );
+		$this->gateway->script[] = self::textTurn( 'First turn.' );
 		$this->runner->tick( $run_id, 0, null );
 
 		// A plain text turn with no tool calls finishes the run; force it back
@@ -75,11 +76,13 @@ final class ModelPinRunnerTest extends TestCase {
 		// RunnerTest::test_goal_is_not_re_seeded_when_a_user_step_exists()).
 		$this->store->updateRun( $run_id, array( 'status' => \Specflux\SenroFlux\Run\RunStatus::Running->value ) );
 		$this->gateway->script[] = self::textTurn( 'Second turn.' );
+		$this->gateway->script[] = self::textTurn( 'Second turn.' );
 		$run                     = $this->store->getRun( $run_id );
 		$this->runner->tick( $run_id, (int) $run->stepCount, null );
 
 		$this->assertSame(
 			array(
+				array( 'openai', 'gpt-4o' ),
 				array( 'openai', 'gpt-4o' ),
 				array( 'openai', 'gpt-4o' ),
 			),
@@ -97,8 +100,9 @@ final class ModelPinRunnerTest extends TestCase {
 		);
 
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->runner->tick( $run_id, 0, null );
 
-		$this->assertSame( array( null ), $this->gateway->modelPreferences );
+		$this->assertSame( array( null, null ), $this->gateway->modelPreferences );
 	}
 }

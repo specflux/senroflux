@@ -290,12 +290,13 @@ final class PlanParkTest extends TestCase {
 		// = 1) then completes. Had propose-plan counted, the single-call budget
 		// would be exhausted and the run fail.
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'], 'propose-plan must not consume the tool-call budget' );
-		$this->assertSame( array( 'tool_result', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'tool_result', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 	}
 
 	// ------------------------------------------------------------------
@@ -317,12 +318,13 @@ final class PlanParkTest extends TestCase {
 			)
 		);
 		$this->gateway->script[] = self::textTurn( 'Understood, rephrasing.' );
+		$this->gateway->script[] = self::textTurn( 'Understood, rephrasing.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'], 'an invalid propose-plan is NOT a park; the run keeps going' );
-		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'user', 'model', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 
 		$error_step = $result['new_steps'][2];
 		$this->assertSame( 'tool_result', $error_step['kind'] );
@@ -553,6 +555,7 @@ final class PlanParkTest extends TestCase {
 		$plan_seq = $this->latestPlanStepSeq( $run_id );
 
 		$this->gateway->script[] = self::textTurn( 'Continuing.' );
+		$this->gateway->script[] = self::textTurn( 'Continuing.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
 
@@ -594,6 +597,7 @@ final class PlanParkTest extends TestCase {
 		$parked                  = $this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'awaiting_plan', $parked['run']['status'] );
 
+		$this->gateway->script[] = self::textTurn( 'Re-planning.' );
 		$this->gateway->script[] = self::textTurn( 'Re-planning.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick(
@@ -699,6 +703,7 @@ final class PlanParkTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array() ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
 		$result = $this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
@@ -707,7 +712,7 @@ final class PlanParkTest extends TestCase {
 		$this->assertSame( 'completed', $result['run']['status'], 'not_in_plan refusal must not consume the tool-call budget' );
 
 		$kinds = array_column( $result['new_steps'], 'kind' );
-		$this->assertSame( array( 'tool_result', 'model', 'tool_result', 'tool_result', 'model' ), $kinds );
+		$this->assertSame( array( 'tool_result', 'model', 'tool_result', 'tool_result', 'model', 'system', 'user', 'model' ), $kinds );
 
 		// Step 2 = the refused write; step 3 = the executed read.
 		$write = $result['new_steps'][2];
@@ -748,6 +753,7 @@ final class PlanParkTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array() ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -775,6 +781,7 @@ final class PlanParkTest extends TestCase {
 			new MessagePart( 'Reading.' ),
 			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array() ) )
 		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
@@ -839,6 +846,7 @@ final class PlanParkTest extends TestCase {
 
 		// Accept the one permitted plan; the completion turn has 0 left.
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept' ) ) );
 		$this->assertIsArray( $result );
@@ -880,7 +888,7 @@ final class PlanParkTest extends TestCase {
 		$run_id                  = $this->createRun(); // owned by user 1
 		$this->gateway->script[] = self::planTurn( 'call_p', self::validPlanArgs() );
 		$this->runner->tick( $run_id, 0, null );
-		$this->gateway->script = array( $this->textTurn( 'Thanks!' ) );
+		$this->gateway->script = array( $this->textTurn( 'Thanks!' ), $this->textTurn( 'Thanks!' ) );
 
 		// A delegated admin (user 2) accepts; senroflux_can_tick must allow it.
 		$GLOBALS['senroflux_test_current_user_id'] = 2;

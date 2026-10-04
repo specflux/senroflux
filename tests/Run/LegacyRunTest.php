@@ -176,6 +176,7 @@ final class LegacyRunTest extends TestCase {
 		$this->watermark = $run_id - 1; // Below this run: not legacy.
 
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$result                  = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
@@ -190,6 +191,7 @@ final class LegacyRunTest extends TestCase {
 		$run_id          = $this->createRun();
 		$this->watermark = null;
 
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$result                  = $this->runner->tick( $run_id, 0, null );
 

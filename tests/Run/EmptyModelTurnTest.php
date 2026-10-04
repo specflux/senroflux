@@ -69,6 +69,8 @@ final class EmptyModelTurnTest extends TestCase {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::emptyTurn();
 		$this->gateway->script[] = self::textTurn( 'Done: nothing more to do.' );
+		$this->gateway->script[] = self::textTurn( 'Done: nothing more to do.' );
+		$this->gateway->script[] = self::textTurn( 'Done: nothing more to do.' );
 
 		$first = $this->runner->tick( $run_id, 0, null );
 
@@ -79,7 +81,7 @@ final class EmptyModelTurnTest extends TestCase {
 		$second = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
 		$this->assertSame( 'completed', $second['run']['status'], 'the model continued after the nudge' );
-		$this->assertCount( 2, $this->gateway->calls );
+		$this->assertCount( 3, $this->gateway->calls, 'empty turn, then the text-only turn, then its no-write nudge turn' );
 		$last_history = end( $this->gateway->histories );
 		$this->assertSame( 'user', $last_history[ count( $last_history ) - 1 ]->getRole()->value, 'the next turn is sent after a user nudge' );
 	}
@@ -101,11 +103,12 @@ final class EmptyModelTurnTest extends TestCase {
 	public function test_a_text_only_turn_still_completes(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'All finished.' );
+		$this->gateway->script[] = self::textTurn( 'All finished.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertSame( 'completed', $result['run']['status'] );
-		$this->assertSame( array( 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'user', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 	}
 
 	public function test_the_nudge_counts_against_the_step_budget(): void {

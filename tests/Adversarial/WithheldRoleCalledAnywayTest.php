@@ -107,6 +107,7 @@ final class WithheldRoleCalledAnywayTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'wpab__adversarial__withheld-op', array() );
 		$this->gateway->script[] = self::textTurn( 'Could not do it.' );
+		$this->gateway->script[] = self::textTurn( 'Could not do it.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 

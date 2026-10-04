@@ -102,6 +102,7 @@ final class SuggestBriefRunnerTest extends TestCase {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::suggestTurn( 'call_1', 'Mention free shipping.' );
 		$this->gateway->script[] = self::textTurn( 'Noted.' );
+		$this->gateway->script[] = self::textTurn( 'Noted.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -127,6 +128,7 @@ final class SuggestBriefRunnerTest extends TestCase {
 		}
 		// The 4th call, then a final text turn so the run completes.
 		$this->gateway->script[] = self::suggestTurn( 'call_4', 'Suggestion 4.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		// One call per tick: drive 5 ticks (goal + 4 suggestion turns + final text turn).
@@ -190,6 +192,7 @@ final class SuggestBriefRunnerTest extends TestCase {
 		$this->gateway->script[] = self::askTurn( 'call_ask' );
 		$this->gateway->script[] = self::suggestTurn( 'call_2', '  FREE SHIPPING OVER $50.  ' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 		$this->assertIsArray( $result );
@@ -250,6 +253,7 @@ final class SuggestBriefRunnerTest extends TestCase {
 	public function test_an_over_length_suggestion_is_refused_with_its_length_and_the_limit(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::suggestTurn( 'call_1', str_repeat( 's', 305 ) );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$this->runner->tick( $run_id, 0, null );

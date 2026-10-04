@@ -116,6 +116,7 @@ final class WithheldRolesTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'wpab__senroflux__generate-image', array() );
 		$this->gateway->script[] = self::textTurn( 'Could not add an image.' );
+		$this->gateway->script[] = self::textTurn( 'Could not add an image.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -125,7 +126,7 @@ final class WithheldRolesTest extends TestCase {
 		$this->assertSame( 'completed', $result['run']['status'] );
 
 		$kinds = array_column( $result['new_steps'], 'kind' );
-		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), $kinds );
+		$this->assertSame( array( 'user', 'model', 'tool_result', 'model', 'system', 'user', 'model' ), $kinds );
 		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
 		$this->assertStringContainsString(
 			'missing the capability',

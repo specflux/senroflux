@@ -157,6 +157,7 @@ final class RunnerTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'wpab__nope__missing', array() );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->onCall   = static function ( int $call ) use ( $key, &$seen ): void {
 			$seen[ $call ] = array(
 				'held' => false !== get_transient( $key ),
@@ -169,7 +170,7 @@ final class RunnerTest extends TestCase {
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
-		$this->assertCount( 2, $seen );
+		$this->assertCount( 3, $seen );
 		foreach ( $seen as $call => $lock ) {
 			$this->assertTrue( $lock['held'], "the lock must be held during model call $call" );
 			$this->assertGreaterThanOrEqual( 300, $lock['ttl'], "the lock must outlast one model call and one tool call (call $call)" );
@@ -194,15 +195,16 @@ final class RunnerTest extends TestCase {
 	public function test_first_tick_seeds_goal_and_completes_on_text_only_turn(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'All done.' );
+		$this->gateway->script[] = self::textTurn( 'All done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
-		$this->assertCount( 1, $this->gateway->calls );
+		$this->assertCount( 2, $this->gateway->calls );
 
 		$kinds = array_column( $result['new_steps'], 'kind' );
-		$this->assertSame( array( 'user', 'model' ), $kinds );
+		$this->assertSame( array( 'user', 'model', 'system', 'user', 'model' ), $kinds );
 
 		// The goal was persisted as the first user message.
 		$this->assertSame( 'Clear the cache', $result['new_steps'][0]['message']['parts'][0]['text'] ?? '' );
@@ -231,16 +233,17 @@ final class RunnerTest extends TestCase {
 		);
 
 		$this->gateway->script[] = self::textTurn( 'All done.' );
+		$this->gateway->script[] = self::textTurn( 'All done.' );
 
 		$run    = $this->store->getRun( $run_id );
 		$result = $this->runner->tick( $run_id, (int) $run->stepCount, null );
 
 		$this->assertIsArray( $result );
-		$this->assertSame( array( 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'user', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 		$this->assertSame( 'Clear the cache', $result['new_steps'][0]['message']['parts'][0]['text'] ?? '' );
 
 		// The thing that actually broke: the first prompt carried the goal.
-		$this->assertCount( 1, $this->gateway->calls );
+		$this->assertCount( 2, $this->gateway->calls );
 		$this->assertSame( 1, $this->gateway->calls[0]['history_count'], 'the first model call must not be sent with an empty history' );
 	}
 
@@ -248,16 +251,18 @@ final class RunnerTest extends TestCase {
 	public function test_goal_is_not_re_seeded_when_a_user_step_exists(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'First.' );
+		$this->gateway->script[] = self::textTurn( 'First.' );
 		$this->runner->tick( $run_id, 0, null );
 
 		$this->store->updateRun( $run_id, array( 'status' => \Specflux\SenroFlux\Run\RunStatus::Running->value ) );
+		$this->gateway->script[] = self::textTurn( 'Second.' );
 		$this->gateway->script[] = self::textTurn( 'Second.' );
 		$run                     = $this->store->getRun( $run_id );
 		$this->runner->tick( $run_id, (int) $run->stepCount, null );
 
 		$users = array_filter(
 			$this->store->getSteps( $run_id ),
-			static fn ( $step ): bool => StepKind::User === $step->kind
+			static fn ( $step ): bool => StepKind::User === $step->kind && 'Clear the cache' === ( $step->messageArray['parts'][0]['text'] ?? '' )
 		);
 		$this->assertCount( 1, $users );
 	}
@@ -271,15 +276,16 @@ final class RunnerTest extends TestCase {
 		// After the pending call drains, the loop makes the NEXT model turn,
 		// whose text-only reply completes the run.
 		$this->gateway->script[] = self::textTurn( 'Cache cleared.' );
+		$this->gateway->script[] = self::textTurn( 'Cache cleared.' );
 
 		$result = $this->runner->tick( $run_id, 2, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
-		$this->assertCount( 1, $this->gateway->calls, 'exactly ONE new model turn after the pending call drained' );
+		$this->assertCount( 2, $this->gateway->calls, 'one new model turn after the pending call drained, then the no-write nudge turn' );
 
 		$kinds = array_column( $result['new_steps'], 'kind' );
-		$this->assertSame( array( 'tool_result', 'model' ), $kinds, 'pending call drains, then the next model turn runs in the same tick' );
+		$this->assertSame( array( 'tool_result', 'model', 'system', 'user', 'model' ), $kinds, 'pending call drains, then the next model turn runs in the same tick' );
 	}
 
 	public function test_park_on_approval_required_sets_awaiting_approval_and_ui_payload(): void {
@@ -314,6 +320,7 @@ final class RunnerTest extends TestCase {
 			new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true );
 
 		$this->gateway->script[] = self::textTurn( 'Cache cleared.' );
+		$this->gateway->script[] = self::textTurn( 'Cache cleared.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
 		$result = $this->runner->tick( $run_id, $before, array( 'action' => 'approve' ) );
@@ -339,13 +346,14 @@ final class RunnerTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'wpab__other-plugin__refund', array( 'order' => 7 ) );
 		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
+		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
 		$kinds = array_column( $result['new_steps'], 'kind' );
-		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), $kinds );
+		$this->assertSame( array( 'user', 'model', 'tool_result', 'model', 'system', 'user', 'model' ), $kinds );
 		$this->assertSame( 'error', $result['new_steps'][2]['status'] );
 		$error = (string) ( $result['new_steps'][2]['message']['parts'][0]['functionResponse']['response']['error'] ?? '' );
 		$this->assertStringStartsWith( 'Unknown tool "wpab__other-plugin__refund". Call one of the tools you were given, by its exact name.', $error, 'unknown_tool outcome, executor never reached' );
@@ -443,6 +451,7 @@ final class RunnerTest extends TestCase {
 		$this->runner->tick( $run_id, 0, null );
 		$this->gateway->calls    = array();
 		$this->gateway->script[] = self::textTurn( 'Understood — not touching it.' );
+		$this->gateway->script[] = self::textTurn( 'Understood — not touching it.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
 		$result = $this->runner->tick( $run_id, $before, array( 'action' => 'reject' ) );
@@ -519,6 +528,7 @@ final class RunnerTest extends TestCase {
 	public function test_a_genuinely_unknown_senroflux_function_gets_a_helpful_error(): void {
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::callTurn( 'senroflux__do-a-barrel-roll', array() );
+		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
 		$this->gateway->script[] = self::textTurn( 'Could not do that.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
