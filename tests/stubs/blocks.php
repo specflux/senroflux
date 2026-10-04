@@ -286,6 +286,19 @@ if ( ! function_exists( 'get_post' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_page_by_path' ) ) {
+	/** Like core: matches by slug and type, any non-trashed status. */
+	function get_page_by_path( string $path, string $output = 'OBJECT', string $post_type = 'page' ): ?stdClass {
+		foreach ( (array) ( $GLOBALS['senroflux_test_posts'] ?? array() ) as $post ) {
+			if ( is_object( $post ) && ( $post->post_name ?? '' ) === $path && ( $post->post_type ?? '' ) === $post_type ) {
+				return $post;
+			}
+		}
+
+		return null;
+	}
+}
+
 if ( ! function_exists( 'get_post_status' ) ) {
 	function get_post_status( int $id ): string {
 		$post = get_post( $id );

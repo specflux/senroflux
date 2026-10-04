@@ -259,8 +259,15 @@ if ( ! function_exists( 'esc_html__' ) ) {
 if ( ! function_exists( 'current_user_can' ) ) {
 	$GLOBALS['senroflux_test_user_caps'] = array();
 
-	/** Test knob: $GLOBALS['senroflux_test_user_caps'][$cap] = bool. */
-	function current_user_can( string $capability ): bool {
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_caps'][$cap] = bool. A
+	 * per-object entry under "$cap:$object_id" wins when a call passes an id.
+	 */
+	function current_user_can( string $capability, mixed ...$args ): bool {
+		if ( isset( $args[0] ) && isset( $GLOBALS['senroflux_test_user_caps'][ $capability . ':' . $args[0] ] ) ) {
+			return (bool) $GLOBALS['senroflux_test_user_caps'][ $capability . ':' . $args[0] ];
+		}
+
 		return (bool) ( $GLOBALS['senroflux_test_user_caps'][ $capability ] ?? false );
 	}
 }

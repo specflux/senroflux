@@ -1893,6 +1893,65 @@ final class AbilitiesTest extends TestCase {
 		$this->assertArrayHasKey( 'excerpt_raw', $result );
 	}
 
+	public function test_read_content_list_without_status_includes_drafts(): void {
+		$this->seedPost( 100, 'page', 'publish', 'Home', 'home' );
+		$this->seedPost( 101, 'page', 'draft', 'Privacy Policy', 'privacy-policy' );
+		$this->seedPost( 102, 'page', 'trash', 'Gone', 'gone' );
+		$this->grant( 'edit_pages', 'read_post' );
+
+		$result = $this->ability( 'senroflux/read-content' )->execute( array( 'post_type' => 'page' ) );
+
+		$this->assertIsArray( $result );
+		$this->assertEqualsCanonicalizing( array( 100, 101 ), array_column( $result['posts'], 'id' ) );
+		$this->assertSame( 2, $result['total'] );
+	}
+
+	public function test_read_content_list_with_explicit_publish_status_stays_published_only(): void {
+		$this->seedPost( 100, 'page', 'publish', 'Home', 'home' );
+		$this->seedPost( 101, 'page', 'draft', 'Privacy Policy', 'privacy-policy' );
+		$this->grant( 'edit_pages', 'read_post' );
+
+		$result = $this->ability( 'senroflux/read-content' )->execute(
+			array(
+				'post_type' => 'page',
+				'status'    => array( 'publish' ),
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 100 ), array_column( $result['posts'], 'id' ) );
+	}
+
+	public function test_read_content_list_drops_posts_the_user_cannot_read(): void {
+		$this->seedPost( 100, 'page', 'draft', 'Mine', 'mine' );
+		$this->seedPost( 101, 'page', 'draft', 'Admin draft', 'admin-draft' );
+		$this->grant( 'edit_pages', 'read_post' );
+		$GLOBALS['senroflux_test_user_caps']['read_post:101'] = false;
+
+		$result = $this->ability( 'senroflux/read-content' )->execute(
+			array(
+				'post_type' => 'page',
+				'status'    => array( 'draft' ),
+				'fields'    => array( 'title', 'content' ),
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 100 ), array_column( $result['posts'], 'id' ) );
+		$this->assertSame( 1, $result['total'] );
+		$this->assertStringNotContainsString( 'Admin draft', (string) wp_json_encode( $result ) );
+	}
+
+	public function test_read_content_by_slug_refuses_a_post_the_user_cannot_read(): void {
+		$this->seedPost( 101, 'page', 'draft', 'Admin draft', 'admin-draft' );
+		$this->grant( 'edit_pages' );
+
+		$result = $this->ability( 'senroflux/read-content' )->execute( array( 'slug' => 'admin-draft' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'forbidden', $result->get_error_code() );
+	}
+
 	public function test_read_content_lists_its_field_names_in_the_input_schema(): void {
 		$schema = $this->ability( 'senroflux/read-content' )->get_input_schema();
 		$items  = $schema['oneOf'][0]['properties']['fields']['items'] ?? array();
@@ -1963,7 +2022,7 @@ final class AbilitiesTest extends TestCase {
 		);
 
 		$this->assertIsArray( $result );
-		$this->assertSame( 2, $result['total'] );
+		$this->assertSame( 3, $result['total'] );
 	}
 
 	// --- list-patterns execute --------------------------------------------

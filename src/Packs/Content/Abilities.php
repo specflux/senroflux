@@ -883,8 +883,9 @@ final class Abilities {
 							'enum' => array( 'page', 'post' ),
 						),
 						'status'    => array(
-							'type'  => 'array',
-							'items' => array( 'type' => 'string' ),
+							'type'        => 'array',
+							'description' => 'Post statuses to list. Omit it to list every non-trashed status (published, draft, pending, private, scheduled) you may read.',
+							'items'       => array( 'type' => 'string' ),
 						),
 						'author'    => array( 'type' => 'integer' ),
 						'parent'    => array( 'type' => 'integer' ),
@@ -2014,10 +2015,23 @@ final class Abilities {
 		$query = new \WP_Query( self::queryArgs( $input ) );
 		$posts = $query->posts ?? array();
 
-		/** @var list<WP_Post> $posts */
+		// The ability permission only checks edit_posts/edit_pages, so each hit
+		// still needs its own read check. `total` and `total_pages` come from
+		// the query and cannot see this filter: `total` is reduced by what this
+		// page dropped (other pages are not re-checked), so a page can come back
+		// short of per_page.
+		$readable = array_values(
+			array_filter(
+				$posts,
+				static fn ( $p ) => is_object( $p ) && current_user_can( 'read_post', (int) $p->ID )
+			)
+		);
+		$dropped  = count( $posts ) - count( $readable );
+
+		/** @var list<WP_Post> $readable */
 		return array(
-			'posts'       => array_map( static fn ( $p ) => self::shapePost( $p, $fields ), $posts ),
-			'total'       => (int) $query->found_posts,
+			'posts'       => array_map( static fn ( $p ) => self::shapePost( $p, $fields ), $readable ),
+			'total'       => max( 0, (int) $query->found_posts - $dropped ),
 			'total_pages' => (int) $query->max_num_pages,
 		);
 	}
@@ -3174,7 +3188,7 @@ final class Abilities {
 	private static function queryArgs( array $input ): array {
 		$args = array(
 			'post_type'      => (string) ( $input['post_type'] ?? 'page' ),
-			'post_status'    => (array) ( $input['status'] ?? array( 'publish' ) ),
+			'post_status'    => (array) ( $input['status'] ?? self::COLLISION_STATUSES ),
 			'paged'          => (int) ( $input['page'] ?? 1 ),
 			'posts_per_page' => (int) ( $input['per_page'] ?? 10 ),
 		);
