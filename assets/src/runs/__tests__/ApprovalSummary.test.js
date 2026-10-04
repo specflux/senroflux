@@ -68,6 +68,16 @@ describe( 'the approval card shows the pack summary', () => {
 		expect( document.querySelector( 'details.senroflux-approval-args' ).open ).toBe( true );
 	} );
 
+	it( 'shows why the human is asked again when the earlier request expired, and nothing otherwise', () => {
+		renderCard( { notice: 'The earlier approval request expired, so Agent Safety asked again. Approve to continue.' } );
+		expect( screen.getByRole( 'status' ).textContent ).toContain( 'earlier approval request expired' );
+	} );
+
+	it( 'renders no notice on a normal approval card', () => {
+		renderCard();
+		expect( document.querySelector( '.senroflux-approval-notice' ) ).toBeNull();
+	} );
+
 	it( 'shows the same card in built-in mode', () => {
 		render( <ParkCard kind="approval" gateMode="built_in" payload={ { ...payload, tier: null } } /> );
 

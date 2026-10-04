@@ -521,6 +521,14 @@
 	max-height: 320px;
 }
 
+.senroflux-approval-notice {
+	margin: 8px 0;
+	padding: 8px 10px;
+	border-left: 4px solid #996800;
+	background: #fcf9e8;
+	overflow-wrap: anywhere;
+}
+
 .senroflux-approval-summary-block {
 	margin: 8px 0;
 }

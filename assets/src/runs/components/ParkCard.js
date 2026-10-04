@@ -382,6 +382,11 @@ function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 				<strong>{ __( 'Requested action', 'senroflux' ) }:</strong> <code>{ payload.verb }</code>
 			</p>
 			<TierBadge gateMode={ gateMode } tier={ payload.tier } />
+			{ 'string' === typeof payload.notice && '' !== payload.notice && (
+				<p className="senroflux-approval-notice" role="status">
+					{ payload.notice }
+				</p>
+			) }
 			{ hasSummary && (
 				<div className="senroflux-approval-summary-block">
 					<p>

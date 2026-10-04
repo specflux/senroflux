@@ -483,7 +483,8 @@ final class Runner {
 						'id'   => (string) ( $parked['function_call_id'] ?? '' ),
 						'name' => (string) ( $parked['tool_name'] ?? '' ),
 						'args' => $parked['args'] ?? array(),
-					)
+					),
+					is_string( $parked['notice'] ?? null ) ? $parked['notice'] : null
 				),
 			);
 		}
@@ -521,10 +522,21 @@ final class Runner {
 				$outcome = $this->executeCall( $registry, $run, $call, approved: true );
 
 				if ( 'approval_required' === $outcome->kind ) {
+					// Agent Safety asked AGAIN under a different id (the
+					// approval we just approved had expired, 1h TTL). Re-park
+					// on the NEW one so the next Approve targets it, not the
+					// dead id; the same id means the grant simply did not take
+					// and the existing park stands.
+					$notice = null;
+					if ( $outcome->approvalId !== $approval_id ) {
+						$notice      = __( 'The earlier approval request expired, so Agent Safety asked again. Approve to continue.', 'senroflux' );
+						$new_steps[] = $this->appendApprovalStep( $run->id, $outcome, $call, array_values( is_array( $parked['remaining'] ?? null ) ? $parked['remaining'] : array() ), $notice );
+					}
+
 					return array(
 						'run'   => $this->refresh( $run ),
 						'steps' => $new_steps,
-						'ui'    => $this->approvalUi( $outcome, $call ),
+						'ui'    => $this->approvalUi( $outcome, $call, $notice ),
 					);
 				}
 
@@ -998,7 +1010,7 @@ final class Runner {
 	 * @param list<array<string,mixed>>               $remaining Sibling calls queued after it.
 	 * @return array{seq:int,kind:'approval',message:array<string,mixed>,tool_name:string,approval_id:string|null,status:'parked'}
 	 */
-	private function appendApprovalStep( int $run_id, ToolOutcome $outcome, array $call, array $remaining ): array {
+	private function appendApprovalStep( int $run_id, ToolOutcome $outcome, array $call, array $remaining, ?string $notice = null ): array {
 		$approval_id = $outcome->approvalId;
 		$context     = array(
 			'parked'           => true,
@@ -1010,6 +1022,10 @@ final class Runner {
 			'args'             => $call['args'] ?? array(),
 			'remaining'        => $remaining,
 		);
+		if ( null !== $notice ) {
+			// Why the human is being asked again; the card renders it.
+			$context['notice'] = $notice;
+		}
 
 		$seq = $this->store->appendStep(
 			$run_id,
@@ -1054,13 +1070,13 @@ final class Runner {
 	 * @param array{id:string,name:string,args:mixed} $call Parked call.
 	 * @return array{approval:array<string,mixed>}
 	 */
-	private function approvalUi( ToolOutcome $outcome, array $call ): array {
+	private function approvalUi( ToolOutcome $outcome, array $call, ?string $notice = null ): array {
 		// 0.3 S3: a built-in park's synthetic id is the only signal this
 		// method has (it is never handed the run) — no tier badge and no
 		// "Agent Safety pending actions" link belong on a built-in card.
 		$built_in = str_starts_with( (string) $outcome->approvalId, 'builtin:' );
 
-		return array(
+		$ui = array(
 			'approval' => array(
 				'approval_id'  => $outcome->approvalId,
 				'verb'         => $outcome->verb ?? $call['name'],
@@ -1075,6 +1091,11 @@ final class Runner {
 					: '',
 			),
 		);
+		if ( null !== $notice && '' !== $notice ) {
+			$ui['approval']['notice'] = $notice;
+		}
+
+		return $ui;
 	}
 
 	/**
@@ -1138,7 +1159,8 @@ final class Runner {
 					'id'   => (string) ( $parked['function_call_id'] ?? '' ),
 					'name' => (string) ( $parked['tool_name'] ?? '' ),
 					'args' => $parked['args'] ?? array(),
-				)
+				),
+				is_string( $parked['notice'] ?? null ) ? $parked['notice'] : null
 			)['approval'];
 		}
 

@@ -336,6 +336,71 @@ final class RunnerTest extends TestCase {
 		$this->assertSame( 'wpab__agsafe-smoke__blocked', $result['new_steps'][0]['tool_name'] );
 	}
 
+	public function test_approve_after_the_agent_safety_request_expired_re_parks_on_the_new_approval(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn( 'wpab__agsafe-smoke__blocked', array( 'target' => 'prod-cache' ) );
+		$this->runner->tick( $run_id, 0, null ); // Parked on apr_park1.
+
+		// apr_park1 expired in Agent Safety: approving it has no effect and
+		// the re-run demands a FRESH approval, apr_park2.
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] = new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/blocked',
+			permission_result: new WP_Error(
+				'approval_required',
+				'requires approval',
+				array(
+					'status'      => 202,
+					'verb'        => 'agsafe-smoke/blocked',
+					'tier'        => 2,
+					'approval_id' => 'apr_park2',
+				)
+			)
+		);
+
+		$before = $this->store->getRun( $run_id )->stepCount;
+		$result = $this->runner->tick( $run_id, $before, array( 'action' => 'approve' ) );
+
+		$this->assertSame( 'awaiting_approval', $result['run']['status'] );
+		$this->assertSame( 'apr_park2', $result['ui']['approval']['approval_id'] ?? '' );
+		$this->assertStringContainsString( 'earlier approval request expired', (string) ( $result['ui']['approval']['notice'] ?? '' ) );
+
+		$parked = $this->runner->parkedApprovalUi( $this->store->getRun( $run_id ) );
+		$this->assertSame( 'apr_park2', $parked['approval_id'] ?? '' );
+		$this->assertStringContainsString( 'expired', (string) ( $parked['notice'] ?? '' ), 'the note survives a reload' );
+
+		// A bare poll re-surfaces the NEW approval with the note.
+		$poll = $this->runner->tick( $run_id, $result['run']['step_count'], null );
+		$this->assertSame( 'apr_park2', $poll['ui']['approval']['approval_id'] ?? '' );
+
+		// The next Approve targets the new id, and this time it executes.
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] =
+			new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true );
+		$this->gateway->script[]                                     = self::textTurn( 'Cache cleared.' );
+		$this->gateway->script[]                                     = self::textTurn( 'Cache cleared.' );
+
+		$again = $this->runner->tick( $run_id, $poll['run']['step_count'], array( 'action' => 'approve' ) );
+
+		$this->assertTrue( $this->bridge->approvals['apr_park2'] ?? false, 'the bridge approves the NEW id' );
+		$this->assertSame( 'completed', $again['run']['status'] );
+		$this->assertSame( 'ok', $again['new_steps'][0]['status'] );
+	}
+
+	public function test_a_normal_approve_carries_no_expired_notice_and_adds_no_second_park(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::callTurn( 'wpab__agsafe-smoke__blocked', array( 'target' => 'prod-cache' ) );
+		$parked_tick             = $this->runner->tick( $run_id, 0, null );
+		$this->assertArrayNotHasKey( 'notice', $parked_tick['ui']['approval'] );
+
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/blocked'] =
+			new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/blocked', permission_result: true );
+		$this->gateway->script[]                                     = self::textTurn( 'Done.' );
+		$this->gateway->script[]                                     = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'action' => 'approve' ) );
+
+		$approvals = array_filter( $this->store->getSteps( $run_id ), static fn ( $s ) => 'approval' === $s->kind->value );
+		$this->assertCount( 1, $approvals );
+	}
+
 	public function test_call_outside_allow_list_is_unknown_tool_and_never_executed(): void {
 		$run_id              = $this->createRun(); // allow: agsafe-smoke/*
 		$outside             = new SenroFlux_Test_Fake_Ability( 'other-plugin/refund', permission_result: true );
