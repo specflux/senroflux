@@ -297,6 +297,7 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 					) }
 				</p>
 			) }
+			<PlanExistingList heading={ __( 'Pages on the site now', 'senroflux' ) } rows={ payload.site_pages } />
 			<PlanExistingList heading={ __( 'Existing pages kept', 'senroflux' ) } rows={ payload.adopted } />
 			<PlanExistingList heading={ __( 'Left as they are', 'senroflux' ) } rows={ payload.left_for_you } />
 			{ assumptions.length > 0 && (

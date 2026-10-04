@@ -235,3 +235,27 @@ describe( 'the plan card lists the existing pages it keeps and leaves alone', ()
 		expect( screen.queryByRole( 'heading', { name: 'Left as they are' } ) ).toBeNull();
 	} );
 } );
+
+describe( 'a site plan card lists the pages already on the site', () => {
+	it( 'renders the server list with title, #id and status, before the plan\'s own lists', () => {
+		const plan = {
+			steps: [ { text: 'Build the skeleton', verbs: [ 'site/create' ], tier: 1 } ],
+			site_pages: [
+				{ id: '3', title: 'Privacy Policy', status: 'draft' },
+				{ id: '2', title: 'Sample Page', status: 'publish' },
+			],
+		};
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const list = screen.getByRole( 'heading', { name: 'Pages on the site now' } ).nextElementSibling;
+		expect( list.tagName ).toBe( 'UL' );
+		expect( within( list ).getByText( 'Privacy Policy · #3 · draft' ) ).toBeInTheDocument();
+		expect( within( list ).getByText( 'Sample Page · #2 · published' ) ).toBeInTheDocument();
+	} );
+
+	it( 'renders no heading when the server sends no pages', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ { steps: [], site_pages: [] } } /> );
+
+		expect( screen.queryByRole( 'heading', { name: 'Pages on the site now' } ) ).toBeNull();
+	} );
+} );

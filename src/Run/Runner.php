@@ -3933,12 +3933,46 @@ final class Runner {
 			'assumptions'          => (array) ( $payload['assumptions'] ?? array() ),
 			'adopted'              => self::planUiObjectRows( $payload, 'adopted', $lookup ),
 			'left_for_you'         => self::planUiObjectRows( $payload, 'left_for_you', $lookup ),
+			'site_pages'           => $this->sitePageRows( $run_id ),
 			'remaining_plans'      => $remaining,
 			'preapprove_available' => $this->preapprovalEnabled(),
 			'review_url'           => function_exists( 'admin_url' )
 				? admin_url( 'tools.php?page=senroflux-runs&run=' . (int) $run_id )
 				: '',
 		);
+	}
+
+	/**
+	 * A site-pack plan card's own list of the pages already on the site:
+	 * `{ id, title, status }` read NOW, so the human sees every existing page
+	 * (a default Privacy Policy draft included) whatever the model's plan
+	 * named. Live J5: the model kept leaving that draft out.
+	 *
+	 * @return list<array{id:string,title:string,status:string}>
+	 */
+	private function sitePageRows( int $run_id ): array {
+		$run = $this->store->getRun( $run_id );
+		if ( null === $run || 'site' !== $run->pack || ! function_exists( 'get_pages' ) ) {
+			return array();
+		}
+
+		$rows = array();
+		foreach ( array( 'publish', 'future', 'draft', 'pending', 'private' ) as $status ) {
+			foreach ( (array) get_pages( array( 'post_status' => $status ) ) as $page ) {
+				$id = (int) ( $page->ID ?? 0 );
+				if ( $id <= 0 || ! current_user_can( 'read_post', $id ) ) {
+					continue;
+				}
+				$rows[] = array(
+					'id'     => (string) $id,
+					'title'  => (string) ( $page->post_title ?? '' ),
+					'status' => (string) ( $page->post_status ?? $status ),
+				);
+			}
+		}
+		usort( $rows, static fn ( array $a, array $b ): int => strcmp( $a['title'], $b['title'] ) );
+
+		return array_slice( $rows, 0, 25 );
 	}
 
 	/**

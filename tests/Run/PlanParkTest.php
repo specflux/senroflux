@@ -83,6 +83,7 @@ final class PlanParkTest extends TestCase {
 	protected function tearDown(): void {
 		remove_all_filters( 'senroflux_verb_map' );
 		remove_all_filters( 'senroflux_enable_preapproval' );
+		unset( $GLOBALS['senroflux_test_posts'], $GLOBALS['senroflux_test_user_caps']['read_post'], $GLOBALS['senroflux_test_user_caps']['read_post:4'] );
 	}
 
 	/**
@@ -395,6 +396,81 @@ final class PlanParkTest extends TestCase {
 		);
 		// The stored plan keeps the bare ids the grant binds to.
 		$this->assertSame( array( '12' ), $this->planSteps( $run_id )[0]->messageArray['steps'][0]['objects'] );
+	}
+
+	public function test_a_site_plan_card_lists_every_existing_page_with_its_status_from_the_server(): void {
+		// Live J5 (ad6618a): the model kept leaving the default Privacy Policy
+		// draft out of its plan, so the human approved without seeing it. The
+		// card now lists the site's pages itself, whatever the model wrote.
+		require_once dirname( __DIR__ ) . '/stubs/navigation.php';
+		$GLOBALS['senroflux_test_posts'][2]                 = (object) array(
+			'ID'          => 2,
+			'post_type'   => 'page',
+			'post_status' => 'publish',
+			'post_title'  => 'Sample Page',
+		);
+		$GLOBALS['senroflux_test_posts'][3]                 = (object) array(
+			'ID'          => 3,
+			'post_type'   => 'page',
+			'post_status' => 'draft',
+			'post_title'  => 'Privacy Policy',
+		);
+		$GLOBALS['senroflux_test_posts'][4]                 = (object) array(
+			'ID'          => 4,
+			'post_type'   => 'page',
+			'post_status' => 'private',
+			'post_title'  => 'Owner Notes',
+		);
+		$GLOBALS['senroflux_test_posts'][5]                 = (object) array(
+			'ID'          => 5,
+			'post_type'   => 'post',
+			'post_status' => 'publish',
+			'post_title'  => 'Hello world!',
+		);
+		$GLOBALS['senroflux_test_user_caps']['read_post']   = true;
+		$GLOBALS['senroflux_test_user_caps']['read_post:4'] = false;
+
+		$run_id = $this->store->createRun( 1, 'test-consumer', 'Build a site skeleton', array( 'agsafe-smoke/*' ), Budget::defaults(), 'site' );
+
+		$this->gateway->script[] = self::planTurn( 'call_p', self::planNaming( array() ) );
+
+		$result = ( new Runner( $this->store, new ToolExecutor(), $this->gateway, $this->bridge ) )->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame(
+			array(
+				array(
+					'id'     => '3',
+					'title'  => 'Privacy Policy',
+					'status' => 'draft',
+				),
+				array(
+					'id'     => '2',
+					'title'  => 'Sample Page',
+					'status' => 'publish',
+				),
+			),
+			$result['ui']['plan']['site_pages'] ?? null,
+			'every readable page, by title, with its status now; posts and unreadable pages left out'
+		);
+	}
+
+	public function test_a_non_site_plan_card_carries_no_site_pages(): void {
+		$GLOBALS['senroflux_test_posts'][2]               = (object) array(
+			'ID'          => 2,
+			'post_type'   => 'page',
+			'post_status' => 'publish',
+			'post_title'  => 'Sample Page',
+		);
+		$GLOBALS['senroflux_test_user_caps']['read_post'] = true;
+
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::planTurn( 'call_p', self::planNaming( array() ) );
+
+		$result = ( new Runner( $this->store, new ToolExecutor(), $this->gateway, $this->bridge ) )->tick( $run_id, 0, null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array(), $result['ui']['plan']['site_pages'] ?? null );
 	}
 
 	public function test_plan_card_carries_adopted_and_left_for_you_with_server_resolved_status(): void {
