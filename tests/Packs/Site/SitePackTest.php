@@ -229,6 +229,12 @@ final class SitePackTest extends TestCase {
 			'adopted object',
 			$structure->body
 		);
+		// Live J5: the plan named the adopted Sample Page but not the
+		// default Privacy Policy draft it was leaving alone.
+		$this->assertStringContainsString(
+			'every existing page and adopted object (title, id, status; say which you leave alone)',
+			$structure->body
+		);
 		$this->assertStringContainsString(
 			'publish and navigation steps',
 			$structure->body
