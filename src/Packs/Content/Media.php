@@ -132,12 +132,15 @@ final class Media {
 	private const ALT_TEXT_MAX_FILE_BYTES = 10 * 1024 * 1024;
 
 	/**
-	 * `stock-image-import` refuses a 4th call in one run — the escape hatch
+	 * `stock-image-import` refuses a 9th call in one run — the escape hatch
 	 * this pairs with ({@see noImageSourceLeft()}) is meant to unblock a run
 	 * that genuinely cannot get an image, not to substitute stock search for
-	 * unbounded free image sourcing.
+	 * unbounded free image sourcing. Live J5: at 3, a four-page skeleton
+	 * (every page opens with a hero that needs its own image) dead-ended on
+	 * the fourth hero and burned its token budget; 8 covers a hero plus one
+	 * more image on each of four pages.
 	 */
-	public const STOCK_IMPORT_CAP = 3;
+	public const STOCK_IMPORT_CAP = 8;
 
 	/**
 	 * 0.3 quality fix (stock image choice): live runs picked 3D renders,

@@ -1247,7 +1247,36 @@ final class MediaTest extends TestCase {
 		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
 	}
 
-	public function test_the_fourth_stock_image_import_in_one_run_is_refused(): void {
+	public function test_a_fourth_stock_image_import_is_not_capped(): void {
+		// Live J5: a four-page skeleton needs a fourth hero image; a cap of 3 dead-ended it.
+		for ( $i = 0; $i < 3; $i++ ) {
+			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__stock-image-import', null, 'ok' );
+		}
+
+		$path = sys_get_temp_dir() . '/senroflux-stock-fourth.jpg';
+		touch( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_touch -- test fixture file, not a WP runtime path.
+		Media::setStockGateway(
+			$this->fakeStockGateway(
+				fetch_result: $this->eligibleDetail(),
+				download_result: array(
+					'path'     => $path,
+					'filename' => basename( $path ),
+				)
+			)
+		);
+
+		$result = $this->ability( 'senroflux/stock-image-import' )->execute(
+			array(
+				'id'  => self::VALID_STOCK_ID,
+				'alt' => 'A red bicycle',
+			)
+		);
+
+		$this->assertIsArray( $result, is_wp_error( $result ) ? $result->get_error_message() : '' );
+		$this->assertArrayHasKey( 'attachment_id', $result );
+	}
+
+	public function test_the_stock_image_import_past_the_cap_in_one_run_is_refused(): void {
 		for ( $i = 0; $i < Media::STOCK_IMPORT_CAP; $i++ ) {
 			$this->store->appendStep( $this->runId, StepKind::ToolResult, null, 'wpab__senroflux__stock-image-import', null, 'ok' );
 		}
