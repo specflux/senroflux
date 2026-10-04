@@ -2297,6 +2297,27 @@ final class AbilitiesTest extends TestCase {
 		$this->assertStringNotContainsString( $source['faq'], $skill );
 	}
 
+	public function test_the_faq_layout_description_matches_the_exact_item_count_the_validator_enforces(): void {
+		// Live J5 (569d9bb): the description said "2 to 4" while the faq
+		// layout takes exactly its theme pattern's 4 items, so a model that
+		// followed it was refused.
+		Abilities::reset();
+		Abilities::registerCategory();
+		Abilities::register();
+		$schema = $this->ability( 'senroflux/create-post' )->get_input_schema();
+		$page   = null;
+		foreach ( $schema['oneOf'] as $branch ) {
+			if ( array( 'page' ) === ( $branch['properties']['post_type']['enum'] ?? array() ) ) {
+				$page = $branch;
+			}
+		}
+		$this->assertNotNull( $page );
+		$description = $page['properties']['sections']['items']['properties']['layout']['description'];
+
+		$this->assertStringContainsString( 'faq: heading (≤5 words), items — exactly 4 of', $description );
+		$this->assertStringContainsString( 'use a text section instead', $description );
+	}
+
 	public function test_sections_builds_a_page_from_layouts(): void {
 		require_once dirname( __DIR__, 2 ) . '/Packs/Pages/LayoutsTest.php';
 		LayoutsTest::registerThemeFixtures();
