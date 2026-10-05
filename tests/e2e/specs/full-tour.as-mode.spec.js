@@ -50,11 +50,6 @@ test.describe( 'S10/S12 full run tour (Agent Tollgate mode)', () => {
 		await approveCall( page );
 
 		await waitSettled( page );
-		// S10 also asks for a tier badge on each expanded LEDGER row in Agent
-		// Safety mode. That is not implementable today — the step payload
-		// carries no tier — so it lives in known-defects.spec.js as a
-		// `test.fail()` case rather than being asserted here or quietly
-		// dropped. See that file for the root cause.
 		await assertNoSeriousA11y( page, 'terminal report view' );
 	} );
 } );

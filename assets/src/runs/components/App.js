@@ -8,6 +8,23 @@ import EmptyState from './EmptyState';
 import MessageBox from './MessageBox';
 
 /**
+ * Add the brief suggestions a tick's new steps created to the shown list, in
+ * the run-detail read's shape (`Plugin::get()`), skipping any already listed.
+ *
+ * @param {?Array} listed   The suggestions currently shown.
+ * @param {Array}  appended The steps the tick appended.
+ * @return {Array} The suggestions to show.
+ */
+function withNewSuggestions( listed, appended ) {
+	const current = Array.isArray( listed ) ? listed : [];
+	const known = new Set( current.map( ( suggestion ) => suggestion.seq ) );
+	const added = appended
+		.filter( ( item ) => 'suggestion' === item.kind && item.message && ! known.has( item.seq ) )
+		.map( ( item ) => ( { seq: item.seq, text: String( item.message.text ?? '' ), status: 'pending' } ) );
+	return added.length > 0 ? [ ...current, ...added ] : current;
+}
+
+/**
  * A run-detail read is issued alongside the first tick of a new run and can be
  * answered mid-tick yet arrive after the tick's own response. When a tick
  * result landed while the read was in flight, the read may be older than what
@@ -242,6 +259,9 @@ export default function App( { config } ) {
 					...( state.ui && state.ui.report ? { report: state.ui.report } : {} ),
 				},
 				steps: Array.isArray( state.steps ) ? state.steps : [ ...previousSteps, ...appended ],
+				// The tick carries a new suggestion only as a `suggestion` step;
+				// list it the way the run-detail read does (pending until resolved).
+				suggestions: withNewSuggestions( same ? previous.suggestions : [], appended ),
 				// A fresh plan or approval park's card facts ride the tick's
 				// `ui.plan` / `ui.approval`; keep the run-detail read's own
 				// `ui` otherwise (Chat matches each to the parked step, so a
