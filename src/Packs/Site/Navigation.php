@@ -826,14 +826,14 @@ final class Navigation {
 				continue;
 			}
 
-			$attrs = array( 'label' => (string) ( $item['label'] ?? '' ) );
+			$attrs = array( 'label' => sanitize_text_field( (string) ( $item['label'] ?? '' ) ) );
 			if ( isset( $item['page_id'] ) ) {
 				$attrs['id']   = (int) $item['page_id'];
 				$attrs['kind'] = 'post-type';
 				$attrs['type'] = 'page';
 				$attrs['url']  = function_exists( 'get_permalink' ) ? (string) get_permalink( (int) $item['page_id'] ) : (string) ( $item['url'] ?? '' );
 			} else {
-				$attrs['url'] = (string) ( $item['url'] ?? '' );
+				$attrs['url'] = esc_url_raw( (string) ( $item['url'] ?? '' ) );
 			}
 
 			$children = isset( $item['key'] ) && is_string( $item['key'] ) ? self::blocksForItems( $items, $item['key'] ) : array();
@@ -887,7 +887,7 @@ final class Navigation {
 		foreach ( $items as $item ) {
 			++$position;
 			$data = array(
-				'menu-item-title'     => (string) ( $item['label'] ?? '' ),
+				'menu-item-title'     => sanitize_text_field( (string) ( $item['label'] ?? '' ) ),
 				'menu-item-status'    => 'publish',
 				'menu-item-position'  => $position,
 				'menu-item-parent-id' => 0,
@@ -897,7 +897,7 @@ final class Navigation {
 				$data['menu-item-object']    = 'page';
 				$data['menu-item-type']      = 'post_type';
 			} else {
-				$data['menu-item-url']  = (string) ( $item['url'] ?? '' );
+				$data['menu-item-url']  = esc_url_raw( (string) ( $item['url'] ?? '' ) );
 				$data['menu-item-type'] = 'custom';
 			}
 

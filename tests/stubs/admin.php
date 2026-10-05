@@ -45,6 +45,14 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	}
 }
 
+if ( ! function_exists( 'esc_url_raw' ) ) {
+	/** Protocol-shim: drops anything that isn't http(s), relative or a fragment. */
+	function esc_url_raw( string $url ): string {
+		$url = trim( $url );
+		return ( '' === $url || preg_match( '#^(https?://|/|\#)#i', $url ) ) ? $url : '';
+	}
+}
+
 if ( ! function_exists( 'sanitize_key' ) ) {
 	/** Lower-cases and strips to `[a-z0-9_-]`, same shape as WP core's own. */
 	function sanitize_key( string $key ): string {

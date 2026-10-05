@@ -254,6 +254,28 @@ final class NavigationTest extends TestCase {
 		$this->assertSame( 'New link', $reread['items'][0]['label'] );
 	}
 
+	public function test_update_navigation_sanitizes_a_model_supplied_label_and_url(): void {
+		$nav_id = $this->insertNav( '<!-- wp:navigation-link {"label":"Original","url":"https://example.test/"} /-->' );
+		$GLOBALS['senroflux_test_header_template_content'] = '<!-- wp:navigation {"ref":' . $nav_id . '} /-->';
+		$this->readAbility()->execute();
+
+		$this->updateAbility()->execute(
+			array(
+				'items' => array(
+					array(
+						'label' => 'Shop<script>alert(1)</script>',
+						'url'   => 'javascript:alert(1)',
+						'order' => 0,
+					),
+				),
+			)
+		);
+
+		$reread = $this->readAbility()->execute();
+		$this->assertStringNotContainsString( '<script>', $reread['items'][0]['label'] );
+		$this->assertStringNotContainsString( 'javascript:', (string) $reread['items'][0]['url'] );
+	}
+
 	// ------------------------------------------------------------------
 	// S7 quality fix (2026-09-28): a site-pack plan that creates or
 	// publishes a page must not leave WordPress's stock "Sample Page"
