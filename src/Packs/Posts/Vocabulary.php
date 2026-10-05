@@ -357,15 +357,7 @@ final class Vocabulary implements ContentVocabulary {
 			'title'       => 'Closing call to action',
 			'description' => __( 'A full-width closing call to action. At most one per post.', 'senroflux' ),
 			'kind'        => 'feature',
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/closing-cta"},"align":"full","layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Keep reading</h2><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center">One line of supporting benefit before the button.</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Read more</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'closing-cta' ),
 			'repeatable'  => array(),
 			'constraints' => array(
 				'slots'  => array(),
@@ -390,12 +382,7 @@ HTML
 			'title'       => 'Pull quote',
 			'description' => __( 'A pulled-out quotation, visually distinct from an inline quote.', 'senroflux' ),
 			'kind'        => 'feature',
-			'markup'      => <<<'HTML'
-<!-- wp:pullquote {"metadata":{"name":"senroflux/pull-quote"}} -->
-<figure class="wp-block-pullquote"><blockquote><p>A short line worth pulling out.</p><cite>Attribution, optional</cite></blockquote></figure>
-<!-- /wp:pullquote -->
-HTML
-			,
+			'markup'      => $this->markup( 'pull-quote' ),
 			'repeatable'  => array(),
 			'constraints' => array(
 				'slots'  => array(),
@@ -404,5 +391,16 @@ HTML
 				),
 			),
 		);
+	}
+
+	/**
+	 * A skeleton's markup from patterns/<slug>.html, byte for byte (the files
+	 * carry no trailing newline).
+	 *
+	 * @param string $slug A literal pattern slug.
+	 * @return string
+	 */
+	private function markup( string $slug ): string {
+		return (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
 	}
 }

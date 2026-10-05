@@ -465,15 +465,7 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 			'name'        => 'senroflux/hero',
 			'title'       => 'Hero',
 			'description' => __( 'A full-width hero: one headline, one subheadline and up to two calls to action.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/hero"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--60);padding-bottom:var(--wp--preset--spacing--60)">
-<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">A headline that states the promise</h1><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">One supporting sentence saying who this is for and what they get.</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'hero' ),
 			'repeatable'  => array( 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -532,18 +524,7 @@ HTML
 			'name'        => 'senroflux/cover-hero',
 			'title'       => 'Cover hero',
 			'description' => __( 'An image-led hero: a full-width background photo with one headline, one subheadline and up to two calls to action.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:cover {"metadata":{"name":"senroflux/cover-hero"},"url":"https://example.test/photo.jpg","id":501,"alt":"A descriptive alt","dimRatio":60,"overlayColor":"contrast","align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|60","bottom":"var:preset|spacing|60"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-cover alignfull" style="padding-top:var(--wp--preset--spacing--60);padding-bottom:var(--wp--preset--spacing--60)"><img class="wp-block-cover__image-background wp-image-501" alt="A descriptive alt" src="https://example.test/photo.jpg" data-object-fit="cover"/><span aria-hidden="true" class="wp-block-cover__background has-contrast-background-color has-background-dim-60 has-background-dim"></span>
-<div class="wp-block-cover__inner-container">
-<!-- wp:heading {"textAlign":"center","level":1} --><h1 class="wp-block-heading has-text-align-center">A headline that states the promise</h1><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center","fontSize":"large"} --><p class="has-text-align-center has-large-font-size">One supporting sentence saying who this is for and what they get.</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div>
-</div>
-<!-- /wp:cover -->
-HTML
-			,
+			'markup'      => $this->markup( 'cover-hero' ),
 			'repeatable'  => array( 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -573,15 +554,7 @@ HTML
 			'name'        => 'senroflux/text-section',
 			'title'       => 'Text section',
 			'description' => __( 'A plain prose section: an H2 heading followed by two to four paragraphs.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/text-section"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
-<!-- wp:paragraph --><p>Open with the point a visitor came for: what this is, who it suits and what they get from it. Use the business's own facts, such as its services, place, hours and people, and name them exactly.</p><!-- /wp:paragraph -->
-<!-- wp:paragraph --><p>Then answer the next question they would ask, if the supplied facts answer it, such as how to book. One idea per paragraph, no filler, and nothing invented.</p><!-- /wp:paragraph -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'text-section' ),
 			'repeatable'  => array( 'core/paragraph' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -620,17 +593,7 @@ HTML
 			'name'        => 'senroflux/media-text',
 			'title'       => 'Media and text',
 			'description' => __( 'An image beside a short text block: a photo on one side, an H2 heading and one to three paragraphs (with an optional button) on the other.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:media-text {"metadata":{"name":"senroflux/media-text"},"mediaId":502,"mediaType":"image","mediaWidth":50,"mediaSizeSlug":"full","mediaPosition":"left"} -->
-<div class="wp-block-media-text is-stacked-on-mobile alignwide"><figure class="wp-block-media-text__media"><img src="https://example.test/photo.jpg" alt="A descriptive alt" class="wp-image-502 size-full"/></figure>
-<div class="wp-block-media-text__content">
-<!-- wp:heading --><h2 class="wp-block-heading">What this section covers</h2><!-- /wp:heading -->
-<!-- wp:paragraph --><p>Say what the photo shows and why it matters to the visitor: what they will experience, who does the work and what to do next. Two to four sentences built from the business's own facts.</p><!-- /wp:paragraph -->
-</div>
-</div>
-<!-- /wp:media-text -->
-HTML
-			,
+			'markup'      => $this->markup( 'media-text' ),
 			'repeatable'  => array( 'core/paragraph', 'core/buttons', 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -666,14 +629,7 @@ HTML
 			'name'        => 'senroflux/feature-grid',
 			'title'       => 'Feature grid',
 			'description' => __( 'A two-to-three-column feature grid: an H2 heading and one H3 + paragraph per column.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/feature-grid"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">What you get</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">First feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>What this feature does for the reader and why it matters, in one or two concrete sentences.</p><!-- /wp:paragraph --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Second feature</h3><!-- /wp:heading --><!-- wp:paragraph --><p>What this feature does for the reader and why it matters, in one or two concrete sentences.</p><!-- /wp:paragraph --></div><!-- /wp:column --></div><!-- /wp:columns -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'feature-grid' ),
 			'repeatable'  => array( 'core/column' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -704,14 +660,7 @@ HTML
 			'name'        => 'senroflux/pricing-table',
 			'title'       => 'Pricing table',
 			'description' => __( 'A pricing table: an H2 heading and one-to-three plan columns, each with a plan, price, feature list and a call to action.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/pricing-table"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Pricing</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Starter</h3><!-- /wp:heading --><!-- wp:paragraph --><p>$&mdash;/month (price TBC)</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>First thing this plan includes</li><li>Second thing this plan includes</li><li>Third thing this plan includes</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Choose plan</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Standard</h3><!-- /wp:heading --><!-- wp:paragraph --><p>$&mdash;/month (price TBC)</p><!-- /wp:paragraph --><!-- wp:list --><ul class="wp-block-list"><li>First thing this plan includes</li><li>Second thing this plan includes</li><li>Third thing this plan includes</li></ul><!-- /wp:list --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Choose plan</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --></div><!-- /wp:columns -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'pricing-table' ),
 			'repeatable'  => array( 'core/column' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -746,15 +695,7 @@ HTML
 			'name'        => 'senroflux/faq',
 			'title'       => 'FAQ',
 			'description' => __( 'An FAQ: an H2 heading and two-to-eight collapsible details blocks. Answer only from supplied facts; leave out a question you cannot answer from them.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/faq"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Questions people ask</h2><!-- /wp:heading -->
-<!-- wp:details --><details class="wp-block-details"><summary>The first question a reader actually asks</summary><!-- wp:paragraph --><p>A direct answer in one or two short sentences.</p><!-- /wp:paragraph --></details><!-- /wp:details -->
-<!-- wp:details --><details class="wp-block-details"><summary>The second question a reader actually asks</summary><!-- wp:paragraph --><p>A direct answer in one or two short sentences.</p><!-- /wp:paragraph --></details><!-- /wp:details -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'faq' ),
 			'repeatable'  => array( 'core/details' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -783,14 +724,7 @@ HTML
 			'name'        => 'senroflux/testimonials',
 			'title'       => 'Testimonials',
 			'description' => __( 'A social-proof section: an H2 heading and one-to-three quotes with attribution.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/testimonials"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">What customers say</h2><!-- /wp:heading -->
-<!-- wp:quote --><blockquote class="wp-block-quote"><!-- wp:paragraph --><p>A short outcome in the customer&#8217;s own words.</p><!-- /wp:paragraph --><cite>Customer name, role</cite></blockquote><!-- /wp:quote -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'testimonials' ),
 			'repeatable'  => array( 'core/quote' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -818,15 +752,7 @@ HTML
 			'name'        => 'senroflux/cta',
 			'title'       => 'Call to action',
 			'description' => __( 'A full-width closing call to action: an H2 heading, one supporting line and one button.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/cta"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Start today</h2><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center">One line of supporting benefit before the button.</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Get started</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'cta' ),
 			'repeatable'  => array( 'core/button' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -842,5 +768,16 @@ HTML
 				),
 			),
 		);
+	}
+
+	/**
+	 * A skeleton's markup from patterns/<slug>.html, byte for byte (the files
+	 * carry no trailing newline).
+	 *
+	 * @param string $slug A literal pattern slug.
+	 * @return string
+	 */
+	private function markup( string $slug ): string {
+		return (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
 	}
 }

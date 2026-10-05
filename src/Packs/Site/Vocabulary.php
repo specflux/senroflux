@@ -71,14 +71,7 @@ final class Vocabulary extends PagesVocabulary {
 			'name'        => 'senroflux/page-links',
 			'title'       => 'Page links',
 			'description' => __( 'A homepage card grid linking to the site\'s other pages: an H2 heading and two-to-six cards, each with a title, a line of copy and a button to one page.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/page-links"},"align":"full","style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Explore the site</h2><!-- /wp:heading -->
-<!-- wp:columns --><div class="wp-block-columns"><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">First page</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this page covers.</p><!-- /wp:paragraph --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Visit page</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --><!-- wp:column --><div class="wp-block-column"><!-- wp:heading {"level":3} --><h3 class="wp-block-heading">Second page</h3><!-- /wp:heading --><!-- wp:paragraph --><p>One sentence on what this page covers.</p><!-- /wp:paragraph --><!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Visit page</a></div><!-- /wp:button --></div><!-- /wp:buttons --></div><!-- /wp:column --></div><!-- /wp:columns -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'page-links' ),
 			'repeatable'  => array( 'core/column' ),
 			'constraints' => array(
 				'slots'  => array(
@@ -110,15 +103,7 @@ HTML
 			'name'        => 'senroflux/intro',
 			'title'       => 'Intro',
 			'description' => __( 'A short homepage introduction: an H2 heading, one paragraph and one button.', 'senroflux' ),
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/intro"},"style":{"spacing":{"padding":{"top":"var:preset|spacing|50","bottom":"var:preset|spacing|50"}}},"layout":{"type":"constrained"}} -->
-<div class="wp-block-group" style="padding-top:var(--wp--preset--spacing--50);padding-bottom:var(--wp--preset--spacing--50)">
-<!-- wp:heading --><h2 class="wp-block-heading">A short introduction</h2><!-- /wp:heading -->
-<!-- wp:paragraph --><p>One paragraph introducing the site or the business.</p><!-- /wp:paragraph -->
-<!-- wp:buttons --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Learn more</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'intro' ),
 			'repeatable'  => array(),
 			'constraints' => array(
 				'slots'  => array(),
@@ -129,5 +114,16 @@ HTML
 				),
 			),
 		);
+	}
+
+	/**
+	 * A skeleton's markup from patterns/<slug>.html, byte for byte (the files
+	 * carry no trailing newline).
+	 *
+	 * @param string $slug A literal pattern slug.
+	 * @return string
+	 */
+	private function markup( string $slug ): string {
+		return (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
 	}
 }
