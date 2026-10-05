@@ -3,7 +3,7 @@
 Agent runs for WordPress. SenroFlux runs a resumable, multi-step agent loop inside the
 logged-in WordPress session: Abilities are the tools, the WordPress AI Client is the model
 layer, and every governed call is gated and approved by
-[Agent Safety](https://github.com/stephen1204paul/agent-safety) when it's active, or by
+[Agent Tollgate](https://github.com/stephen1204paul/agent-tollgate) when it's active, or by
 SenroFlux's own built-in minimal gate when it isn't.
 
 First consumer: [Specflux Marketing Analytics Chat](https://wordpress.org/plugins/specflux-marketing-analytics-chat/).
