@@ -29,7 +29,14 @@ interface Vocabulary {
 	/**
 	 * The `senroflux/list-patterns` payload for this pack: metadata + constraints.
 	 *
+	 * With `$names` empty, returns the compact INDEX shape (name, title,
+	 * description, theme_derived when true — no markup/constraints/slots).
+	 * With `$names` non-empty, returns full entries for exactly those names,
+	 * in vocabulary order, plus `not_found` for any name not in this
+	 * vocabulary.
+	 *
+	 * @param list<string> $names Pattern names to return full entries for.
 	 * @return array<string,mixed>
 	 */
-	public function listPayload(): array;
+	public function listPayload( array $names = array() ): array;
 }

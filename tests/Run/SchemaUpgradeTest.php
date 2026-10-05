@@ -1,9 +1,10 @@
 <?php
 /**
  * Schema tests (0.2 S4, plus the v3 skills_disable_json column, the v4
- * gate_mode column, the v5 withheld_roles_json column, and the v6
- * follow_up_of column): the new columns
- * exist, the version option is stamped, and the upgrade is idempotent.
+ * gate_mode column, the v5 withheld_roles_json column, the v6
+ * follow_up_of column, and the v7 model_provider/model_id columns): the new
+ * columns exist, the version option is stamped, and the upgrade is
+ * idempotent.
  *
  * @package SenroFlux
  */
@@ -24,7 +25,7 @@ final class SchemaUpgradeTest extends TestCase {
 	}
 
 	public function test_schema_version_is_five(): void {
-		$this->assertSame( 6, Schema::DB_VERSION );
+		$this->assertSame( 7, Schema::DB_VERSION );
 	}
 
 	/** @return list<string> The 0.2-0.3 columns every current runs table carries. */
@@ -41,6 +42,8 @@ final class SchemaUpgradeTest extends TestCase {
 			'gate_mode VARCHAR(20) NOT NULL DEFAULT \'agent_safety\'',
 			'withheld_roles_json TEXT NULL',
 			'follow_up_of BIGINT(20) UNSIGNED NULL',
+			'model_provider VARCHAR(64) NULL',
+			'model_id VARCHAR(191) NULL',
 		);
 	}
 
@@ -61,13 +64,13 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 6, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 7, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'], 'runs + steps statements' );
 	}
 
 	public function test_maybe_upgrade_is_idempotent_at_the_current_version(): void {
 		$db = new wpdb();
-		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 6;
+		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 7;
 
 		Schema::maybe_upgrade( $db );
 
@@ -80,7 +83,7 @@ final class SchemaUpgradeTest extends TestCase {
 
 		Schema::maybe_upgrade( $db );
 
-		$this->assertSame( 6, get_option( 'senroflux_db_version' ) );
+		$this->assertSame( 7, get_option( 'senroflux_db_version' ) );
 		$this->assertCount( 2, $GLOBALS['senroflux_test_dbdelta_queries'] );
 
 		// dbDelta is idempotent by design: re-running the SAME statements is
@@ -90,6 +93,8 @@ final class SchemaUpgradeTest extends TestCase {
 		$this->assertStringContainsString( 'skills_disable_json', $statements );
 		$this->assertStringContainsString( 'withheld_roles_json', $statements );
 		$this->assertStringContainsString( 'follow_up_of', $statements );
+		$this->assertStringContainsString( 'model_provider', $statements );
+		$this->assertStringContainsString( 'model_id', $statements );
 	}
 
 	// ------------------------------------------------------------------
@@ -133,7 +138,7 @@ final class SchemaUpgradeTest extends TestCase {
 
 	public function test_an_already_current_install_writes_no_watermark_and_does_not_rerun_dbdelta(): void {
 		$db = new wpdb();
-		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 6;
+		$GLOBALS['senroflux_test_options']['senroflux_db_version'] = 7;
 		$db->varQueue = array( 5, 99 );
 
 		Schema::maybe_upgrade( $db );

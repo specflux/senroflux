@@ -62,6 +62,7 @@ final class ThemePatternsTest extends TestCase {
 
 	protected function tearDown(): void {
 		ThemePatterns::resetCache();
+		unset( $GLOBALS['senroflux_test_theme_patterns'], $GLOBALS['senroflux_test_stylesheet_dir'], $GLOBALS['senroflux_test_template_dir'] );
 	}
 
 	// --- fixture loading -----------------------------------------------
@@ -199,11 +200,42 @@ final class ThemePatternsTest extends TestCase {
 	}
 
 	public function test_disallowed_block_is_cut(): void {
-		// Real: `banner-about-book` uses `core/image`, outside the pack's allow-list.
-		$this->registerFixtures( 'banner-about-book' );
+		// SYNTHETIC (0.3 quality feature 4 changed this clause's only real
+		// example): `core/image` moved from outside the allow-list to inside
+		// it — see `test_image_pattern_is_eligible_and_its_image_becomes_a_slot()`
+		// below, using the same real `banner-about-book` fixture this test
+		// used to cover. `core/video` is still outside it.
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/disallowed-block',
+				'title'    => 'A video pattern',
+				'content'  => '<!-- wp:paragraph --><p>Some real sample copy here.</p><!-- /wp:paragraph --><!-- wp:video --><figure class="wp-block-video"></figure><!-- /wp:video -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
 
 		$this->assertSame( array(), ThemePatterns::eligible() );
 		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * 0.3 quality feature 4: `core/image` joined the allow-list so a theme
+	 * pattern's own image can be filled with an attachment a run found or
+	 * generated. `banner-about-book` is the real Twenty Twenty-Five fixture
+	 * this uncovers — it was cut entirely before this feature.
+	 */
+	public function test_image_pattern_is_eligible_and_its_image_becomes_a_slot(): void {
+		$this->registerFixtures( 'banner-about-book' );
+
+		$eligible = ThemePatterns::eligible();
+		$this->assertSame( array( 'twentytwentyfive/banner-about-book' ), $this->names( $eligible ) );
+		$this->assertSame( 0, ThemePatterns::skippedCount() );
+
+		$slots = $eligible[0]['text_slots'];
+		$image = end( $slots );
+		$this->assertSame( 'image', $image['kind'] );
+		$this->assertSame( 'img', $image['tag'] );
+		$this->assertNotSame( '', $image['shipped_src'] );
 	}
 
 	public function test_no_meaningful_text_slot_is_cut(): void {
@@ -248,20 +280,149 @@ final class ThemePatternsTest extends TestCase {
 		$this->assertSame( 1, ThemePatterns::skippedCount() );
 	}
 
-	public function test_decorative_color_is_cut(): void {
-		// SYNTHETIC: same reasoning — a real pattern with a decorative colour
-		// in this theme also uses a block outside the allow-list.
+	/**
+	 * D3a (S4): a theme pattern's own preset colour no longer cuts it. BEFORE
+	 * this stage's change, `hasDecorativeColor()` cut ANY `backgroundColor`
+	 * unconditionally, so this exact fixture was refused — this test failed
+	 * (`assertCount(1, ...)` saw an empty array) until `hasIneligibleColor()`
+	 * started checking the value against the active palette instead of just
+	 * its presence. `accent-1` is in the default test palette (Twenty
+	 * Twenty-Five's own, `tests/stubs/theme-patterns.php`).
+	 */
+	public function test_preset_color_is_eligible_under_d3a(): void {
 		$this->registerRaw(
 			array(
-				'name'     => 'synthetic/decorative-color',
+				'name'     => 'synthetic/preset-color',
 				'title'    => 'Coloured paragraph',
 				'content'  => '<!-- wp:paragraph {"backgroundColor":"accent-1"} --><p class="has-accent-1-background-color has-background">Some real sample copy here.</p><!-- /wp:paragraph -->',
 				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
 			)
 		);
 
+		$eligible = ThemePatterns::eligible();
+
+		$this->assertCount( 1, $eligible );
+		$this->assertSame( 'synthetic/preset-color', $eligible[0]['name'] );
+		$this->assertSame( 0, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * D3a admits a preset colour, never a raw one. This is the fixture the
+	 * old, unconditional `test_decorative_color_is_cut` used to cover in
+	 * spirit; it is renamed and now genuinely raw (`style.color`, a literal
+	 * hex value) so it keeps failing on colour specifically, not merely on
+	 * "carries a colour attribute at all".
+	 */
+	public function test_raw_color_is_cut(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/raw-color',
+				'title'    => 'Coloured paragraph',
+				'content'  => '<!-- wp:paragraph {"style":{"color":{"background":"#5140a5"}}} --><p class="has-background" style="background-color:#5140a5">Some real sample copy here.</p><!-- /wp:paragraph -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
 		$this->assertSame( array(), ThemePatterns::eligible() );
 		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * A colour slug the active theme does not define is still ineligible —
+	 * D3a admits preset slugs IN THE PALETTE, not every preset slug that
+	 * merely looks like one.
+	 */
+	public function test_color_slug_not_in_palette_is_cut(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/unknown-slug-color',
+				'title'    => 'Coloured paragraph',
+				'content'  => '<!-- wp:paragraph {"backgroundColor":"not-a-real-slug"} --><p class="has-not-a-real-slug-background-color has-background">Some real sample copy here.</p><!-- /wp:paragraph -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * Same rule for `gradient`, against the gradients list rather than the
+	 * palette; the default test settings ship no gradients at all.
+	 */
+	public function test_gradient_not_in_palette_is_cut(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/unknown-gradient',
+				'title'    => 'Gradient group',
+				'content'  => '<!-- wp:group {"gradient":"not-a-real-gradient"} --><div class="wp-block-group has-not-a-real-gradient-gradient-background has-background"><!-- wp:paragraph --><p>Some real sample copy here.</p><!-- /wp:paragraph --></div><!-- /wp:group -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * D3a's eligibility check reads the shipped HTML classes too, not only
+	 * the comment attributes — a hand-authored `has-*-background-color`
+	 * class naming a slug outside the palette cuts the pattern even with no
+	 * matching `backgroundColor` attribute at all.
+	 */
+	public function test_ineligible_color_class_with_no_attribute_is_cut(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/class-only-color',
+				'title'    => 'Coloured paragraph',
+				'content'  => '<!-- wp:paragraph --><p class="has-not-a-real-slug-background-color has-background">Some real sample copy here.</p><!-- /wp:paragraph -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * A real Ollie pattern (`card-lead-magnet`, scan-confirmed) hard-codes
+	 * its cover's overlay via `customOverlayColor` rather than a preset
+	 * `overlayColor` slug — core only ever writes that attribute with a
+	 * literal hex value, so it is raw colour and must stay ineligible even
+	 * though it names no palette slug at all to check.
+	 */
+	public function test_custom_color_attribute_is_always_raw_and_cut(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/custom-overlay-color',
+				'title'    => 'Cover with a hard-coded overlay',
+				'content'  => '<!-- wp:cover {"dimRatio":0,"customOverlayColor":"#b8b4b6","isUserOverlayColor":true} --><div class="wp-block-cover"><span aria-hidden="true" class="wp-block-cover__background has-background-dim-0"></span><div class="wp-block-cover__inner-container"><!-- wp:paragraph --><p>Some real sample copy here.</p><!-- /wp:paragraph --></div></div><!-- /wp:cover -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
+		$this->assertSame( array(), ThemePatterns::eligible() );
+		$this->assertSame( 1, ThemePatterns::skippedCount() );
+	}
+
+	/**
+	 * Core's own generic colour classes (no slug at all) never gate — they
+	 * are not `has-<slug>-color`, they ARE `has-text-color` etc. literally.
+	 */
+	public function test_generic_core_color_class_does_not_gate(): void {
+		$this->registerRaw(
+			array(
+				'name'     => 'synthetic/generic-color-class',
+				'title'    => 'Linked paragraph',
+				'content'  => '<!-- wp:paragraph --><p class="has-text-color has-link-color">Some real sample copy here.</p><!-- /wp:paragraph -->',
+				'filePath' => $GLOBALS['senroflux_test_stylesheet_dir'] . '/synthetic.php',
+			)
+		);
+
+		$eligible = ThemePatterns::eligible();
+
+		$this->assertCount( 1, $eligible );
+		$this->assertSame( 0, ThemePatterns::skippedCount() );
 	}
 
 	public function test_remote_and_wp_block_patterns_are_excluded_before_the_filter_even_runs(): void {
@@ -449,5 +610,81 @@ final class ThemePatternsTest extends TestCase {
 		$shipped_blocks = parse_blocks( $fixture['content'] );
 		$filled_blocks  = parse_blocks( $result['content'] );
 		$this->assertSame( count( $shipped_blocks ), count( $filled_blocks ) );
+	}
+
+	// --- fill() image slots (0.3 quality feature 4) -----------------------
+
+	/**
+	 * @return array{0: array<string,mixed>, 1: list<string>}
+	 */
+	private function bookValues( string $image_value ): array {
+		$fixture = $this->loadFixture( 'banner-about-book' );
+		$slots   = ThemePatterns::textSlots( $fixture['content'] );
+
+		$values = array();
+		foreach ( $slots as $slot ) {
+			$values[ $slot['index'] ] = 'image' === $slot['kind'] ? $image_value : 'New short heading';
+		}
+		// The paragraph slot's own word cap is generous (150); a short
+		// replacement never trips it.
+
+		return array( $fixture, $values );
+	}
+
+	public function test_fill_refuses_an_image_slot_with_no_alt(): void {
+		[ $fixture, $values ] = $this->bookValues( 'https://example.test/new.jpg||' );
+
+		$result = ThemePatterns::fill( $fixture['content'], $values );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'slot_missing', $result['wp_error']->get_error_code() );
+	}
+
+	public function test_fill_refuses_an_image_slot_with_an_unsafe_url(): void {
+		[ $fixture, $values ] = $this->bookValues( 'javascript:alert(1)||A new cover' );
+
+		$result = ThemePatterns::fill( $fixture['content'], $values );
+
+		$this->assertFalse( $result['ok'] );
+		$this->assertSame( 'unsafe_url', $result['wp_error']->get_error_code() );
+	}
+
+	public function test_fill_succeeds_for_an_image_slot_and_replaces_src_and_alt(): void {
+		[ $fixture, $values ] = $this->bookValues( 'https://example.test/wp-content/uploads/new.jpg||A new book cover' );
+
+		$result = ThemePatterns::fill( $fixture['content'], $values );
+
+		$this->assertTrue( $result['ok'] );
+		$this->assertStringContainsString( 'src="https://example.test/wp-content/uploads/new.jpg"', $result['content'] );
+		$this->assertStringContainsString( 'alt="A new book cover"', $result['content'] );
+		$this->assertStringNotContainsString( 'book-image-landing.webp', $result['content'] );
+
+		// The filled markup keeps the same parsed shape as the shipped one —
+		// this is what lets the pack's own Validator (with BlockShells'
+		// core/image `id`-attribute exception) match it structurally.
+		$shipped_blocks = parse_blocks( $fixture['content'] );
+		$filled_blocks  = parse_blocks( $result['content'] );
+		$this->assertSame( count( $shipped_blocks ), count( $filled_blocks ) );
+	}
+
+	/**
+	 * 0.3 quality fix (theme patterns first). `pricing-3-col` is a REAL TT25
+	 * pattern tagged `call-to-action, banner, services` all at once — a
+	 * multi-purpose content pattern, not a page's hero or its one dedicated
+	 * call-to-action section. Before this fix, `is_hero`/`is_cta` were true
+	 * whenever the category list merely CONTAINED `banner`/`call-to-action`,
+	 * so a page using `pricing-3-col` alongside a real, single-purpose CTA
+	 * pattern (for example `cta-centered-heading`) was refused `max_cta`
+	 * even though it has only one actual call-to-action section. Requiring
+	 * an exact one-category match fixes that false refusal.
+	 */
+	public function test_a_pattern_with_multiple_categories_is_neither_hero_nor_cta(): void {
+		$this->registerFixtures( 'pricing-3-col' );
+
+		$eligible = ThemePatterns::eligible();
+
+		$this->assertCount( 1, $eligible );
+		$this->assertFalse( $eligible[0]['is_hero'], 'a multi-category pattern must not count as a dedicated hero' );
+		$this->assertFalse( $eligible[0]['is_cta'], 'a multi-category pattern must not count toward the one-cta cap' );
 	}
 }

@@ -195,6 +195,7 @@ final class GrantsTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'c1', 'wpab__agsafe-smoke__read' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -246,6 +247,7 @@ final class GrantsTest extends TestCase {
 
 	public function test_a_conflict_never_rewrites_the_outcome_of_a_finished_run(): void {
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $this->store->getRun( $run_id )->status->value );
@@ -305,8 +307,61 @@ final class GrantsTest extends TestCase {
 				'granted_by'     => 1,
 				'plan_step_id'   => (string) $plan_seq,
 			),
-			array_diff_key( $this->grants->issued[0], array( 'grant_id' => null ) )
+			array_diff_key(
+				$this->grants->issued[0],
+				array(
+					'grant_id'   => null,
+					'expires_ts' => null,
+				)
+			)
 		);
+	}
+
+	/** Stage 22b (S12): the report lists the run's grants with their expiry. */
+	public function test_the_report_lists_the_runs_grants_with_their_expiry(): void {
+		list( $run_id ) = $this->parkPlan( array( array( 'agsafe-smoke/publish' ) ) );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		$report = $this->store->getRun( $run_id )->result;
+		$this->assertIsArray( $report );
+		$this->assertCount( 1, $report['grants'] );
+		$this->assertSame( 'agsafe-smoke/publish', $report['grants'][0]['verb'] );
+		$this->assertMatchesRegularExpression( '/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/', $report['grants'][0]['expires_at'] );
+	}
+
+	/** Stage 22b (S7/S12): the report reads adopted / left-for-you off the accepted plan. */
+	public function test_the_report_carries_the_accepted_plans_adopted_and_left_for_you_lists(): void {
+		$run_id = $this->createRun();
+		$args   = self::planArgs( array( array( 'agsafe-smoke/read' ) ) );
+
+		$args['adopted']         = array(
+			array(
+				'id'    => '12',
+				'title' => 'About',
+			),
+		);
+		$args['left_for_you']    = array(
+			array(
+				'id'    => '2',
+				'title' => 'Sample Page',
+			),
+		);
+		$this->gateway->script[] = self::callTurn( 'call_p', PlanTools::FUNCTION_NAME, $args );
+		$this->runner->tick( $run_id, 0, null );
+
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->runner->tick( $run_id, $this->store->getRun( $run_id )->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$report = $this->store->getRun( $run_id )->result;
+		$this->assertIsArray( $report );
+		$this->assertSame( array( '12' ), array_column( $report['adopted'], 'object_id' ) );
+		$this->assertSame( 'About', $report['adopted'][0]['title'] );
+		$this->assertSame( 'Sample Page', $report['left_for_you'][0]['title'] );
+		$this->assertArrayNotHasKey( 'grants', $report, 'a plain accept issues no grant' );
 	}
 
 	public function test_the_grant_count_is_the_number_of_plan_steps_reaching_the_verb(): void {
@@ -621,6 +676,292 @@ final class GrantsTest extends TestCase {
 		$this->assertFalse( $answers['not_a_grant'] ?? null, 'a filter may narrow, never widen' );
 	}
 
+	// ------------------------------------------------------------------
+	// Plan-named objects (live J10): a grant also covers the existing
+	// objects the accepted plan names under the verb's own steps.
+	// ------------------------------------------------------------------
+
+	/** A pack-shaped runner: three Tier-2 pack verbs, ids 11-15, 20, 30 and term:7 exist. */
+	private function packRunner(): Runner {
+		return new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new RecordingBridge(),
+			static fn ( string|int $id ): array => in_array( (string) $id, array( '11', '12', '13', '14', '15', '20', '30', 'term:7' ), true )
+				? array(
+					'object_type' => 'product',
+					'title'       => 'Thing ' . $id,
+				)
+				: array(
+					'object_type' => 'unknown',
+					'title'       => '',
+				),
+			static fn (): array => array(
+				'agsafe-smoke/read'     => VerbTier::TIER_0,
+				'commerce/price-change' => VerbTier::TIER_2,
+				'commerce/stock-change' => VerbTier::TIER_2,
+				'commerce/term-change'  => VerbTier::TIER_2,
+				'pages/create-draft'    => VerbTier::TIER_1,
+			),
+			static fn ( $run, string $ability ): string => 'senroflux/term-update' === $ability ? 'commerce/term-change' : $ability,
+			null,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			static fn ( $run, string $pack_verb ): ?string => array(
+				'commerce/price-change' => 'woocommerce/product-update',
+				'commerce/stock-change' => 'woocommerce/stock-update',
+				'commerce/term-change'  => 'senroflux/term-update',
+			)[ $pack_verb ] ?? null,
+			null,
+			null,
+			null,
+			static fn ( $run, string $verb ): string => 'commerce/term-change' === $verb ? 'term:' : ''
+		);
+	}
+
+	/**
+	 * Park a plan whose steps are [verbs, objects] pairs plus a trailing read
+	 * step, accept it with pre-approval, and ask the eligibility filter the
+	 * given questions from inside the same tick.
+	 *
+	 * @param list<array{0:list<string>,1:list<string>}>                     $steps     Per-step verbs and named objects.
+	 * @param callable(callable(string,string,array<string,mixed>):mixed):void $questions Gets an "ask(verb, grant verb, args)" probe.
+	 * @return int The run id.
+	 */
+	private function acceptAndAsk( array $steps, callable $questions, ?int $run_id = null, ?Runner $runner = null ): int {
+		$runner = $runner ?? $this->packRunner();
+		$plan   = array();
+		foreach ( $steps as $i => list( $verbs, $objects ) ) {
+			$step = array(
+				'text'  => 'Step ' . ( $i + 1 ),
+				'verbs' => $verbs,
+			);
+			if ( array() !== $objects ) {
+				$step['objects'] = $objects;
+			}
+			$plan[] = $step;
+		}
+		$plan[] = array(
+			'text'  => 'Read',
+			'verbs' => array( 'agsafe-smoke/read' ),
+		);
+
+		if ( null === $run_id ) {
+			$run_id                  = $this->createRun();
+			$this->gateway->script[] = self::callTurn(
+				'call_p',
+				PlanTools::FUNCTION_NAME,
+				array(
+					'goal'        => 'Reprice',
+					'steps'       => $plan,
+					'assumptions' => array( 'Prices are in store currency.' ),
+				)
+			);
+			$parked                  = $runner->tick( $run_id, 0, null );
+			$this->assertIsArray( $parked );
+			$this->assertSame( 'awaiting_plan', $parked['run']['status'] );
+		}
+
+		$ask = static fn ( string $verb, string $grant_verb, array $args ): mixed => self::grantEligible(
+			self::grant( self::correlationFor( $run_id ), $grant_verb ),
+			$verb,
+			$args
+		);
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/read']->on_execute = static function () use ( $questions, $ask ): void {
+			$questions( $ask );
+		};
+
+		$this->gateway->script[] = self::callTurn( 'c1', 'wpab__agsafe-smoke__read' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		return $run_id;
+	}
+
+	public function test_j10_each_named_product_is_eligible_and_an_unnamed_one_is_not(): void {
+		GrantEligibility::boot();
+		$product = 'woocommerce/product-update';
+		$steps   = array();
+		foreach ( array( '11', '12', '13', '14', '15' ) as $id ) {
+			$steps[] = array( array( 'commerce/price-change' ), array( $id ) );
+		}
+
+		$answers = array();
+		$run_id  = $this->acceptAndAsk(
+			$steps,
+			static function ( callable $ask ) use ( &$answers, $product ): void {
+				foreach ( array( 11, 12, 13, 14, 15, 20 ) as $id ) {
+					$answers[ $id ] = $ask( $product, $product, array( 'id' => $id ) );
+				}
+				// An id carried as a numeric string compares the same.
+				$answers['string'] = $ask( $product, $product, array( 'id' => '13' ) );
+			}
+		);
+
+		foreach ( array( 11, 12, 13, 14, 15, 'string' ) as $named ) {
+			$this->assertTrue( $answers[ $named ] ?? null, "product {$named} is named by the accepted plan" );
+		}
+		$this->assertFalse( $answers[20] ?? null, 'a product the plan never named is not covered' );
+		$this->assertCount( 1, $this->grants->issued );
+		$this->assertSame( 5, $this->grants->issued[0]['count'], 'one call per named product: five steps, five calls' );
+		$this->assertSame( $product, $this->grants->issued[0]['verb'] );
+		$this->assertSame( self::correlationFor( $run_id ), $this->grants->issued[0]['correlation_id'] );
+	}
+
+	public function test_an_object_named_under_another_verbs_step_does_not_authorise_this_verb(): void {
+		GrantEligibility::boot();
+		$answers = array();
+
+		$this->acceptAndAsk(
+			array(
+				array( array( 'commerce/price-change' ), array( '11' ) ),
+				array( array( 'commerce/stock-change' ), array( '30' ) ),
+			),
+			static function ( callable $ask ) use ( &$answers ): void {
+				$answers['price_on_own_verb'] = $ask( 'woocommerce/product-update', 'woocommerce/product-update', array( 'id' => 11 ) );
+				$answers['stock_on_price']    = $ask( 'woocommerce/product-update', 'woocommerce/product-update', array( 'id' => 30 ) );
+				$answers['price_on_stock']    = $ask( 'woocommerce/stock-update', 'woocommerce/stock-update', array( 'id' => 11 ) );
+				$answers['stock_on_own_verb'] = $ask( 'woocommerce/stock-update', 'woocommerce/stock-update', array( 'id' => 30 ) );
+			}
+		);
+
+		$this->assertTrue( $answers['price_on_own_verb'] );
+		$this->assertTrue( $answers['stock_on_own_verb'] );
+		$this->assertFalse( $answers['stock_on_price'], 'a stock-change object is not a price-change object' );
+		$this->assertFalse( $answers['price_on_stock'] );
+	}
+
+	public function test_a_pack_prefixed_object_compares_as_the_plan_names_it(): void {
+		GrantEligibility::boot();
+		$answers = array();
+
+		$this->acceptAndAsk(
+			array( array( array( 'commerce/term-change' ), array( 'term:7' ) ) ),
+			static function ( callable $ask ) use ( &$answers ): void {
+				$answers['term']  = $ask( 'senroflux/term-update', 'senroflux/term-update', array( 'id' => 7 ) );
+				$answers['other'] = $ask( 'senroflux/term-update', 'senroflux/term-update', array( 'id' => 8 ) );
+			}
+		);
+
+		$this->assertTrue( $answers['term'], 'args id 7 + the verb\'s prefix is the plan\'s "term:7"' );
+		$this->assertFalse( $answers['other'] );
+	}
+
+	public function test_a_replacement_plan_uses_only_the_newly_accepted_plans_objects(): void {
+		GrantEligibility::boot();
+		$runner = $this->packRunner();
+		$verb   = 'woocommerce/product-update';
+
+		$run_id                        = $this->createRun();
+		$first                         = array(
+			'goal'        => 'Reprice',
+			'steps'       => array(
+				array(
+					'text'    => 'One',
+					'verbs'   => array( 'commerce/price-change' ),
+					'objects' => array( '11' ),
+				),
+			),
+			'assumptions' => array( 'None.' ),
+		);
+		$second                        = $first;
+		$second['steps'][0]['objects'] = array( '12' );
+		$second['steps'][]             = array(
+			'text'  => 'Read',
+			'verbs' => array( 'agsafe-smoke/read' ),
+		);
+		$this->gateway->script[]       = self::callTurn( 'call_p', PlanTools::FUNCTION_NAME, $first );
+		$runner->tick( $run_id, 0, null );
+
+		// Accept #1, whereupon the model re-plans naming a different product.
+		$this->gateway->script[] = self::callTurn( 'call_p2', PlanTools::FUNCTION_NAME, $second );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$replan                  = $runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+		$this->assertSame( 'awaiting_plan', $replan['run']['status'] );
+
+		$answers = array();
+		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/read']->on_execute = static function () use ( &$answers, $run_id, $verb ): void {
+			foreach ( array( 11, 12 ) as $id ) {
+				$answers[ $id ] = self::grantEligible( self::grant( self::correlationFor( $run_id ), $verb ), $verb, array( 'id' => $id ) );
+			}
+		};
+		$this->gateway->script[] = self::callTurn( 'c1', 'wpab__agsafe-smoke__read' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$before                  = $this->store->getRun( $run_id )->stepCount;
+		$runner->tick( $run_id, $before, array( 'plan' => array( 'action' => 'accept_preapprove' ) ) );
+
+		$this->assertFalse( $answers[11] ?? null, 'the replaced plan\'s product is no longer named' );
+		$this->assertTrue( $answers[12] ?? null );
+	}
+
+	public function test_create_then_publish_still_works_with_no_objects_listed(): void {
+		GrantEligibility::boot();
+		$answers = array();
+		$run_id  = $this->createRun();
+		$this->store->updateRun( $run_id, array( 'objects_json' => array( '42' => array( 'written_at' => 1 ) ) ) );
+		$runner                  = $this->packRunner();
+		$this->gateway->script[] = self::callTurn(
+			'call_p',
+			PlanTools::FUNCTION_NAME,
+			array(
+				'goal'        => 'Publish',
+				'steps'       => array(
+					array(
+						'text'  => 'Publish',
+						'verbs' => array( 'commerce/price-change' ),
+					),
+					array(
+						'text'  => 'Read',
+						'verbs' => array( 'agsafe-smoke/read' ),
+					),
+				),
+				'assumptions' => array( 'None.' ),
+			)
+		);
+		$runner->tick( $run_id, 0, null );
+
+		$verb = 'woocommerce/product-update';
+		$this->acceptAndAsk(
+			array(),
+			static function ( callable $ask ) use ( &$answers, $verb ): void {
+				$answers['written']   = $ask( $verb, $verb, array( 'id' => 42 ) );
+				$answers['untouched'] = $ask( $verb, $verb, array( 'id' => 43 ) );
+				$answers['create']    = $ask( $verb, $verb, array( 'title' => 'New' ) );
+			},
+			$run_id,
+			$runner
+		);
+
+		$this->assertTrue( $answers['written'] ?? null );
+		$this->assertFalse( $answers['untouched'] ?? null );
+		$this->assertTrue( $answers['create'] ?? null );
+	}
+
+	public function test_a_step_naming_n_objects_counts_n_per_verb_and_one_when_it_names_none(): void {
+		$this->acceptAndAsk(
+			array(
+				array( array( 'commerce/price-change' ), array( '11', '12', '13' ) ),
+				array( array( 'commerce/price-change' ), array() ),
+				array( array( 'commerce/stock-change' ), array( '30' ) ),
+			),
+			static function (): void {}
+		);
+
+		$counts = array();
+		foreach ( $this->grants->issued as $grant ) {
+			$counts[ $grant['verb'] ] = $grant['count'];
+		}
+		$this->assertSame(
+			array(
+				'woocommerce/product-update' => 4,
+				'woocommerce/stock-update'   => 1,
+			),
+			$counts
+		);
+	}
+
 	public function test_eligibility_sees_objects_written_earlier_in_the_same_tick(): void {
 		GrantEligibility::boot();
 
@@ -680,6 +1021,7 @@ final class GrantsTest extends TestCase {
 
 	public function test_completing_revokes_the_runs_grants(): void {
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$this->runner->tick( $run_id, 0, null );
@@ -774,6 +1116,7 @@ final class GrantsTest extends TestCase {
 		$this->grants->enabled   = false;
 		$run_id                  = $this->createRun();
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$this->runner->tick( $run_id, 0, null );
 
@@ -784,6 +1127,7 @@ final class GrantsTest extends TestCase {
 		senroflux_test_no_agent_safety();
 
 		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );

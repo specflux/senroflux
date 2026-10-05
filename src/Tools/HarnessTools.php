@@ -135,7 +135,7 @@ final class HarnessTools {
 		);
 
 		$description = __(
-			'Ask the user a clarifying question and stop to wait for their answer before continuing. Ask one question per call.',
+			'Ask the user a clarifying question and stop to wait for their answer before continuing. One call may ask for several missing facts at once; list them plainly.',
 			'senroflux'
 		);
 
@@ -178,11 +178,12 @@ final class HarnessTools {
 		if ( ! is_string( $text ) || '' === trim( $text ) ) {
 			return $invalid( __( 'a non-empty "text" is required.', 'senroflux' ) );
 		}
-		if ( mb_strlen( $text ) > self::MAX_TEXT_CHARS ) {
+		if ( PlanTools::overCap( $text, self::MAX_TEXT_CHARS ) ) {
 			return $invalid(
 				sprintf(
-				/* translators: %d is the character cap. */
-					__( '"text" may be at most %d characters.', 'senroflux' ),
+				/* translators: %1$d is the actual character count, %2$d is the character cap. */
+					__( '"text" is %1$d characters; the limit is %2$d. Shorten it and ask again.', 'senroflux' ),
+					mb_strlen( $text ),
 					self::MAX_TEXT_CHARS
 				)
 			);

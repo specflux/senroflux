@@ -26,6 +26,7 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Commerce;
 
+use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Run\GateMode;
@@ -46,9 +47,11 @@ final class CommercePack extends Pack {
 		parent::__construct(
 			array(
 				'read'           => 'products-query',
+				'catalogue'      => 'products-catalogue',
 				'create'         => 'product-create',
 				'update'         => 'product-update',
 				'image'          => 'set-product-image',
+				'search'         => 'media-search',
 				'image-generate' => 'generate-image',
 				'coupon-create'  => 'coupon-create',
 				'coupon-enable'  => 'coupon-enable',
@@ -104,6 +107,7 @@ final class CommercePack extends Pack {
 			'products-query'  => array( 'id' ),
 			'product-create'  => array( 'name', 'sku', 'description', 'short_description', 'status', 'regular_price', 'sale_price' ),
 			'product-update'  => array( 'id', 'name', 'sku', 'description', 'short_description', 'status', 'regular_price', 'sale_price' ),
+			'media-search'    => array( 'query' ),
 			'orders-query'    => array( 'id' ),
 			'order-add-note'  => array( 'id', 'note', 'customer_note' ),
 			default           => array(),
@@ -121,9 +125,11 @@ final class CommercePack extends Pack {
 	public function verbFor( string $ability, array $input ): string {
 		return match ( $this->baseName( $ability ) ) {
 			'products-query'     => 'commerce/product-read',
+			'products-catalogue' => 'commerce/catalogue-read',
 			'product-create'     => $this->createVerb( $input ),
 			'product-update'     => $this->updateVerb( $input ),
 			'set-product-image'  => 'commerce/product-image',
+			'media-search'       => 'commerce/media-search',
 			'generate-image'     => 'commerce/image-generate',
 			'coupon-create'      => 'commerce/coupon-draft',
 			'coupon-enable'      => 'commerce/coupon-enable',
@@ -237,11 +243,13 @@ final class CommercePack extends Pack {
 	public function verbMap(): array {
 		return array(
 			'commerce/product-read'         => 0,
+			'commerce/catalogue-read'       => 0,
 			'commerce/product-create-draft' => 1,
 			'commerce/product-update'       => 1,
 			'commerce/price-change'         => 2,
 			'commerce/product-publish'      => 2,
 			'commerce/product-image'        => 1,
+			'commerce/media-search'         => 0,
 			'commerce/image-generate'       => 1,
 			'commerce/coupon-draft'         => 1,
 			'commerce/coupon-enable'        => 2,
@@ -264,9 +272,11 @@ final class CommercePack extends Pack {
 	public function roleVerbs(): array {
 		return array(
 			'read'           => array( 'commerce/product-read' ),
+			'catalogue'      => array( 'commerce/catalogue-read' ),
 			'create'         => array( 'commerce/product-create-draft', 'commerce/product-publish' ),
 			'update'         => array( 'commerce/product-update', 'commerce/price-change', 'commerce/product-publish' ),
 			'image'          => array( 'commerce/product-image' ),
+			'search'         => array( 'commerce/media-search' ),
 			'image-generate' => array( 'commerce/image-generate' ),
 			'coupon-create'  => array( 'commerce/coupon-draft' ),
 			'coupon-enable'  => array( 'commerce/coupon-enable' ),
@@ -278,6 +288,68 @@ final class CommercePack extends Pack {
 			'store-report'   => array( 'commerce/store-report' ),
 			'report-save'    => array( 'commerce/report-save' ),
 		);
+	}
+
+	/**
+	 * The id an object a Tier >= 1 verb wrote carries in its ability output.
+	 * Proof-run defect fix: none of these used the base's `id`, so no
+	 * commerce write ever reached the run's report. Woo's own
+	 * `product-create`/`product-update` nest the product under `product`;
+	 * `order-add-note` answers the note, so the order is the call's own
+	 * `id`; every polyfill names its own key.
+	 *
+	 * @param string              $verb   The pack verb.
+	 * @param array<string,mixed> $args   The call's args.
+	 * @param array<string,mixed> $output The call's output.
+	 */
+	public function objectIdForWrite( string $verb, array $args, array $output ): ?string {
+		$product = is_array( $output['product'] ?? null ) ? $output['product'] : array();
+
+		$id = match ( $verb ) {
+			'commerce/product-create-draft',
+			'commerce/product-update',
+			'commerce/price-change',
+			'commerce/product-publish' => $product['id'] ?? $output['id'] ?? $args['id'] ?? null,
+			'commerce/product-image' => $output['product_id'] ?? null,
+			'commerce/image-generate' => $output['attachment_id'] ?? null,
+			'commerce/coupon-draft',
+			'commerce/coupon-enable' => $output['coupon_id'] ?? null,
+			'commerce/order-note-private',
+			'commerce/order-note-customer' => $args['id'] ?? null,
+			'commerce/refund' => $output['order_id'] ?? null,
+			'commerce/shipping-write' => $output['zone_id'] ?? null,
+			'commerce/tax-write' => $output['tax_rate_id'] ?? null,
+			'commerce/report-save' => $output['page_id'] ?? null,
+			default => null,
+		};
+
+		return ( is_numeric( $id ) && (int) $id > 0 ) ? (string) (int) $id : null;
+	}
+
+	/**
+	 * Products keep their bare post id; every other kind a commerce run
+	 * writes is qualified so it cannot collide with a product, and so the
+	 * report can resolve it ({@see \Specflux\SenroFlux\Packs\ObjectLookup}).
+	 * `order-read` carries the order prefix too, which is what makes an
+	 * order a verifiable write — nothing reads a coupon, zone, tax rate,
+	 * saved report page or generated image back.
+	 *
+	 * @param string $verb The pack verb.
+	 */
+	public function objectIdPrefix( string $verb ): string {
+		return match ( $verb ) {
+			'commerce/image-generate' => Media::OBJECT_ID_PREFIX,
+			'commerce/coupon-draft',
+			'commerce/coupon-enable' => ReportLookup::COUPON_PREFIX,
+			'commerce/order-read',
+			'commerce/order-note-private',
+			'commerce/order-note-customer',
+			'commerce/refund' => ReportLookup::ORDER_PREFIX,
+			'commerce/shipping-write' => ReportLookup::ZONE_PREFIX,
+			'commerce/tax-write' => ReportLookup::TAX_RATE_PREFIX,
+			'commerce/report-save' => ReportLookup::PAGE_PREFIX,
+			default => parent::objectIdPrefix( $verb ),
+		};
 	}
 
 	/**
@@ -340,7 +412,8 @@ final class CommercePack extends Pack {
 	 *
 	 * @return list<Skill>
 	 */
-	public function skills(): array {
+	public function skills( bool $images_available = true ): array {
+		unset( $images_available );
 		return array(
 			new Skill(
 				'commerce/catalogue-rules',
@@ -366,9 +439,10 @@ final class CommercePack extends Pack {
 			"\n",
 			array(
 				'Products, prices and descriptions: a new product is created as a draft unless you are explicitly asked to publish it. Publishing a product, or changing its regular or sale price, always asks a human first.',
+				'To work from a product category or find products with no description, call products-catalogue — it shows each product\'s categories and whether it has a description; the other product read cannot.',
 				'State every price in the store\'s own currency, with its own number of decimal places — never invent a currency or round differently from what the store already shows.',
 				'Product descriptions and short descriptions may use ONLY these HTML tags: p, ul, ol, li, strong, em, a, h3. A description is at most 1,500 words. Anything outside that tag list, or an unsafe link scheme, is refused whole — it is never trimmed or rewritten for you, so write within the rule the first time.',
-				'To add or replace a product\'s image, use an existing media library attachment that already has alt text — an attachment with no alt text, or one that is not an image, is refused.',
+				'To add or replace a product\'s image, use an existing media library attachment that already has alt text — an attachment with no alt text, or one that is not an image, is refused. A library image\'s attachment id comes from commerce/media-search.',
 				'Coupons are created as drafts and enabled as a separate step. A coupon code that already exists is refused — check first if you are not sure it is free. Enabling a coupon you created earlier in this same run can fail if the coupon changed since you created it; re-read it before enabling in that case.',
 			)
 		);
@@ -405,7 +479,7 @@ final class CommercePack extends Pack {
 
 	/** The `commerce/agent-safety` setup check (S19). */
 	private function agentSafetyCheck(): SetupCheck {
-		$message = __( 'The commerce pack needs the Agent Safety plugin active — without it, WooCommerce writes have no governance to run under.', 'senroflux' );
+		$message = __( 'The commerce pack needs the Agent Tollgate plugin active — without it, WooCommerce writes have no governance to run under.', 'senroflux' );
 
 		return new SetupCheck(
 			'commerce/agent-safety',

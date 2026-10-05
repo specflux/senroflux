@@ -22,7 +22,8 @@ defined( 'ABSPATH' ) || exit;
  *
  * `set-product-image`, `coupon-create`, `coupon-enable`) and operations (S19
  * stage 13 — `orders-refund`, `shipping-zone-save`, `tax-rate-save`,
- * `store-report`, `save-store-report`).
+ * `store-report`, `save-store-report`) — plus the Tier-0 read
+ * `products-catalogue`.
  *
  * TARGET REPO PATH: src/Packs/Commerce/Abilities.php
  *
@@ -82,6 +83,26 @@ final class Abilities {
 
 	/** The ability category for the commerce polyfills. */
 	public const CATEGORY = 'senroflux-commerce';
+
+	/** `products-catalogue` page size when the caller names none. */
+	private const CATALOGUE_DEFAULT_PER_PAGE = 20;
+
+	/**
+	 * Shipping methods `shipping-zone-save` can add, with the settings each
+	 * holds beyond title/enabled — per their `instance_form_fields`
+	 * (free_shipping has no cost or tax status).
+	 */
+	private const ZONE_METHOD_FIELDS = array(
+		'flat_rate'     => array( 'cost', 'tax_status' ),
+		'free_shipping' => array(),
+		'local_pickup'  => array( 'cost', 'tax_status' ),
+	);
+
+	/** `products-catalogue` page-size cap (WooCommerce's own `products-query` caps at 100 too). */
+	private const CATALOGUE_MAX_PER_PAGE = 100;
+
+	/** Most products `missing_description` scans: description text cannot be filtered in the query. */
+	private const CATALOGUE_MAX_SCAN = 2000;
 
 	/** Whether {@see register()} has run for this request. */
 	private static bool $registered = false;
@@ -162,6 +183,7 @@ final class Abilities {
 		self::registerOrdersRefund();
 		self::registerShippingZoneSave();
 		self::registerTaxRateSave();
+		self::registerProductsCatalogue();
 		self::registerStoreReport();
 		self::registerSaveStoreReport();
 	}
@@ -393,7 +415,7 @@ final class Abilities {
 			'senroflux/shipping-zone-save',
 			array(
 				'label'               => __( 'Save shipping zone', 'senroflux' ),
-				'description'         => __( 'Create or update a shipping zone. Never deletes one.', 'senroflux' ),
+				'description'         => __( 'Create or update a shipping zone. Never deletes one. On an existing zone the locations given REPLACE its current ones, and the methods given are ADDED to its existing methods (none are removed or edited).', 'senroflux' ),
 				'category'            => self::CATEGORY,
 				'input_schema'        => array(
 					'type'                 => 'object',
@@ -402,8 +424,50 @@ final class Abilities {
 					'properties'           => array(
 						'zone_id'   => array( 'type' => 'integer' ),
 						'name'      => array( 'type' => 'string' ),
-						'locations' => array( 'type' => 'array' ),
-						'methods'   => array( 'type' => 'array' ),
+						'locations' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'code' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'code' => array(
+										'type'        => 'string',
+										'description' => __( 'Region code: "CA" (country), "CA:ON" (state), "NA" (continent) or a postcode such as "90210".', 'senroflux' ),
+									),
+									'type' => array(
+										'type'        => 'string',
+										'enum'        => ShippingZoneInput::LOCATION_TYPES,
+										'description' => __( 'Defaults to country.', 'senroflux' ),
+									),
+								),
+							),
+						),
+						'methods'   => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'method_id' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'method_id'  => array(
+										'type' => 'string',
+										'enum' => array_keys( self::ZONE_METHOD_FIELDS ),
+									),
+									'title'      => array( 'type' => 'string' ),
+									'cost'       => array(
+										'type'        => 'string',
+										'description' => __( 'Decimal such as "12" or "4.50". Not for free_shipping.', 'senroflux' ),
+									),
+									'tax_status' => array(
+										'type'        => 'string',
+										'enum'        => array( 'taxable', 'none' ),
+										'description' => __( 'Not for free_shipping.', 'senroflux' ),
+									),
+									'enabled'    => array( 'type' => 'boolean' ),
+								),
+							),
+						),
 					),
 				),
 				'output_schema'       => array(
@@ -411,8 +475,34 @@ final class Abilities {
 					'required'             => array( 'zone_id' ),
 					'additionalProperties' => false,
 					'properties'           => array(
-						'zone_id'  => array( 'type' => 'integer' ),
-						'previous' => array( 'type' => array( 'object', 'null' ) ),
+						'zone_id'   => array( 'type' => 'integer' ),
+						'previous'  => array( 'type' => array( 'object', 'null' ) ),
+						'locations' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'additionalProperties' => false,
+								'properties'           => array(
+									'code' => array( 'type' => 'string' ),
+									'type' => array( 'type' => 'string' ),
+								),
+							),
+						),
+						'methods'   => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'additionalProperties' => false,
+								'properties'           => array(
+									'method_id'   => array( 'type' => 'string' ),
+									'instance_id' => array( 'type' => 'integer' ),
+									'title'       => array( 'type' => 'string' ),
+									'cost'        => array( 'type' => 'string' ),
+									'tax_status'  => array( 'type' => 'string' ),
+									'enabled'     => array( 'type' => 'boolean' ),
+								),
+							),
+						),
 					),
 				),
 				'execute_callback'    => static function ( $input = array() ) {
@@ -487,6 +577,128 @@ final class Abilities {
 				'meta'                => self::meta(
 					array(
 						'readonly'    => false,
+						'destructive' => false,
+						'idempotent'  => true,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * `senroflux/products-catalogue` — upstream ask: a category filter and
+	 * category/description fields on WooCommerce's `products-query` (live
+	 * journeys J10/J11: the model could not read category assignments or tell
+	 * which products lack a description, asked the human, and guessed).
+	 * Read-only: products via `wc_get_products()` with their categories and
+	 * whether each has description text, plus the category list with product
+	 * counts when no product filter is given.
+	 *
+	 * PERMISSION DECISION: `manage_woocommerce` only — a read, the pack's run
+	 * capability (WooCommerce's own `products-query` asks for the product
+	 * read capability, which every holder of this one also has).
+	 */
+	private static function registerProductsCatalogue(): void {
+		$category = array(
+			'type'                 => 'object',
+			'additionalProperties' => false,
+			'properties'           => array(
+				'id'   => array( 'type' => 'integer' ),
+				'name' => array( 'type' => 'string' ),
+				'slug' => array( 'type' => 'string' ),
+			),
+		);
+
+		wp_register_ability(
+			'senroflux/products-catalogue',
+			array(
+				'label'               => __( 'Products catalogue', 'senroflux' ),
+				'description'         => __( 'A read-only product listing that shows each product\'s categories and whether it has a description (with a short excerpt), filterable by category and by missing description. Without a filter it also returns the category list with product counts.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'additionalProperties' => false,
+					'properties'           => array(
+						'category'            => array(
+							'type'        => 'string',
+							'description' => 'Only products in this product category: its slug or its name, case-insensitive.',
+						),
+						'missing_description' => array(
+							'type'        => 'boolean',
+							'description' => 'Only products whose description has no text.',
+						),
+						'search'              => array( 'type' => 'string' ),
+						'page'                => array(
+							'type'    => 'integer',
+							'default' => 1,
+							'minimum' => 1,
+						),
+						'per_page'            => array(
+							'type'    => 'integer',
+							'default' => self::CATALOGUE_DEFAULT_PER_PAGE,
+							'minimum' => 1,
+							'maximum' => self::CATALOGUE_MAX_PER_PAGE,
+						),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'products', 'total', 'total_pages', 'page', 'per_page' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'products'    => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'       => 'object',
+								'properties' => array(
+									'id'                  => array( 'type' => 'integer' ),
+									'name'                => array( 'type' => 'string' ),
+									'sku'                 => array( 'type' => 'string' ),
+									'status'              => array( 'type' => 'string' ),
+									'type'                => array( 'type' => 'string' ),
+									'regular_price'       => array( 'type' => 'string' ),
+									'sale_price'          => array( 'type' => 'string' ),
+									'stock_status'        => array( 'type' => 'string' ),
+									'categories'          => array(
+										'type'  => 'array',
+										'items' => $category,
+									),
+									'has_description'     => array( 'type' => 'boolean' ),
+									'description_excerpt' => array( 'type' => 'string' ),
+									'has_short_description' => array( 'type' => 'boolean' ),
+								),
+							),
+						),
+						'total'       => array( 'type' => 'integer' ),
+						'total_pages' => array( 'type' => 'integer' ),
+						'page'        => array( 'type' => 'integer' ),
+						'per_page'    => array( 'type' => 'integer' ),
+						'categories'  => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'       => 'object',
+								'properties' => array(
+									'id'    => array( 'type' => 'integer' ),
+									'name'  => array( 'type' => 'string' ),
+									'slug'  => array( 'type' => 'string' ),
+									'count' => array( 'type' => 'integer' ),
+								),
+							),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeProductsCatalogue( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					unset( $input );
+
+					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
+					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
 						'destructive' => false,
 						'idempotent'  => true,
 					)
@@ -815,14 +1027,17 @@ final class Abilities {
 	}
 
 	/**
+	 * Everything is validated before anything is persisted; a refusal leaves
+	 * the store untouched. A new zone is saved before its locations are set
+	 * because `WC_Shipping_Zone::add_location()` ignores a zone with no id
+	 * yet (the REST controller saves first for the same reason).
+	 *
 	 * @param array<string,mixed> $input Call input.
 	 * @return array<string,mixed>|WP_Error
 	 */
 	private static function executeShippingZoneSave( array $input ): array|WP_Error {
-		$zone_id   = (int) ( $input['zone_id'] ?? 0 );
-		$name      = is_string( $input['name'] ?? null ) ? trim( $input['name'] ) : '';
-		$locations = is_array( $input['locations'] ?? null ) ? $input['locations'] : array();
-		$methods   = is_array( $input['methods'] ?? null ) ? $input['methods'] : array();
+		$zone_id = (int) ( $input['zone_id'] ?? 0 );
+		$name    = is_string( $input['name'] ?? null ) ? trim( $input['name'] ) : '';
 
 		if ( '' === $name ) {
 			return new WP_Error( 'invalid_input', __( 'A zone name is required.', 'senroflux' ), array( 'status' => 400 ) );
@@ -831,43 +1046,324 @@ final class Abilities {
 			return new WP_Error( 'gateway_unavailable', __( 'Shipping zones are not available.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
+		$locations = self::resolveZoneLocations( is_array( $input['locations'] ?? null ) ? $input['locations'] : array() );
+		if ( is_wp_error( $locations ) ) {
+			return $locations;
+		}
+		$methods = self::resolveZoneMethods( is_array( $input['methods'] ?? null ) ? $input['methods'] : array() );
+		if ( is_wp_error( $methods ) ) {
+			return $methods;
+		}
+
 		$previous = null;
 		if ( $zone_id > 0 ) {
-			$existing = new \WC_Shipping_Zone( $zone_id );
-			if ( 0 === $existing->get_id() ) {
+			$zone = new \WC_Shipping_Zone( $zone_id );
+			if ( 0 === $zone->get_id() ) {
 				return new WP_Error( 'not_found', __( 'Shipping zone not found.', 'senroflux' ), array( 'status' => 400 ) );
 			}
 			$previous = array(
-				'name'      => $existing->get_zone_name(),
-				'locations' => $existing->get_zone_locations(),
-				'methods'   => $existing->get_shipping_methods(),
+				'name'      => $zone->get_zone_name(),
+				'locations' => $zone->get_zone_locations(),
+				'methods'   => $zone->get_shipping_methods(),
 			);
-			$zone     = $existing;
 		} else {
 			$zone = new \WC_Shipping_Zone();
 		}
 
 		$zone->set_zone_name( $name );
-		foreach ( $locations as $location ) {
-			$code = is_array( $location ) ? (string) ( $location['code'] ?? '' ) : (string) $location;
-			$type = is_array( $location ) ? (string) ( $location['type'] ?? 'country' ) : 'country';
-			if ( '' !== $code ) {
-				$zone->add_location( $code, $type );
-			}
+		if ( 0 === $zone->get_id() ) {
+			$zone->save();
 		}
+		$zone->set_locations( $locations );
 		$saved_id = (int) $zone->save();
 
+		$added = array();
 		foreach ( $methods as $method ) {
-			$method_id = is_array( $method ) ? (string) ( $method['id'] ?? '' ) : (string) $method;
-			if ( '' !== $method_id ) {
-				$zone->add_shipping_method( $method_id );
+			$result = self::addZoneMethod( $zone, $method );
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+			$added[] = $result;
+		}
+
+		$saved_locations = array();
+		foreach ( $zone->get_zone_locations() as $location ) {
+			$location = (array) $location;
+			if ( is_string( $location['code'] ?? null ) && is_string( $location['type'] ?? null ) ) {
+				$saved_locations[] = array(
+					'code' => $location['code'],
+					'type' => $location['type'],
+				);
 			}
 		}
 
 		return array(
-			'zone_id'  => $saved_id,
-			'previous' => $previous,
+			'zone_id'   => $saved_id,
+			'previous'  => $previous,
+			'locations' => $saved_locations,
+			'methods'   => $added,
 		);
+	}
+
+	/**
+	 * @param array<mixed> $locations Raw `locations` input.
+	 * @return list<array{code:string,type:string}>|WP_Error
+	 */
+	private static function resolveZoneLocations( array $locations ): array|WP_Error {
+		$resolved  = array();
+		$countries = self::wcCountries();
+
+		foreach ( $locations as $location ) {
+			if ( ! is_array( $location ) ) {
+				return new WP_Error( 'invalid_input', __( 'Each location must be an object with a code.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+			$extra = array_diff( array_keys( $location ), array( 'code', 'type' ) );
+			if ( array() !== $extra ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: unexpected location field names. */
+						__( 'Unknown location field: %s. A location takes only code and type.', 'senroflux' ),
+						implode( ', ', array_map( 'strval', $extra ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$parsed = ShippingZoneInput::location( $location );
+			if ( is_wp_error( $parsed ) ) {
+				return $parsed;
+			}
+			if ( null !== $countries && ! self::zoneLocationExists( $countries, $parsed ) ) {
+				return new WP_Error(
+					'unknown_location',
+					sprintf(
+						/* translators: 1: location type, 2: location code. */
+						__( 'WooCommerce has no %1$s "%2$s".', 'senroflux' ),
+						$parsed['type'],
+						$parsed['code']
+					),
+					array( 'status' => 400 )
+				);
+			}
+			$resolved[] = $parsed;
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * `WC()->countries`, or null when WooCommerce cannot say which regions
+	 * exist (the check is then skipped rather than refusing everything).
+	 */
+	private static function wcCountries(): ?object {
+		if ( ! function_exists( 'WC' ) ) {
+			return null;
+		}
+		$wc = \WC();
+		if ( ! is_object( $wc ) || ! isset( $wc->countries ) || ! is_object( $wc->countries ) || ! method_exists( $wc->countries, 'get_countries' ) ) {
+			return null;
+		}
+
+		return array() === $wc->countries->get_countries() ? null : $wc->countries;
+	}
+
+	/**
+	 * @param array{code:string,type:string} $location Parsed location.
+	 */
+	private static function zoneLocationExists( object $countries, array $location ): bool {
+		$code = $location['code'];
+
+		if ( 'continent' === $location['type'] ) {
+			$continents = method_exists( $countries, 'get_continents' ) ? $countries->get_continents() : null;
+
+			return ! is_array( $continents ) || isset( $continents[ $code ] );
+		}
+		if ( 'country' === $location['type'] ) {
+			$known = method_exists( $countries, 'get_countries' ) ? $countries->get_countries() : array();
+
+			return is_array( $known ) && isset( $known[ $code ] );
+		}
+		if ( 'state' === $location['type'] ) {
+			list( $country, $state ) = explode( ':', $code, 2 );
+			$states                  = method_exists( $countries, 'get_states' ) ? $countries->get_states( $country ) : null;
+
+			return is_array( $states ) && isset( $states[ $state ] );
+		}
+
+		return true;
+	}
+
+	/**
+	 * @param array<mixed> $methods Raw `methods` input.
+	 * @return list<array{method_id:string,title:?string,cost:?string,tax_status:?string,enabled:?bool}>|WP_Error
+	 */
+	private static function resolveZoneMethods( array $methods ): array|WP_Error {
+		$resolved = array();
+		$known    = array() === $methods ? array() : self::registeredShippingMethods();
+
+		foreach ( $methods as $method ) {
+			if ( ! is_array( $method ) ) {
+				return new WP_Error( 'invalid_input', __( 'Each method must be an object with a method_id.', 'senroflux' ), array( 'status' => 400 ) );
+			}
+			$extra = array_diff( array_keys( $method ), array( 'method_id', 'title', 'cost', 'tax_status', 'enabled' ) );
+			if ( array() !== $extra ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: unexpected method field names. */
+						__( 'Unknown method field: %s. A method takes method_id, title, cost, tax_status and enabled.', 'senroflux' ),
+						implode( ', ', array_map( 'strval', $extra ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$method_id = $method['method_id'] ?? null;
+			if ( ! is_string( $method_id ) || ! isset( self::ZONE_METHOD_FIELDS[ $method_id ] ) || ! in_array( $method_id, $known, true ) ) {
+				return new WP_Error(
+					'invalid_input',
+					sprintf(
+						/* translators: %s: comma-separated shipping method ids. */
+						__( 'method_id must be one of: %s.', 'senroflux' ),
+						implode( ', ', array_intersect( array_keys( self::ZONE_METHOD_FIELDS ), $known ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+
+			$settings = array();
+			foreach ( array( 'title', 'cost', 'tax_status' ) as $field ) {
+				if ( ! array_key_exists( $field, $method ) ) {
+					continue;
+				}
+				$value = $method[ $field ];
+				if ( ! is_string( $value ) ) {
+					return new WP_Error( 'invalid_input', sprintf( /* translators: %s: field name. */ __( 'Method %s must be a string.', 'senroflux' ), $field ), array( 'status' => 400 ) );
+				}
+				if ( 'title' !== $field && ! in_array( $field, self::ZONE_METHOD_FIELDS[ $method_id ], true ) ) {
+					return new WP_Error(
+						'invalid_input',
+						sprintf(
+							/* translators: 1: method field name, 2: shipping method id. */
+							__( '%1$s cannot be set on %2$s.', 'senroflux' ),
+							$field,
+							$method_id
+						),
+						array( 'status' => 400 )
+					);
+				}
+				if ( 'cost' === $field && 1 !== preg_match( '/^\d+(\.\d+)?$/', $value ) ) {
+					return new WP_Error( 'invalid_input', __( 'Method cost must be a plain decimal such as "12" or "4.50".', 'senroflux' ), array( 'status' => 400 ) );
+				}
+				if ( 'tax_status' === $field && ! in_array( $value, array( 'taxable', 'none' ), true ) ) {
+					return new WP_Error( 'invalid_input', __( 'Method tax_status must be "taxable" or "none".', 'senroflux' ), array( 'status' => 400 ) );
+				}
+				if ( 'title' === $field ) {
+					$value = sanitize_text_field( $value );
+					if ( '' === $value ) {
+						return new WP_Error( 'invalid_input', __( 'A method title cannot be empty.', 'senroflux' ), array( 'status' => 400 ) );
+					}
+				}
+				$settings[ $field ] = $value;
+			}
+
+			$enabled = null;
+			if ( array_key_exists( 'enabled', $method ) ) {
+				$enabled = filter_var( $method['enabled'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE );
+				if ( null === $enabled ) {
+					return new WP_Error( 'invalid_input', __( 'Method enabled must be true or false.', 'senroflux' ), array( 'status' => 400 ) );
+				}
+			}
+
+			$resolved[] = array(
+				'method_id'  => $method_id,
+				'title'      => $settings['title'] ?? null,
+				'cost'       => $settings['cost'] ?? null,
+				'tax_status' => $settings['tax_status'] ?? null,
+				'enabled'    => $enabled,
+			);
+		}
+
+		return $resolved;
+	}
+
+	/**
+	 * Shipping method ids WooCommerce has registered.
+	 *
+	 * @return list<string>
+	 */
+	private static function registeredShippingMethods(): array {
+		if ( ! function_exists( 'WC' ) ) {
+			return array();
+		}
+		$wc = \WC();
+		if ( ! is_object( $wc ) || ! method_exists( $wc, 'shipping' ) ) {
+			return array();
+		}
+		$shipping = $wc->shipping();
+
+		return is_object( $shipping ) && method_exists( $shipping, 'get_shipping_method_class_names' )
+			? array_map( 'strval', array_keys( (array) $shipping->get_shipping_method_class_names() ) )
+			: array();
+	}
+
+	/**
+	 * Add one method to the zone and apply its settings the way WooCommerce's
+	 * `WC_REST_Shipping_Zone_Methods_V2_Controller::create_item()` and
+	 * `update_fields()` do: instance settings option, then `is_enabled`.
+	 *
+	 * @param array{method_id:string,title:?string,cost:?string,tax_status:?string,enabled:?bool} $method Validated method.
+	 * @return array<string,mixed>|WP_Error What was saved.
+	 */
+	private static function addZoneMethod( \WC_Shipping_Zone $zone, array $method ): array|WP_Error {
+		global $wpdb;
+
+		$instance_id = (int) $zone->add_shipping_method( $method['method_id'] );
+		$instance    = $instance_id > 0 ? \WC_Shipping_Zones::get_shipping_method( $instance_id ) : false;
+		if ( ! $instance instanceof \WC_Shipping_Method ) {
+			return new WP_Error(
+				'method_not_added',
+				sprintf(
+					/* translators: %s: shipping method id. */
+					__( 'WooCommerce could not add the %s method to the zone.', 'senroflux' ),
+					$method['method_id']
+				),
+				array( 'status' => 500 )
+			);
+		}
+
+		$instance->init_instance_settings();
+		$settings = (array) $instance->instance_settings;
+		foreach ( array( 'title', 'cost', 'tax_status' ) as $field ) {
+			if ( null !== $method[ $field ] ) {
+				$settings[ $field ] = $method[ $field ];
+			}
+		}
+		update_option(
+			$instance->get_instance_option_key(),
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- WooCommerce's own per-method settings filter, applied as its REST controller does.
+			apply_filters( 'woocommerce_shipping_' . $instance->id . '_instance_settings_values', $settings, $instance )
+		);
+
+		$enabled = $method['enabled'] ?? true;
+		if ( ! $enabled ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WooCommerce has no API to disable a zone method; its own REST shipping-zone-methods controller does this same update.
+			$wpdb->update( "{$wpdb->prefix}woocommerce_shipping_zone_methods", array( 'is_enabled' => 0 ), array( 'instance_id' => $instance_id ) );
+		}
+
+		$saved = array(
+			'method_id'   => $method['method_id'],
+			'instance_id' => $instance_id,
+			'title'       => is_string( $settings['title'] ?? null ) ? $settings['title'] : '',
+			'cost'        => is_scalar( $settings['cost'] ?? null ) ? (string) $settings['cost'] : '',
+			'enabled'     => $enabled,
+		);
+		if ( is_string( $settings['tax_status'] ?? null ) ) {
+			$saved['tax_status'] = $settings['tax_status'];
+		}
+
+		return $saved;
 	}
 
 	/**
@@ -911,6 +1407,206 @@ final class Abilities {
 		return array(
 			'tax_rate_id' => $id,
 			'previous'    => $previous,
+		);
+	}
+
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeProductsCatalogue( array $input ): array|WP_Error {
+		if ( ! function_exists( 'wc_get_products' ) ) {
+			return new WP_Error( 'woocommerce_unavailable', __( 'Products are not available.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$page     = max( 1, is_numeric( $input['page'] ?? null ) ? (int) $input['page'] : 1 );
+		$per_page = is_numeric( $input['per_page'] ?? null ) ? (int) $input['per_page'] : self::CATALOGUE_DEFAULT_PER_PAGE;
+		$per_page = min( self::CATALOGUE_MAX_PER_PAGE, max( 1, $per_page ) );
+		$wanted   = is_string( $input['category'] ?? null ) ? trim( $input['category'] ) : '';
+		$search   = is_string( $input['search'] ?? null ) ? trim( $input['search'] ) : '';
+		$missing  = true === ( $input['missing_description'] ?? false );
+
+		$categories = self::productCategories();
+		$args       = array(
+			'return'  => 'objects',
+			'orderby' => 'id',
+			'order'   => 'ASC',
+		);
+
+		if ( '' !== $wanted ) {
+			$slug = self::categorySlug( $categories, $wanted );
+			if ( null === $slug ) {
+				return new WP_Error(
+					'unknown_category',
+					sprintf(
+						/* translators: %s: comma-separated list of product category slugs. */
+						__( 'No product category matches that. Known category slugs: %s', 'senroflux' ),
+						implode( ', ', array_column( $categories, 'slug' ) )
+					),
+					array( 'status' => 400 )
+				);
+			}
+			$args['category'] = array( $slug );
+		}
+
+		if ( '' !== $search ) {
+			$args['s'] = $search;
+		}
+
+		if ( $missing ) {
+			// Description text is not queryable: scan, filter, then page.
+			$args['limit'] = self::CATALOGUE_MAX_SCAN;
+			$matches       = array();
+			foreach ( (array) wc_get_products( $args ) as $product ) {
+				if ( is_object( $product ) && '' === self::descriptionText( $product ) ) {
+					$matches[] = $product;
+				}
+			}
+			$total    = count( $matches );
+			$products = array_slice( $matches, ( $page - 1 ) * $per_page, $per_page );
+		} else {
+			$args['limit']    = $per_page;
+			$args['page']     = $page;
+			$args['paginate'] = true;
+			$results          = wc_get_products( $args );
+			$products         = is_object( $results ) && isset( $results->products ) ? (array) $results->products : array();
+			$total            = is_object( $results ) && isset( $results->total ) ? (int) $results->total : count( $products );
+		}
+
+		$by_id = array();
+		foreach ( $categories as $category ) {
+			$by_id[ $category['id'] ] = array(
+				'id'   => $category['id'],
+				'name' => $category['name'],
+				'slug' => $category['slug'],
+			);
+		}
+
+		$rows = array();
+		foreach ( $products as $product ) {
+			if ( is_object( $product ) ) {
+				$rows[] = self::catalogueRow( $product, $by_id );
+			}
+		}
+
+		$result = array(
+			'products'    => $rows,
+			'total'       => $total,
+			'total_pages' => (int) ceil( $total / $per_page ),
+			'page'        => $page,
+			'per_page'    => $per_page,
+		);
+
+		if ( '' === $wanted && '' === $search && ! $missing ) {
+			$result['categories'] = $categories;
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Every product category, with its product count (WooCommerce's own term
+	 * count: published products only).
+	 *
+	 * @return list<array{id:int,name:string,slug:string,count:int}>
+	 */
+	private static function productCategories(): array {
+		if ( ! function_exists( 'get_terms' ) ) {
+			return array();
+		}
+
+		$terms = get_terms(
+			array(
+				'taxonomy'   => 'product_cat',
+				'hide_empty' => false,
+			)
+		);
+
+		$categories = array();
+		foreach ( is_array( $terms ) ? $terms : array() as $term ) {
+			// Cast: a duck-typed term (WP_Term in WordPress, a plain object in tests).
+			$row = is_object( $term ) ? get_object_vars( $term ) : array();
+			if ( ! isset( $row['term_id'], $row['name'], $row['slug'] ) ) {
+				continue;
+			}
+			$categories[] = array(
+				'id'    => (int) $row['term_id'],
+				'name'  => html_entity_decode( (string) $row['name'], ENT_QUOTES ),
+				'slug'  => (string) $row['slug'],
+				'count' => (int) ( $row['count'] ?? 0 ),
+			);
+		}
+
+		return $categories;
+	}
+
+	/**
+	 * The slug of the category a model-supplied slug or name points at
+	 * (case-insensitive), or null when none does.
+	 *
+	 * @param list<array{id:int,name:string,slug:string,count:int}> $categories {@see productCategories()}.
+	 */
+	private static function categorySlug( array $categories, string $wanted ): ?string {
+		$needle = mb_strtolower( $wanted );
+		$titled = function_exists( 'sanitize_title' ) ? sanitize_title( $wanted ) : $needle;
+
+		foreach ( $categories as $category ) {
+			if ( mb_strtolower( $category['slug'] ) === $needle || mb_strtolower( $category['name'] ) === $needle ) {
+				return $category['slug'];
+			}
+		}
+		foreach ( $categories as $category ) {
+			if ( $category['slug'] === $titled ) {
+				return $category['slug'];
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * A product's description as plain text, whitespace-collapsed ('' when it
+	 * has none; markup with no text counts as none).
+	 */
+	private static function descriptionText( object $product ): string {
+		$html = method_exists( $product, 'get_description' ) ? (string) $product->get_description() : '';
+		$text = function_exists( 'wp_strip_all_tags' ) ? wp_strip_all_tags( $html ) : strip_tags( $html ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
+
+		return trim( (string) preg_replace( '/\s+/u', ' ', html_entity_decode( $text, ENT_QUOTES ) ) );
+	}
+
+	/**
+	 * @param array<int,array{id:int,name:string,slug:string}> $category_index Categories by term id.
+	 * @return array<string,mixed>
+	 */
+	private static function catalogueRow( object $product, array $category_index ): array {
+		$text         = self::descriptionText( $product );
+		$category_ids = method_exists( $product, 'get_category_ids' ) ? (array) $product->get_category_ids() : array();
+		$categories   = array();
+		foreach ( $category_ids as $category_id ) {
+			if ( isset( $category_index[ (int) $category_id ] ) ) {
+				$categories[] = $category_index[ (int) $category_id ];
+			}
+		}
+
+		$short = method_exists( $product, 'get_short_description' ) ? (string) $product->get_short_description() : '';
+		$short = function_exists( 'wp_strip_all_tags' ) ? wp_strip_all_tags( $short ) : strip_tags( $short ); // phpcs:ignore WordPress.WP.AlternativeFunctions.strip_tags_strip_tags
+
+		$read = static fn ( string $method ): string => method_exists( $product, $method ) ? (string) $product->$method() : '';
+
+		return array(
+			'id'                    => method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0,
+			'name'                  => $read( 'get_name' ),
+			'sku'                   => $read( 'get_sku' ),
+			'status'                => $read( 'get_status' ),
+			'type'                  => $read( 'get_type' ),
+			'regular_price'         => $read( 'get_regular_price' ),
+			'sale_price'            => $read( 'get_sale_price' ),
+			'stock_status'          => $read( 'get_stock_status' ),
+			'categories'            => $categories,
+			'has_description'       => '' !== $text,
+			'description_excerpt'   => mb_strlen( $text ) > 160 ? rtrim( mb_substr( $text, 0, 160 ) ) . '…' : $text,
+			'has_short_description' => '' !== trim( $short ),
 		);
 	}
 
@@ -963,8 +1659,7 @@ final class Abilities {
 			$refunds_total += self::orderTotalRefunded( $order );
 		}
 
-		$currency         = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
-		$low_stock_amount = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount() : 2;
+		$currency = function_exists( 'get_woocommerce_currency' ) ? (string) get_woocommerce_currency() : 'USD';
 
 		return array(
 			'from'               => $from,
@@ -974,7 +1669,7 @@ final class Abilities {
 			'net_sales'          => round( $gross - $refunds_total, 2 ),
 			'refunds_total'      => round( $refunds_total, 2 ),
 			'currency'           => $currency,
-			'low_stock_products' => self::lowStockProductIds( $low_stock_amount ),
+			'low_stock_products' => self::lowStockProductIds(),
 		);
 	}
 
@@ -1170,12 +1865,12 @@ final class Abilities {
 	}
 
 	/**
-	 * Product ids at or below `$threshold` stock. Read-only (S19
+	 * Product ids at or below their own low-stock threshold. Read-only (S19
 	 * `store-report`): only ever calls `wc_get_products()`, never a writer.
 	 *
 	 * @return list<int>
 	 */
-	private static function lowStockProductIds( int $threshold ): array {
+	private static function lowStockProductIds(): array {
 		if ( ! function_exists( 'wc_get_products' ) ) {
 			return array();
 		}
@@ -1187,6 +1882,8 @@ final class Abilities {
 				continue;
 			}
 			$quantity = $product->get_stock_quantity();
+			// WooCommerce's own threshold: the product-level amount, else the store setting.
+			$threshold = function_exists( 'wc_get_low_stock_amount' ) ? (int) wc_get_low_stock_amount( $product ) : 2;
 			if ( null !== $quantity && (int) $quantity <= $threshold ) {
 				$ids[] = method_exists( $product, 'get_id' ) ? (int) $product->get_id() : 0;
 			}

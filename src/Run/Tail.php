@@ -32,6 +32,8 @@ final class Tail {
 	 * @param int|null          $elapsed_gap_seconds   S9: seconds since the run's previous step, when
 	 *                                                 this tick starts more than 10 minutes after it. Null
 	 *                                                 below the threshold, or on a run's first tick.
+	 * @param int|null          $now_utc               Unix timestamp of this turn; when set, the tail
+	 *                                                 states the site's local date and time.
 	 */
 	public function __construct(
 		public readonly int $remaining_questions,
@@ -43,6 +45,7 @@ final class Tail {
 		public readonly ?array $verify_objects = null,
 		public readonly ?string $conversation_language = null,
 		public readonly ?int $elapsed_gap_seconds = null,
+		public readonly ?int $now_utc = null,
 	) {}
 
 	/**
@@ -72,6 +75,13 @@ final class Tail {
 			$this->remaining_tokens
 		);
 
+		// A model has no calendar: without this line "next week" or "tomorrow"
+		// cannot be resolved. It rides the per-turn tail, not the skills, so a
+		// run parked for days still sees today's date on resume.
+		if ( null !== $this->now_utc ) {
+			$lines[] = self::dateLine( $this->now_utc );
+		}
+
 		if ( $this->remaining_questions <= 0 ) {
 			$lines[] = 'No questions remain: state your assumptions in the plan.';
 		}
@@ -100,6 +110,24 @@ final class Tail {
 		}
 
 		return implode( "\n", $lines );
+	}
+
+	/**
+	 * The site-local date sentence. The `Y-m-d H:i:s` wording matches what
+	 * publish-post's `date` input expects.
+	 *
+	 * @param int $timestamp Unix timestamp (UTC).
+	 */
+	private static function dateLine( int $timestamp ): string {
+		$timezone = wp_timezone();
+		$zone     = wp_timezone_string();
+
+		return sprintf(
+			'Today is %1$s (site timezone %2$s, UTC%3$s). Use this date for any relative date ("next week", "tomorrow") and schedule in the site timezone, as a site-local `Y-m-d H:i:s` datetime.',
+			wp_date( 'l, j F Y, H:i', $timestamp, $timezone ),
+			'' !== $zone ? $zone : 'UTC',
+			wp_date( 'P', $timestamp, $timezone )
+		);
 	}
 
 	/**
@@ -145,6 +173,7 @@ final class Tail {
 
 		/**
 		 * Filters the locale => language-name map for the tail line.
+		 * `@internal`.
 		 *
 		 * @param array<string,string> $names Known locale names.
 		 */

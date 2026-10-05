@@ -37,9 +37,12 @@ final class Schema {
 	 * updated afterwards; a NULL/missing value reads back as the empty list;
 	 * 6 adds `follow_up_of` (0.3 S20) — the source run's id when this run was
 	 * started as a follow-up, pinned at start() and never updated afterwards;
-	 * NULL means an ordinary (non-follow-up) run.
+	 * NULL means an ordinary (non-follow-up) run; 7 adds `model_provider` and
+	 * `model_id` — the per-run model pin, pinned at start() and
+	 * never updated afterwards, like `gate_mode`; both NULL means automatic
+	 * selection, which is also what every older row reads back as.
 	 */
-	public const DB_VERSION = 6;
+	public const DB_VERSION = 7;
 
 	/**
 	 * Runs table name for this site.
@@ -216,6 +219,10 @@ final class Schema {
 				'withheld_roles_json TEXT NULL',
 				// 0.3 S20: also pinned at start, never updated afterwards.
 				'follow_up_of BIGINT(20) UNSIGNED NULL',
+				// Also pinned at start, never updated afterwards; both
+				// NULL means automatic model selection.
+				'model_provider VARCHAR(64) NULL',
+				'model_id VARCHAR(191) NULL',
 				'PRIMARY KEY  (id)',
 				'KEY user_id (user_id)',
 				'KEY status (status)',

@@ -47,13 +47,29 @@ final class VocabularyTest extends TestCase {
 		$this->assertContains( 'senroflux/pull-quote', $names );
 	}
 
+	/** With no `names`, the payload is a compact index — no markup, no constraints. */
+	public function test_list_payload_with_no_names_is_a_compact_index(): void {
+		$payload = ( new Vocabulary() )->listPayload();
+
+		foreach ( $payload['patterns'] as $pattern ) {
+			$this->assertArrayHasKey( 'name', $pattern );
+			$this->assertArrayHasKey( 'title', $pattern );
+			$this->assertArrayHasKey( 'description', $pattern );
+			$this->assertArrayNotHasKey( 'constraints', $pattern );
+			$this->assertArrayNotHasKey( 'markup', $pattern );
+		}
+	}
+
 	/**
 	 * 0.3 S7 gap fix (same treatment as the pages pack): a feature entry
 	 * carries its shipped sample markup; a prose entry (no fixed markup to
-	 * ship) omits the key rather than sending an empty string.
+	 * ship) omits the key rather than sending an empty string. Only
+	 * returned for the names the caller asks for.
 	 */
 	public function test_list_payload_includes_markup_only_for_feature_patterns(): void {
-		$payload = ( new Vocabulary() )->listPayload();
+		$vocabulary = new Vocabulary();
+		$names      = array_column( $vocabulary->all(), 'name' );
+		$payload    = $vocabulary->listPayload( $names );
 
 		foreach ( $payload['patterns'] as $pattern ) {
 			if ( str_starts_with( (string) $pattern['name'], 'senroflux/' ) ) {
@@ -89,9 +105,11 @@ final class VocabularyTest extends TestCase {
 
 	public function test_list_payload_constraints_match_copy_rules_single_source(): void {
 		$vocabulary = new Vocabulary();
-		$payload    = $vocabulary->listPayload();
+		$names      = array_column( $vocabulary->all(), 'name' );
+		$payload    = $vocabulary->listPayload( $names );
 		$body       = ( new PostsPack() )->copyRulesBody( $vocabulary->all() );
 
+		$this->assertArrayNotHasKey( 'not_found', $payload );
 		foreach ( $payload['patterns'] as $pattern ) {
 			foreach ( $pattern['constraints']['stated'] as $line ) {
 				$this->assertStringContainsString( $line, $body );
@@ -99,10 +117,17 @@ final class VocabularyTest extends TestCase {
 		}
 	}
 
+	public function test_list_payload_with_names_preserves_vocabulary_order_and_reports_not_found(): void {
+		$payload = ( new Vocabulary() )->listPayload( array( 'senroflux/pull-quote', 'core/paragraph', 'no-such-pattern' ) );
+
+		$this->assertSame( array( 'core/paragraph', 'senroflux/pull-quote' ), array_column( $payload['patterns'], 'name' ) );
+		$this->assertSame( array( 'no-such-pattern' ), $payload['not_found'] );
+	}
+
 	public function test_block_names_include_prose_and_feature_blocks(): void {
 		$names = ( new Vocabulary() )->blockNames();
 
-		foreach ( array( 'core/paragraph', 'core/heading', 'core/list', 'core/quote', 'core/image', 'core/code', 'core/group', 'core/buttons', 'core/button', 'core/pullquote' ) as $expected ) {
+		foreach ( array( 'core/paragraph', 'core/heading', 'core/list', 'core/quote', 'core/image', 'core/code', 'core/group', 'core/buttons', 'core/button', 'core/pullquote', 'core/list-item' ) as $expected ) {
 			$this->assertContains( $expected, $names );
 		}
 	}

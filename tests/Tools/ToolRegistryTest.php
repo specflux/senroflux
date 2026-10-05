@@ -43,6 +43,18 @@ final class ToolRegistryTest extends TestCase {
 		);
 	}
 
+	private function runWithAllowAndBudget( array $allow, array $budget_overrides ): Run {
+		return new Run(
+			id: 7,
+			userId: 1,
+			consumer: 'test-consumer',
+			goal: 'goal',
+			status: RunStatus::Pending,
+			allow: $allow,
+			budget: array_merge( Budget::defaults(), $budget_overrides )
+		);
+	}
+
 	public function test_glob_allow_list_admits_only_matching_abilities(): void {
 		$registry = ToolRegistry::forRun( $this->runWithAllow( array( 'agsafe-smoke/*' ) ) );
 
@@ -108,5 +120,37 @@ final class ToolRegistryTest extends TestCase {
 		// Array shape (SDK-less context).
 		$this->assertSame( 'wpab__agsafe-smoke__spend', $declaration['name'] );
 		$this->assertSame( 'Spend an amount', $declaration['description'] ?? null );
+	}
+
+	// ------------------------------------------------------------------
+	// 0.3 quality fix: images budget 0 withholds generate-image entirely.
+	// ------------------------------------------------------------------
+
+	public function test_generate_image_is_withheld_when_images_budget_is_zero(): void {
+		$GLOBALS['senroflux_test_abilities']['senroflux/generate-image'] = new SenroFlux_Test_Fake_Ability(
+			'senroflux/generate-image',
+			description: 'Generate an image'
+		);
+
+		$registry = ToolRegistry::forRun(
+			$this->runWithAllowAndBudget( array( '*' ), array( Budget::IMAGES => 0 ) )
+		);
+
+		$this->assertFalse( $registry->admits( 'senroflux/generate-image' ) );
+		$this->assertNotContains( 'senroflux/generate-image', $registry->names() );
+	}
+
+	public function test_generate_image_is_admitted_when_images_budget_is_positive(): void {
+		$GLOBALS['senroflux_test_abilities']['senroflux/generate-image'] = new SenroFlux_Test_Fake_Ability(
+			'senroflux/generate-image',
+			description: 'Generate an image'
+		);
+
+		$registry = ToolRegistry::forRun(
+			$this->runWithAllowAndBudget( array( '*' ), array( Budget::IMAGES => 6 ) )
+		);
+
+		$this->assertTrue( $registry->admits( 'senroflux/generate-image' ) );
+		$this->assertContains( 'senroflux/generate-image', $registry->names() );
 	}
 }

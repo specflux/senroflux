@@ -56,6 +56,22 @@ $GLOBALS['senroflux_test_abilities'] = array();
 if ( ! defined( 'ARRAY_A' ) ) {
 	define( 'ARRAY_A', 'ARRAY_A' );
 }
+// RunsScreen::assets() (S10) reads these for its enqueue URLs/paths — a real
+// WP load order defines both from the plugin's own file location; under bare
+// PHPUnit there is no such file, so point them at the plugin root, matching
+// senroflux.php's own definitions closely enough for tests that call
+// assets() directly (it only needs `build/runs/index.asset.php` to resolve).
+if ( ! defined( 'SENROFLUX_PATH' ) ) {
+	define( 'SENROFLUX_PATH', dirname( __DIR__ ) . '/' );
+}
+if ( ! defined( 'SENROFLUX_URL' ) ) {
+	define( 'SENROFLUX_URL', 'http://example.test/wp-content/plugins/senroflux/' );
+}
+// S23: senroflux.php (never loaded under bare PHPUnit) defines this; tests
+// that read it (PublicSurfaceTest) need the same value.
+if ( ! defined( 'SENROFLUX_API_VERSION' ) ) {
+	define( 'SENROFLUX_API_VERSION', '0.3.0' );
+}
 if ( ! defined( 'MINUTE_IN_SECONDS' ) ) {
 	define( 'MINUTE_IN_SECONDS', 60 );
 }
@@ -64,6 +80,29 @@ if ( ! defined( 'HOUR_IN_SECONDS' ) ) {
 }
 if ( ! defined( 'DAY_IN_SECONDS' ) ) {
 	define( 'DAY_IN_SECONDS', 86400 );
+}
+
+// Site-timezone shims. Tests pick the zone via
+// $GLOBALS['senroflux_test_timezone'] (default UTC).
+if ( ! function_exists( 'wp_timezone_string' ) ) {
+	/** Test stand-in: the configured test timezone string. */
+	function wp_timezone_string(): string {
+		return (string) ( $GLOBALS['senroflux_test_timezone'] ?? 'UTC' );
+	}
+}
+if ( ! function_exists( 'wp_timezone' ) ) {
+	/** Test stand-in: the configured test timezone. */
+	function wp_timezone(): DateTimeZone {
+		return new DateTimeZone( wp_timezone_string() );
+	}
+}
+if ( ! function_exists( 'wp_date' ) ) {
+	/** Test stand-in: format a timestamp in the given (or site) timezone. */
+	function wp_date( string $format, ?int $timestamp = null, ?DateTimeZone $timezone = null ): string {
+		return ( new DateTimeImmutable( '@' . ( $timestamp ?? time() ) ) )
+			->setTimezone( $timezone ?? wp_timezone() )
+			->format( $format );
+	}
 }
 
 // --- Working mini hook registry -------------------------------------------
@@ -87,6 +126,49 @@ if ( ! function_exists( 'add_filter' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_kses' ) ) {
+	/**
+	 * Minimal allow-list shim: drops every tag not in `$allowed`, and every
+	 * attribute not allowed for a kept tag (href values also need an allowed
+	 * protocol). Real `wp_kses()` is stricter; this only has to prove the
+	 * production call site passes a tight allow-list.
+	 *
+	 * @param string                           $text              Markup.
+	 * @param array<string,array<string,bool>> $allowed           Tag => attribute allow-list.
+	 * @param list<string>                     $allowed_protocols Allowed URL schemes.
+	 */
+	function wp_kses( string $text, array $allowed, array $allowed_protocols = array( 'http', 'https' ) ): string {
+		return (string) preg_replace_callback(
+			'#<(/?)([a-z0-9]+)([^>]*)>#i',
+			static function ( array $m ) use ( $allowed, $allowed_protocols ): string {
+				$tag = strtolower( $m[2] );
+				if ( ! isset( $allowed[ $tag ] ) ) {
+					return '';
+				}
+				if ( '/' === $m[1] ) {
+					return '</' . $tag . '>';
+				}
+				$attrs = '';
+				if ( preg_match_all( '#([a-z-]+)\s*=\s*"([^"]*)"#i', $m[3], $pairs, PREG_SET_ORDER ) ) {
+					foreach ( $pairs as $pair ) {
+						$name = strtolower( $pair[1] );
+						if ( empty( $allowed[ $tag ][ $name ] ) ) {
+							continue;
+						}
+						if ( 'href' === $name && ! preg_match( '#^(' . implode( '|', array_map( 'preg_quote', $allowed_protocols ) ) . '):#i', $pair[2] ) && ! str_starts_with( $pair[2], '/' ) ) {
+							continue;
+						}
+						$attrs .= ' ' . $name . '="' . $pair[2] . '"';
+					}
+				}
+
+				return '<' . $tag . $attrs . '>';
+			},
+			$text
+		);
+	}
+}
+
 if ( ! function_exists( 'apply_filters' ) ) {
 	/**
 	 * Dispatch through registered callbacks, WP-style value threading.
@@ -104,6 +186,26 @@ if ( ! function_exists( 'apply_filters' ) ) {
 		}
 
 		return $value;
+	}
+}
+
+if ( ! function_exists( 'get_stylesheet' ) ) {
+	/**
+	 * Active theme slug; Twenty Twenty-Five unless a test sets
+	 * `$GLOBALS['senroflux_test_stylesheet']`.
+	 */
+	function get_stylesheet(): string {
+		return $GLOBALS['senroflux_test_stylesheet'] ?? 'twentytwentyfive';
+	}
+}
+
+if ( ! function_exists( 'get_template' ) ) {
+	/**
+	 * Parent theme slug; follows the stylesheet unless a test sets
+	 * `$GLOBALS['senroflux_test_template']`.
+	 */
+	function get_template(): string {
+		return $GLOBALS['senroflux_test_template'] ?? get_stylesheet();
 	}
 }
 
@@ -157,8 +259,15 @@ if ( ! function_exists( 'esc_html__' ) ) {
 if ( ! function_exists( 'current_user_can' ) ) {
 	$GLOBALS['senroflux_test_user_caps'] = array();
 
-	/** Test knob: $GLOBALS['senroflux_test_user_caps'][$cap] = bool. */
-	function current_user_can( string $capability ): bool {
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_user_caps'][$cap] = bool. A
+	 * per-object entry under "$cap:$object_id" wins when a call passes an id.
+	 */
+	function current_user_can( string $capability, mixed ...$args ): bool {
+		if ( isset( $args[0] ) && isset( $GLOBALS['senroflux_test_user_caps'][ $capability . ':' . $args[0] ] ) ) {
+			return (bool) $GLOBALS['senroflux_test_user_caps'][ $capability . ':' . $args[0] ];
+		}
+
 		return (bool) ( $GLOBALS['senroflux_test_user_caps'][ $capability ] ?? false );
 	}
 }
@@ -369,7 +478,8 @@ if ( ! function_exists( 'get_transient' ) ) {
 if ( ! function_exists( 'set_transient' ) ) {
 	/** Recording shim. */
 	function set_transient( string $key, mixed $value, int $expiration = 0 ): bool {
-		$GLOBALS['senroflux_test_transients'][ $key ] = $value;
+		$GLOBALS['senroflux_test_transients'][ $key ]     = $value;
+		$GLOBALS['senroflux_test_transient_ttls'][ $key ] = $expiration;
 
 		return true;
 	}
@@ -388,11 +498,13 @@ if ( ! function_exists( 'wp_json_encode' ) ) {
 	/**
 	 * JSON shim.
 	 *
-	 * @param mixed $data Data.
+	 * @param mixed $data  Data.
+	 * @param int   $flags json_encode() flags (S23: PublicSurfaceTest writes
+	 *                     a pretty-printed snapshot).
 	 * @return string|false
 	 */
-	function wp_json_encode( $data ) {
-		return json_encode( $data );
+	function wp_json_encode( $data, $flags = 0 ) {
+		return json_encode( $data, $flags );
 	}
 }
 

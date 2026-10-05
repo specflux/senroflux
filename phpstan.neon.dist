@@ -15,6 +15,13 @@ parameters:
     # exact message so a NEW violation fails loudly instead of being absorbed.
     ignoreErrors:
         -
+            # WooCommerce is not installed in this checkout, so phpstan cannot
+            # resolve its shipping classes; addZoneMethod() is only reached
+            # from executeShippingZoneSave(), behind its class_exists() guard.
+            message: '#^(Parameter \$zone of method .*addZoneMethod\(\) has invalid type WC_Shipping_Zone\.|Call to .* on an unknown class WC_Shipping_Zones?\.|Class WC_Shipping_Method not found\.|(Call to method|Access to property) .* on an unknown class WC_Shipping_Method\.)$#'
+            path: src/Packs/Commerce/Abilities.php
+            count: 8
+        -
             # wpdb::prepare()'s stub requires `@phpstan-param literal-string
             # $query`, but every prepared statement interpolates this plugin's
             # OWN computed table names into an otherwise-literal SQL template
@@ -59,14 +66,23 @@ parameters:
             path: src/Model/AiClientMediaGateway.php
             count: 2
         -
+            # Same family: OpenverseStockImageGateway's download_url()/
+            # wp_upload_bits() fallback requires the real WP-core file only
+            # when it hasn't already been loaded mid-request — never present
+            # in this checkout.
+            message: '#^Path in require_once\(\) ".*wp\-admin/includes/file\.php" is not a file or it does not exist\.$#'
+            path: src/Model/OpenverseStockImageGateway.php
+            count: 2
+        -
             # Message::fromArray() documents a narrow PHPStan array-shape
             # generic; Runner stores exactly toArray() output (S4), so the
             # shape holds BY CONSTRUCTION (same as Step::toMessage()).
-            # Two call sites: unconsumedCalls() and unansweredCallId() (the
-            # one recovery path both harness parks share).
+            # Three call sites: unconsumedCalls(), unansweredCallId() (the one
+            # recovery path both harness parks share) and historyForPrompt(),
+            # which only removes parts or shortens strings inside them.
             message: '#^Parameter \#1 \$array of static method WordPress\\AiClient\\Messages\\DTO\\Message::fromArray\(\) expects array\{role: string, parts: array.*given\.$#'
             path: src/Run/*
-            count: 2
+            count: 3
         -
             # The Agent Safety go-forward pack lives in the external
             # wp-agentsafety plugin, which is NOT installed in this checkout;

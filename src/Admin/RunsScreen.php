@@ -28,9 +28,9 @@ namespace Specflux\SenroFlux\Admin;
 use Specflux\SenroFlux\Plugin;
 use Specflux\SenroFlux\Approval\GrantBridge;
 use Specflux\SenroFlux\Http\ConsumerPolicy;
+use Specflux\SenroFlux\Model\ModelChoice;
 use Specflux\SenroFlux\Packs\Pack;
 use Specflux\SenroFlux\Packs\PackRegistry;
-use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\Report;
 use Specflux\SenroFlux\Run\RunStatus;
 use Specflux\SenroFlux\Run\StepKind;
@@ -124,8 +124,11 @@ class RunsScreen {
 	 * The allow-list here is the union of the registered packs' allow-lists:
 	 * the OUTER bound of what an admin-started run may ever touch. `start()`
 	 * then narrows it to the chosen pack (S9), which is always given from this
-	 * screen. The ceiling is the site's `Budget::defaults()`, which is exactly
-	 * the "lower-only" rule S13 asks for.
+	 * screen. No `budget` is registered: {@see ConsumerPolicy::resolve()}
+	 * then builds the ceiling from `Budget::defaults()` over the chosen
+	 * pack's own `defaultBudget()`, so a pack asking for more (the site pack)
+	 * gets it, and the request may still only lower it (S13). Registering
+	 * `Budget::defaults()` here capped every pack back to the generic table.
 	 *
 	 * @param mixed $consumers The consumer map so far.
 	 * @return array<string,array{allow?:list<string>,budget?:array<string,int>}>
@@ -153,8 +156,7 @@ class RunsScreen {
 		}
 
 		$consumers[ self::CONSUMER ] = array(
-			'allow'  => array_keys( $allow ),
-			'budget' => Budget::defaults(),
+			'allow' => array_keys( $allow ),
 		);
 
 		return $consumers;
@@ -199,9 +201,16 @@ class RunsScreen {
 			return;
 		}
 
-		$query = $_GET; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
-		unset( $query['page'] );
-		$query = array_map( 'sanitize_text_field', wp_unslash( $query ) );
+		// The only keys the screen reads (`run_id`/`run` open a run, `goal`
+		// pre-fills the message box); anything else is dropped.
+		$query = array();
+		foreach ( array( 'run_id', 'run', 'goal' ) as $key ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+			if ( isset( $_GET[ $key ] ) && is_string( $_GET[ $key ] ) ) {
+				// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+				$query[ $key ] = sanitize_text_field( wp_unslash( $_GET[ $key ] ) );
+			}
+		}
 		$query = array( 'page' => self::SLUG ) + $query;
 
 		$this->redirectAndExit( add_query_arg( $query, admin_url( 'admin.php' ) ) );
@@ -284,6 +293,28 @@ class RunsScreen {
 				// selected yet.
 				'gateMode'           => Plugin::currentGateMode()->value,
 				'examples'           => $this->exampleGoals(),
+				// 0.3 S10 (runs-pack fix): the packs the CURRENT viewer's
+				// preflight allows — the same set `exampleGoals()` already
+				// names — so the message box can offer a real pack choice
+				// instead of starting a pack-less run with an empty verb map
+				// (every read/plan call would then be refused fail-closed,
+				// {@see \Specflux\SenroFlux\Tools\VerbTier}).
+				'packs'              => $this->runnablePacks(),
+				// runs-pack fix: the packs the viewer's preflight refuses,
+				// with why — so the message box can SAY something when the
+				// picker above is short a pack, or empty (every pack
+				// refused), instead of going silent.
+				'unavailablePacks'   => $this->unavailablePacks(),
+				// Stage 22b (J1): a failing BLOCKING harness check (no model
+				// provider, WordPress too old) disables Start. The setup panel
+				// above the app names the fix; this is the app's half. It is
+				// refreshed on window focus through `senroflux_setup_panel`.
+				'startBlocked'       => $this->startBlocked( get_current_user_id() ),
+				// Per-run model choice: only currently-configured
+				// providers/models, grouped by provider — the new-run form's
+				// select and the run header's display name both read this
+				// same list, never re-deriving it from a role guess.
+				'modelChoices'       => ModelChoice::availableChoices(),
 				// 0.3 S10 (17c): the admin-ajax surface's tick/cancel/start
 				// actions carry the SAME `senroflux_run` nonce + `read`
 				// capability check the admin-post handlers use, RE-CHECKED
@@ -378,6 +409,70 @@ class RunsScreen {
 		}
 
 		return $examples;
+	}
+
+	/**
+	 * The packs the CURRENT viewer may run (0.3 S10, runs-pack fix): the same
+	 * preflight-passing set {@see exampleGoals()} names, as `{ name, label }`
+	 * pairs for the message box's pack picker. `Pack` declares no separate
+	 * human label (only `name()`), so `label` is the pack's own name — a pack
+	 * name is DATA text, same as an example goal, never translated here.
+	 *
+	 * @return list<array{name:string,label:string}>
+	 */
+	protected function runnablePacks(): array {
+		$user_id = get_current_user_id();
+		$packs   = array();
+
+		foreach ( PackRegistry::fromFilters()->all() as $pack ) {
+			if ( true === $pack->preflight( $user_id ) ) {
+				$packs[] = array(
+					'name'  => $pack->name(),
+					'label' => $pack->name(),
+				);
+			}
+		}
+
+		return $packs;
+	}
+
+	/**
+	 * Does a failing BLOCKING harness check (the provider check) stop this
+	 * viewer starting any run right now? Pack-level checks are not asked
+	 * here: they already shape {@see runnablePacks()}.
+	 */
+	protected function startBlocked( int $user_id ): bool {
+		return null !== Checks::firstBlockingFailure( Checks::harnessChecks( $user_id ) );
+	}
+
+	/**
+	 * The packs the CURRENT viewer may NOT run, with why (runs-pack fix): a
+	 * pack whose {@see \Specflux\SenroFlux\Packs\Pack::preflight()} fails used
+	 * to simply vanish from {@see runnablePacks()} — when EVERY pack fails,
+	 * the message box rendered no picker and no explanation, so the screen
+	 * said nothing about why nothing could run. `reason` is the preflight
+	 * `WP_Error`'s own message (`pack_unbound`, `skills_too_large`, or a
+	 * capability-check message — see {@see \Specflux\SenroFlux\Packs\Pack::preflight()}
+	 * and {@see \Specflux\SenroFlux\Packs\Pack::setupChecks()}), already
+	 * translated by whichever check produced it — never re-translated here.
+	 *
+	 * @return list<array{name:string,reason:string}>
+	 */
+	protected function unavailablePacks(): array {
+		$user_id = get_current_user_id();
+		$packs   = array();
+
+		foreach ( PackRegistry::fromFilters()->all() as $pack ) {
+			$result = $pack->preflight( $user_id );
+			if ( true !== $result ) {
+				$packs[] = array(
+					'name'   => $pack->name(),
+					'reason' => $result->get_error_message(),
+				);
+			}
+		}
+
+		return $packs;
 	}
 
 	// ------------------------------------------------------------------
@@ -854,8 +949,13 @@ class RunsScreen {
 
 		wp_send_json_success(
 			array(
-				'html'          => $this->renderSetupPanel( $user_id ),
-				'start_enabled' => ! $start_disabled,
+				'html'              => $this->renderSetupPanel( $user_id ),
+				'start_enabled'     => ! $start_disabled,
+				// Stage 22b: the whole start state, so the screen refreshes
+				// the pack picker (and its "unavailable" notices) on focus
+				// too, not just the panel.
+				'packs'             => $this->runnablePacks(),
+				'unavailable_packs' => $this->unavailablePacks(),
 			)
 		);
 	}

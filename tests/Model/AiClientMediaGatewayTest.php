@@ -156,8 +156,22 @@ final class AiClientMediaGatewayTest extends TestCase {
 	 * calls `with_file()` at all — it only puts the URL into the text
 	 * prompt — so this assertion (that the image was actually attached)
 	 * fails against the unfixed gateway.
+	 *
+	 * 0.3 quality fix 3 (live run): fixing THAT surfaced a second bug — a
+	 * REMOTE `File` (built from the attachment's public URL) is exactly what
+	 * fails from a site the model's provider cannot reach itself
+	 * (localhost/staging/password-protected/intranet): "Bad Request (400) -
+	 * Error while downloading file. Upstream status code: 407." The gateway
+	 * must attach the image as INLINE (base64) data, read from a LOCAL file
+	 * path — never a URL the provider has to fetch back.
 	 */
-	public function test_generate_alt_text_attaches_the_image_as_a_real_file_part(): void {
+	public function test_generate_alt_text_attaches_the_image_as_inline_data_not_a_url(): void {
+		$path = tempnam( sys_get_temp_dir(), 'senroflux-alt-' ) . '.png'; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_tempnam -- test fixture, not a WP runtime path.
+		file_put_contents( // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- test fixture, not a WP runtime path.
+			$path,
+			base64_decode( 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', true ) // phpcs:ignore WordPress.PHP.DiscouragedPHPFunctions.obfuscation_base64_decode -- a real 1x1 PNG fixture, not obfuscating code.
+		);
+
 		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
 			return new class() {
 				public function toMessage(): Message {
@@ -167,7 +181,8 @@ final class AiClientMediaGatewayTest extends TestCase {
 		};
 
 		$gateway = new AiClientMediaGateway();
-		$result  = $gateway->generateAltText( 'https://example.test/image.png' );
+		$result  = $gateway->generateAltText( $path );
+		wp_delete_file( $path );
 
 		$this->assertSame( 'A red bicycle.', $result );
 
@@ -182,8 +197,55 @@ final class AiClientMediaGatewayTest extends TestCase {
 		/** @var File|null $file */
 		$file = $calls[0]['file'] ?? null;
 		$this->assertInstanceOf( File::class, $file, 'the image must be attached as a real File part, not just named in the text prompt' );
-		$this->assertSame( 'https://example.test/image.png', $file->getUrl() );
+		$this->assertTrue( $file->isInline(), 'a LOCAL path must attach inline (base64) data, never a remote URL the provider has to download itself' );
+		$this->assertFalse( $file->isRemote() );
+		$this->assertNotEmpty( $file->getBase64Data() );
+	}
 
-		$this->assertStringNotContainsString( 'https://example.test/image.png', $calls[0]['prompt'], 'the URL should not need to be embedded in prose once the image is attached as a file' );
+	public function test_generate_alt_text_refuses_clearly_when_the_file_is_missing(): void {
+		$gateway = new AiClientMediaGateway();
+		$result  = $gateway->generateAltText( sys_get_temp_dir() . '/senroflux-does-not-exist.png' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'attachment_file_missing', $result->get_error_code() );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_prompt_builder_calls'], 'a missing file must never reach the model call at all' );
+	}
+
+	public function test_generate_image_flags_the_no_model_failure_as_unavailable(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_invalid_argument', 'No models found that support image_generation for this prompt.' );
+		};
+
+		$result = ( new AiClientMediaGateway() )->generateImage( 'a red bicycle' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'image_generation_unavailable', $result->get_error_code() );
+	}
+
+	public function test_generate_image_flags_a_thrown_no_model_exception_as_unavailable(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			throw new \WordPress\AiClient\Common\Exception\InvalidArgumentException( 'No models found for provider "openrouter" that support image_generation for this prompt.' );
+		};
+
+		$result = ( new AiClientMediaGateway() )->generateImage( 'a red bicycle' );
+
+		$this->assertSame( 'image_generation_unavailable', $result->get_error_code() );
+	}
+
+	public function test_generate_image_does_not_flag_a_timeout_or_other_invalid_argument(): void {
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_network_error', 'cURL error 28: Operation timed out' );
+		};
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_invalid_argument', 'The prompt is too long.' );
+		};
+		$GLOBALS['senroflux_test_prompt_builder_script'][] = static function () {
+			return new WP_Error( 'prompt_upstream_server_error', 'No models found that support image_generation.' );
+		};
+
+		$gateway = new AiClientMediaGateway();
+		foreach ( range( 1, 3 ) as $unused ) {
+			$this->assertNotSame( 'image_generation_unavailable', $gateway->generateImage( 'x' )->get_error_code() );
+		}
 	}
 }

@@ -50,7 +50,7 @@ final class SuggestionDecisionTest extends TestCase {
 			$store,
 			new ToolExecutor(),
 			new class() implements \Specflux\SenroFlux\Model\ModelGatewayInterface {
-				public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): \Specflux\SenroFlux\Model\ModelTurn|WP_Error {
+				public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools, ?array $model_preference = null ): \Specflux\SenroFlux\Model\ModelTurn|WP_Error {
 					return new WP_Error( 'unused', 'no model calls in this test' );
 				}
 			},

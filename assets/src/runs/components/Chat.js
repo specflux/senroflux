@@ -1,9 +1,11 @@
+import { useMemo } from '@wordpress/element';
 import { __, sprintf } from '@wordpress/i18n';
 import { groupSteps, stepText, isTerminalStatus } from '../utils';
 import PinnedPlan from './PinnedPlan';
 import LedgerGroup from './LedgerGroup';
 import ParkCard from './ParkCard';
 import SuggestionCard from './SuggestionCard';
+import ReportView from './ReportView';
 
 /**
  * The newest step of the kind matching the run's OWN park status. A question
@@ -75,6 +77,24 @@ function usageAgainstCeilings( run, steps ) {
 }
 
 /**
+ * The pinned model's display name: `run.model` is `{ provider, id } |
+ * null` — `null` means the run started (or, for a resumed/follow-up run,
+ * inherited) Automatic. A non-null pair whose id no longer appears in
+ * `modelChoices` (the provider was since deconfigured, or the model retired
+ * from that provider's list) falls back to the raw id rather than hiding the
+ * pin, since the run still ran on SOME model and that is worth showing even
+ * unresolved.
+ */
+function modelLabel( run, modelChoices ) {
+	if ( ! run.model || ! run.model.id ) {
+		return __( 'Automatic', 'senroflux' );
+	}
+	const provider = ( modelChoices || {} )[ run.model.provider ];
+	const match = provider && ( provider.models || [] ).find( ( m ) => m.id === run.model.id );
+	return match ? match.name : run.model.id;
+}
+
+/**
  * The messenger chat pane (S10): goal + model bubbles, ledger groups for
  * consecutive tool calls, an inline park card, and the pinned plan. The
  * message box lives one level up, in `App` — it is a SINGLE persistent
@@ -91,7 +111,35 @@ function usageAgainstCeilings( run, steps ) {
  * @param {Function} [props.onCancel]            `() => Promise` for the Cancel button.
  * @param {boolean}  [props.busy]                True while a tick/cancel is in flight.
  * @param {number}   [props.tickCount]           How many tick round-trips this run has sent this page-load (the "Tick N" bubble).
+ * @param {Object}   [props.modelChoices]        `senrofluxRunsConfig.modelChoices`, used only to resolve `run.model`'s display name.
+ * @param {boolean}  [props.canFollowUp]         The viewer holds the run's pack capability (S20); offers "Start a follow-up" on a terminal run.
+ * @param {Function} [props.onFollowUp]          `( run ) => void` — the follow-up affordance's click.
  */
+/**
+ * The plan card's payload: the stored plan step carries only the plan
+ * (goal, steps, assumptions), so the server's plan-park UI facts
+ * (`preapprove_available`, ...) are merged in — but only when they describe
+ * THIS step, never a stale earlier plan's.
+ */
+function planCardPayload( step, planUi ) {
+	if ( 'plan' !== step.kind || ! planUi || planUi.step_id !== step.seq ) {
+		return step.message;
+	}
+	return { ...step.message, ...planUi };
+}
+
+/**
+ * The approval card's payload: the stored approval step has only the raw
+ * arguments, so the server's `ui.approval` (the pack's human summary) is
+ * merged in — only when it describes THIS parked approval.
+ */
+function approvalCardPayload( step, approvalUi ) {
+	if ( 'approval' !== step.kind || ! approvalUi || approvalUi.approval_id !== step.message?.approval_id ) {
+		return step.message;
+	}
+	return { ...step.message, summary: approvalUi.summary };
+}
+
 export default function Chat( {
 	run,
 	steps,
@@ -102,9 +150,20 @@ export default function Chat( {
 	onCancel,
 	busy,
 	tickCount,
+	modelChoices,
+	canFollowUp,
+	onFollowUp,
+	planUi,
+	approvalUi,
 } ) {
 	const entries = groupSteps( steps );
 	const park = openPark( run, steps );
+	// Memoised: ParkCard re-focuses its heading whenever `payload` changes
+	// identity, so a fresh object per render would steal focus from Approve.
+	const approvalPayload = useMemo(
+		() => ( park && 'approval' === park.kind ? approvalCardPayload( park, approvalUi ) : null ),
+		[ park, approvalUi ]
+	);
 	const plan = currentPlan( run, steps );
 	const suggestionsBySeq = new Map( ( suggestions || [] ).map( ( s ) => [ s.seq, s ] ) );
 
@@ -114,6 +173,19 @@ export default function Chat( {
 		<div className="senroflux-chat">
 			<div className="senroflux-chat-header">
 				<h1 className="senroflux-run-heading" dir="auto">{ run.goal }</h1>
+				{ /* S22 pseudo-locale: the model NAME half of this line is
+				 * data (mechanically resolved from `run.model`, same as
+				 * `LedgerGroup`'s ability labels), so only that half carries
+				 * `data-senroflux-content`/`dir="auto"` — "Model: " itself is
+				 * translatable chrome, same split `withheld_roles` above
+				 * does not need since a role list has no independent bidi
+				 * direction of its own the way a model name might. */ }
+				<p className="senroflux-run-model">
+					{ __( 'Model:', 'senroflux' ) }{ ' ' }
+					<span data-senroflux-content dir="auto">
+						{ modelLabel( run, modelChoices ) }
+					</span>
+				</p>
 				{ park && (
 					<button
 						type="button"
@@ -135,20 +207,25 @@ export default function Chat( {
 			 * S6 disclosure: a role the starter lacks the capability for is
 			 * withheld from the run's tool surface — without this line the run
 			 * silently has fewer abilities than the pack advertises and the
-			 * viewer has no way to know why something wasn't attempted. A
-			 * viewer holding every capability sees nothing (no empty
-			 * paragraph either).
+			 * viewer has no way to know why something wasn't attempted. The
+			 * line is the PACK's own words (`withheld_notice`, from
+			 * `Pack::withheldRoleNotice()`): the harness never learns what a
+			 * role does. A pack with nothing to say gets a generic fallback
+			 * rather than silence. A viewer holding every capability sees
+			 * nothing (no empty paragraph either).
 			 */ }
 			{ Array.isArray( run.withheld_roles ) && run.withheld_roles.length > 0 && (
 				<p className="senroflux-withheld-roles">
-					{ sprintf(
-						/* translators: %s: comma-separated list of withheld role names. */
-						__(
-							'Some abilities are off for this run (your account is missing the capability they need): %s',
-							'senroflux'
-						),
-						run.withheld_roles.join( ', ' )
-					) }
+					{ run.withheld_notice
+						? run.withheld_notice
+						: sprintf(
+								/* translators: %s: comma-separated list of withheld role names. */
+								__(
+									'Some abilities are off for this run (your account is missing the capability they need): %s',
+									'senroflux'
+								),
+								run.withheld_roles.join( ', ' )
+						  ) }
 				</p>
 			) }
 			<PinnedPlan plan={ plan } steps={ steps } />
@@ -173,7 +250,7 @@ export default function Chat( {
 							<ParkCard
 								key={ index }
 								kind={ step.kind }
-								payload={ step.message }
+								payload={ 'approval' === step.kind ? approvalPayload : planCardPayload( step, planUi ) }
 								gateMode={ run.gate_mode }
 								onResolve={ onResolvePark }
 								busy={ busy }
@@ -225,6 +302,24 @@ export default function Chat( {
 					</div>
 				) }
 			</div>
+			{ /* A failed run says why (e.g. the model went silent twice), when the server gave a reason. */ }
+			{ 'failed' === run.status && run.error && 'string' === typeof run.error.message && '' !== run.error.message && (
+				<p className="senroflux-run-error" role="alert" dir="auto">
+					{ run.error.message }
+				</p>
+			) }
+			{ /* 0.3 S12 (stage 22b): the harness-built report, once the run is terminal. */ }
+			{ isTerminalStatus( run.status ) && run.report && 'object' === typeof run.report && (
+				<ReportView report={ run.report } steps={ steps } />
+			) }
+			{ /* 0.3 S20 (stage 22b): a follow-up starts from a finished, cancelled or failed run. */ }
+			{ isTerminalStatus( run.status ) && canFollowUp && onFollowUp && (
+				<div className="senroflux-followup-actions">
+					<button type="button" className="button" onClick={ () => onFollowUp( run ) }>
+						{ __( 'Start a follow-up', 'senroflux' ) }
+					</button>
+				</div>
+			) }
 			{ /* Live-review finding: a terminal run shows NO Cancel button — there is
 			 * simply no button element rendered here for a terminal status, not a
 			 * disabled one. */ }

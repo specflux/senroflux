@@ -176,12 +176,12 @@ final class Checks {
 			'senroflux/agent-safety',
 			SetupCheck::ADVISORY,
 			false,
-			__( 'Install Agent Safety for approval and audit governance on every write.', 'senroflux' ),
+			__( 'Install Agent Tollgate for approval and audit governance on every write.', 'senroflux' ),
 			function_exists( 'admin_url' )
 				? admin_url( 'plugin-install.php?tab=plugin-information&plugin=agent-safety' )
 				: null,
 			'install_plugins',
-			__( 'Ask an administrator to install the Agent Safety plugin.', 'senroflux' ),
+			__( 'Ask an administrator to install the Agent Tollgate plugin.', 'senroflux' ),
 			'senroflux_agent_safety_missing'
 		);
 	}

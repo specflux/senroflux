@@ -40,7 +40,7 @@ final class SuggestBriefToolTest extends TestCase {
 	}
 
 	public function test_over_the_cap_is_invalid(): void {
-		$result = SuggestBriefTool::validate( array( 'text' => str_repeat( 'a', SuggestBriefTool::MAX_TEXT_CHARS + 1 ) ) );
+		$result = SuggestBriefTool::validate( array( 'text' => str_repeat( 'a', SuggestBriefTool::MAX_TEXT_CHARS * 2 ) ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
 	}

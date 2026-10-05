@@ -45,6 +45,14 @@ if ( ! function_exists( 'sanitize_text_field' ) ) {
 	}
 }
 
+if ( ! function_exists( 'esc_url_raw' ) ) {
+	/** Protocol-shim: drops anything that isn't http(s), relative or a fragment. */
+	function esc_url_raw( string $url ): string {
+		$url = trim( $url );
+		return ( '' === $url || preg_match( '#^(https?://|/|\#)#i', $url ) ) ? $url : '';
+	}
+}
+
 if ( ! function_exists( 'sanitize_key' ) ) {
 	/** Lower-cases and strips to `[a-z0-9_-]`, same shape as WP core's own. */
 	function sanitize_key( string $key ): string {
@@ -122,6 +130,15 @@ if ( ! function_exists( 'wp_enqueue_style' ) ) {
 	}
 }
 
+if ( ! function_exists( 'wp_style_add_data' ) ) {
+	/** No-op shim. */
+	function wp_style_add_data( ...$args ): bool {
+		unset( $args );
+
+		return true;
+	}
+}
+
 if ( ! function_exists( 'wp_enqueue_script' ) ) {
 	/** No-op shim. */
 	function wp_enqueue_script( ...$args ): void {
@@ -130,9 +147,17 @@ if ( ! function_exists( 'wp_enqueue_script' ) ) {
 }
 
 if ( ! function_exists( 'wp_localize_script' ) ) {
-	/** No-op shim. */
+	/**
+	 * Records the last payload localized under each JS object name, keyed by
+	 * `$object_name` (e.g. `senrofluxRunsConfig`) — a test wanting to assert
+	 * on what a screen handed its script reads
+	 * `$GLOBALS['senroflux_test_localized'][ $object_name ]` rather than
+	 * mocking the WP function itself.
+	 */
 	function wp_localize_script( string $handle, string $object_name, array $data ): bool {
-		unset( $handle, $object_name, $data );
+		unset( $handle );
+
+		$GLOBALS['senroflux_test_localized'][ $object_name ] = $data;
 
 		return true;
 	}
@@ -160,5 +185,24 @@ if ( ! function_exists( 'esc_textarea' ) ) {
 	/** Same shape as esc_html (a textarea body is HTML-escaped, no attribute quoting needed). */
 	function esc_textarea( string $text ): string {
 		return htmlspecialchars( $text, ENT_QUOTES, 'UTF-8' );
+	}
+}
+
+if ( ! function_exists( 'checked' ) ) {
+	/** WP's `checked()` helper: the attribute string, echoed unless `$display` is false. */
+	function checked( mixed $checked, mixed $current = true, bool $display = true ): string {
+		$result = (string) $checked === (string) $current ? " checked='checked'" : '';
+		if ( $display ) {
+			echo $result; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- test shim of core's own helper.
+		}
+
+		return $result;
+	}
+}
+
+if ( ! function_exists( 'register_setting' ) ) {
+	/** Test knob: records each registration under its option name. */
+	function register_setting( string $group, string $option, array $args = array() ): void {
+		$GLOBALS['senroflux_test_registered_settings'][ $option ] = array( 'group' => $group ) + $args;
 	}
 }

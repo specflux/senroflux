@@ -190,4 +190,94 @@ final class AttachmentVerifyTest extends TestCase {
 		$row    = $report['changes'][0] ?? array();
 		$this->assertTrue( $row['verified'] ?? false, 'defect 2: read-media must count as verification' );
 	}
+
+	/**
+	 * Smoke run (2026-09-26): a finished run's plan card read "~0 / 2". The
+	 * plan names pack verbs (`posts/update-alt`) but a tool_result only
+	 * carried the function name (`wpab__senroflux__update-alt`), so the
+	 * Runs screen could never match an executed call to its plan step.
+	 */
+	public function test_tool_results_record_the_plan_verb_they_ran_as(): void {
+		$this->seedAttachment( 63 );
+		$run_id = $this->createRun();
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart(
+				new FunctionCall(
+					'call_alt',
+					'wpab__senroflux__update-alt',
+					array(
+						'attachment_id' => 63,
+						'alt'           => 'a red bicycle',
+					)
+				)
+			),
+			new MessagePart( new FunctionCall( 'call_read', 'wpab__senroflux__read-media', array( 'attachment_id' => 63 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$verbs = array();
+		foreach ( $this->store->getSteps( $run_id ) as $step ) {
+			if ( StepKind::ToolResult === $step->kind ) {
+				$verbs[] = $step->messageArray['plan_verb'] ?? null;
+			}
+		}
+		$this->assertSame( array( 'posts/update-alt', 'posts/read-media' ), $verbs );
+	}
+
+	/**
+	 * Live run evidence (2026-09-27 baseline, scenario-7-1): with
+	 * {@see Media}'s run context wired the way `Plugin::tick()` wires it for
+	 * every real tick (unlike the test above, which resets it to null and so
+	 * never exercises the S5 attachment-cap bookkeeping), an `update-alt` +
+	 * `read-media` pair still surfaced a false verify nudge and a phantom
+	 * `media-alt:<id>` change row stuck at `verified: false` forever.
+	 *
+	 * Root cause: `Media::recordAltWrite()` stores a bare `true` under
+	 * `media-alt:<id>` in the SAME `objects_json` map {@see Tracker} and
+	 * {@see Report} treat as the generic write/verify record — but that key
+	 * is never qualified with {@see Media::OBJECT_ID_PREFIX}, so no read ever
+	 * verifies it, and both {@see Tracker::unverified()} and
+	 * {@see Report::build()} fail-close a non-array entry to permanently
+	 * unverified. The cap bookkeeping must stay invisible to that machinery.
+	 */
+	public function test_update_alt_with_real_media_run_context_verifies_with_no_phantom_row(): void {
+		$this->seedAttachment( 63 );
+		$run_id = $this->createRun();
+
+		// Mirrors Plugin::tick()'s wiring: the attachment-cap bookkeeping only
+		// engages once Media has a real run context, exactly like production.
+		Media::useRunContext( $run_id, $this->store );
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Saving alt text, then confirming it saved.' ),
+			new MessagePart(
+				new FunctionCall(
+					'call_alt',
+					'wpab__senroflux__update-alt',
+					array(
+						'attachment_id' => 63,
+						'alt'           => 'a red bicycle',
+					)
+				)
+			),
+			new MessagePart( new FunctionCall( 'call_read', 'wpab__senroflux__read-media', array( 'attachment_id' => 63 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame(
+			'completed',
+			$result['run']['status'] ?? null,
+			'a read-back after the write must complete the run without a verify nudge'
+		);
+
+		$changes = $result['ui']['report']['changes'] ?? array();
+		$this->assertCount( 1, $changes, 'the attachment-cap bookkeeping must never open its own report row' );
+		$this->assertTrue( $changes[0]['verified'] ?? null, 'the one row that exists must be verified' );
+	}
 }

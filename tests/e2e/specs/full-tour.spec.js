@@ -98,6 +98,19 @@ test.describe( 'S10/S12 full run tour (built-in mode)', () => {
 		// --- Terminal run: no Cancel button, report/report-a11y --------
 		await expect( page.locator( '.senroflux-run-actions button' ) ).toHaveCount( 0 );
 		await expect( page.locator( '.senroflux-chat-stream' ) ).toContainText( 'All done' );
+
+		// --- The report view (S12, stage 22b) ----------------------------
+		// Built-in mode: the gate-mode line and "approvals recorded only on
+		// this page"; the one change the run made, re-read, so a verified row.
+		const report = page.locator( '.senroflux-report' );
+		await expect( report ).toBeVisible();
+		await expect( report.locator( '.senroflux-report-summary' ) ).toHaveText( '1 change' );
+		await expect( report.locator( '.senroflux-report-gate' ) ).toContainText( 'Gate mode: Built-in approvals' );
+		await expect( report.locator( '.senroflux-report-gate-note' ) ).toHaveText( 'Approvals for this run are recorded only on this page.' );
+		const verifiedRow = report.locator( '.senroflux-report-change.is-verified' );
+		await expect( verifiedRow ).toHaveCount( 1 );
+		await expect( verifiedRow ).toContainText( 'Verified' );
+		await expect( report.locator( '.senroflux-report-change.is-unchecked' ) ).toHaveCount( 0 );
 		await assertNoSeriousA11y( page, 'terminal report view' );
 	} );
 } );

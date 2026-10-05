@@ -4,10 +4,39 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # S22 weekly gate: Plugin Check against the LATEST action release, so a
+    # new check added upstream surfaces even between our own commits,
+    # without ever blocking a push/PR (see plugin-check-latest below).
+    - cron: '23 6 * * 1'
+  workflow_call:
+    inputs:
+      zip-artifact:
+        description: >
+          Name of a zip artifact already uploaded earlier in this workflow
+          run (by release.yml's build job). When set, the plugin-check job
+          downloads and checks THAT zip instead of building its own, so the
+          release gate builds the shipped zip exactly once and reuses it
+          for both Plugin Check and the GitHub Release. Left empty for the
+          ordinary push/PR/schedule triggers, which have no sibling build
+          job to reuse and build their own zip via bin/build-zip.sh.
+        required: false
+        type: string
+        default: ''
 
 jobs:
+  # S22 static gate: PHPUnit on the plugin's PHP floor (8.1, per "Requires
+  # PHP" in senroflux.php) and the newest stable PHP (8.4), plus PHPCS and
+  # PHPStan level 8 (phpstan.neon.dist) — `composer check` runs all three,
+  # mirroring agent-safety's own ci.yml `check` job.
   check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['8.1', '8.4']
+    name: PHP ${{ matrix.php }}
     steps:
       # senroflux lands in a subdirectory, not at $GITHUB_WORKSPACE, so
       # agent-safety can be checked out as its sibling — the exact layout
@@ -28,7 +57,7 @@ jobs:
 
       - uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php }}
           tools: composer
           coverage: none
 
@@ -54,6 +83,7 @@ jobs:
           SENROFLUX_REQUIRE_AS_FIXTURE: '1'
 
   editor-parity:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -111,8 +141,29 @@ jobs:
             exit 1
           fi
 
+  # S22 end-to-end gate: Playwright on wp-env, WordPress stable x trunk,
+  # WooCommerce active in every leg (.wp-env.json's "plugins" entry — the
+  # newest wordpress.org release, per "supported ... on the newest
+  # WooCommerce only"). Both gate modes (built-in / Agent Safety active) run
+  # WITHIN each leg already: playwright.config.js's project-dependency chain
+  # (setup-built-in -> built-in -> setup-agent-safety -> agent-safety) is
+  # what keeps both modes sharing one wp-env install without racing each
+  # other, and splitting gate mode into its own matrix axis here would mean
+  # running that chain twice per WP version for no extra coverage — so
+  # "stable x trunk x both gate modes" is satisfied by 2 CI legs, not 4.
   e2e:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        wp: [stable, trunk]
+    name: E2E (WordPress ${{ matrix.wp }})
+    env:
+      # wp-env reads WP_ENV_CORE to override .wp-env.json's "core": null
+      # (bundled/stable) — WordPress/WordPress#master is trunk. Left unset
+      # (empty string) for the stable leg so wp-env uses its own default.
+      WP_ENV_CORE: ${{ matrix.wp == 'trunk' && 'WordPress/WordPress#master' || '' }}
     steps:
       # Same subdirectory layout as `check`: .wp-env.json's relative sibling
       # mappings ("../agent-safety/plugin", "../research/abilities-api")
@@ -187,6 +238,8 @@ jobs:
       # No manual plugin activation here on purpose (S19a): activation is
       # the job of tests/e2e/support/global-setup.js, so this step proves
       # the same cold-boot path a contributor's first run goes through.
+      # WooCommerce is one of ALWAYS_ACTIVE_PLUGINS there (S22), so every
+      # spec in this run — either gate mode — has Woo on.
       - name: Playwright e2e suite
         working-directory: senroflux
         run: npx playwright test
@@ -197,27 +250,71 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.wp }}
           path: |
             senroflux/test-results
           retention-days: 7
 
+  # S22: Plugin Check, pinned version, zero errors AND zero warnings,
+  # against the BUILT zip — never against the working tree, since the zip
+  # (bin/build-zip.sh, the single allowlisted build) is the allowlisted
+  # subset that actually ships.
   plugin-check:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
+    name: Plugin Check
     steps:
       - uses: actions/checkout@v4
 
-      # WordPress.org's official static checks (S12): readme, headers,
-      # escaping, i18n usage.
-      # Stage a clean, distribution-shaped copy (no tests/, configs, CI) so
-      # the checker sees exactly what ships in the zip.
-      - name: Assemble distribution copy
-        run: |
-          mkdir -p build/senroflux/assets
-          cp -R src readme.txt senroflux.php LICENSE build/senroflux/
-          cp -R assets/. build/senroflux/assets/
-          rm -f build/senroflux/.DS_Store
-
-      - uses: wordpress/plugin-check-action@v1
+      - name: Download the release build's zip
+        if: inputs.zip-artifact != ''
+        uses: actions/download-artifact@v4
         with:
-          build-dir: build/senroflux
+          name: ${{ inputs.zip-artifact }}
+          path: build-artifact
+
+      - name: Build the zip (bin/build-zip.sh, the single allowlisted build)
+        if: inputs.zip-artifact == ''
+        run: bin/build-zip.sh
+
+      - name: Locate and extract the zip
+        id: zip
+        run: |
+          if [ -n "${{ inputs.zip-artifact }}" ]; then
+            ZIP_PATH=$(find build-artifact -maxdepth 1 -name '*.zip' | head -1)
+          else
+            ZIP_PATH=$(find . -maxdepth 1 -name 'senroflux-*.zip' | head -1)
+          fi
+          echo "path=$ZIP_PATH" >> "$GITHUB_OUTPUT"
+          mkdir -p extracted
+          unzip -q "$ZIP_PATH" -d extracted
+
+      - name: Run Plugin Check
+        uses: wordpress/plugin-check-action@v1.1.9
+        with:
+          build-dir: './extracted/senroflux'
+
+  # S22 weekly, non-blocking: the latest Plugin Check action/checks against
+  # our own zip, so a NEW check added upstream is visible before it ever
+  # turns the pinned gate above red on some unrelated commit.
+  plugin-check-latest:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    name: Plugin Check (latest, weekly)
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the zip (bin/build-zip.sh, the single allowlisted build)
+        run: bin/build-zip.sh
+
+      - name: Extract the zip
+        run: |
+          ZIP_PATH=$(find . -maxdepth 1 -name 'senroflux-*.zip' | head -1)
+          mkdir -p extracted
+          unzip -q "$ZIP_PATH" -d extracted
+
+      - name: Run Plugin Check (latest release)
+        uses: wordpress/plugin-check-action@v1
+        with:
+          build-dir: './extracted/senroflux'

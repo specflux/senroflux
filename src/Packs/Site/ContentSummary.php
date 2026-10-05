@@ -5,11 +5,26 @@
  * `pages/publish`/`pages/update-live` (those stay
  * {@see \Specflux\SenroFlux\Packs\Pages\PublishSummary}'s, unchanged).
  *
- * TARGET REPO PATH: src/Packs/Site/ContentSummary.php
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Site;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Builds the AS-15 content-pack approval summaries.
  *
  * Hooks the same `agent_safety_approval_summary` filter (AS-11/AS-15) for
- * three cases:
+ * four cases:
  *
+ *   - `senroflux/create-post` and `senroflux/update-post` when the call
+ *     names `categories` or `tags`: the terms the write will set. Without
+ *     them there is no card here (the call stays as it was), and the
+ *     publish-post card below carries the same clause.
  *   - `senroflux/publish-post` when the target object is an ACTUAL blog
  *     post (`post_type` `post`, a posts-pack run): title + preview link,
  *     "as AS-11 does for pages" (S15/AS-15).
@@ -39,19 +54,6 @@
  * The call's own arguments are read only for the PROPOSED half, and a
  * proposed page id is itself resolved back to a title server-side rather
  * than trusting anything past the id.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Site;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Builds the AS-15 content-pack approval summaries.
  */
 final class ContentSummary {
 
@@ -84,6 +86,8 @@ final class ContentSummary {
 
 		return match ( self::baseName( $verb ) ) {
 			'publish-post' => self::publishPostCard( $summary, $input ),
+			'create-post' => self::termsCard( $summary, $input, null ),
+			'update-post' => self::termsCard( $summary, $input, self::storedPost( $input ) ),
 			'update-navigation' => self::navigationCard( $input ),
 			'set-front-page' => self::frontPageCard( $input ),
 			default => $summary,
@@ -117,7 +121,10 @@ final class ContentSummary {
 		$preview = function_exists( 'get_preview_post_link' ) ? (string) get_preview_post_link( $id ) : '';
 		$edit    = function_exists( 'get_edit_post_link' ) ? (string) get_edit_post_link( $id, 'raw' ) : '';
 
-		$row = sprintf( 'Publish &quot;%s&quot; (post)', esc_html( $title ) );
+		$when = ( 'future' === ( $input['status'] ?? null ) && is_string( $input['date'] ?? null ) ) ? trim( $input['date'] ) : '';
+		$row  = '' !== $when
+			? sprintf( 'Schedule &quot;%1$s&quot; (post) for %2$s (site time)', esc_html( $title ), esc_html( $when ) )
+			: sprintf( 'Publish &quot;%s&quot; (post)', esc_html( $title ) );
 		if ( '' !== $preview ) {
 			$row .= sprintf( ' — <a href="%s">preview</a>', esc_url( $preview ) );
 		}
@@ -125,7 +132,75 @@ final class ContentSummary {
 			$row .= sprintf( ' · <a href="%s">edit</a>', esc_url( $edit ) );
 		}
 
-		return $row;
+		return $row . self::termsClause( $input );
+	}
+
+	/**
+	 * `create-post` / `update-post` carrying `categories` or `tags`: what the
+	 * write is, and the terms it will set. Passthrough when it sets none.
+	 * `$post` is the stored target of an update, null for a create.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termsCard( string $summary, array $input, ?object $post ): string {
+		$clause = self::termsClause( $input );
+		if ( '' === $clause ) {
+			return $summary;
+		}
+
+		if ( null === $post ) {
+			$title = is_string( $input['title'] ?? null ) && '' !== trim( $input['title'] ) ? trim( $input['title'] ) : __( 'Untitled', 'senroflux' );
+
+			return sprintf( 'Create draft &quot;%s&quot; (post)', esc_html( $title ) ) . $clause;
+		}
+
+		$title = self::field( $post, 'post_title' );
+		$title = is_string( $title ) && '' !== $title ? $title : __( 'Untitled', 'senroflux' );
+
+		return sprintf( 'Update &quot;%s&quot; (post)', esc_html( $title ) ) . $clause;
+	}
+
+	/**
+	 * The stored post an `id` input names, when it is an actual blog post.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function storedPost( array $input ): ?object {
+		if ( ! isset( $input['id'] ) || ! is_numeric( $input['id'] ) || ! function_exists( 'get_post' ) ) {
+			return null;
+		}
+
+		$post = get_post( (int) $input['id'] );
+
+		return is_object( $post ) && 'post' === ( self::field( $post, 'post_type' ) ?? '' ) ? $post : null;
+	}
+
+	/**
+	 * " — categories: "A", "B" — tags: "x"" for the term names the call sets,
+	 * escaped, or '' when it names none. Names come from the call: they are
+	 * what will be set, shown beside the approval, not provenance.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function termsClause( array $input ): string {
+		$clause = '';
+		foreach ( array( 'categories', 'tags' ) as $field ) {
+			if ( ! is_array( $input[ $field ] ?? null ) ) {
+				continue;
+			}
+
+			$names = array();
+			foreach ( $input[ $field ] as $name ) {
+				if ( is_string( $name ) && '' !== trim( $name ) ) {
+					$names[] = sprintf( '&quot;%s&quot;', esc_html( trim( $name ) ) );
+				}
+			}
+			if ( array() !== $names ) {
+				$clause .= sprintf( ' — %1$s: %2$s', $field, implode( ', ', $names ) );
+			}
+		}
+
+		return $clause;
 	}
 
 	/**
@@ -140,9 +215,56 @@ final class ContentSummary {
 
 		$row  = 'Update site navigation';
 		$row .= sprintf( ' — current: %s', self::itemLabels( $current ) );
-		$row .= sprintf( ' — proposed: %s', self::itemLabels( $proposed ) );
+		$row .= sprintf( ' — proposed: %s', self::itemLabels( Navigation::orderedItems( $proposed ) ) );
+
+		$removed = self::removedLabels( $current, $proposed );
+		if ( array() !== $removed ) {
+			$row .= sprintf( ' — removes: %s', implode( ', ', $removed ) );
+		}
 
 		return $row;
+	}
+
+	/**
+	 * The CURRENT items the proposed list leaves out, as escaped quoted
+	 * paths. A page item is matched by its page id, a custom link by its
+	 * url — the label may be reworded without it counting as removed. Shown,
+	 * never refused: a person may want the removal.
+	 *
+	 * @param list<array<string,mixed>> $current  The current items.
+	 * @param array<int|string,mixed>   $proposed The call's proposed items.
+	 * @return list<string>
+	 */
+	private static function removedLabels( array $current, array $proposed ): array {
+		$page_ids = array();
+		$urls     = array();
+		foreach ( $proposed as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			if ( isset( $item['page_id'] ) && is_numeric( $item['page_id'] ) ) {
+				$page_ids[ (int) $item['page_id'] ] = true;
+			}
+			if ( isset( $item['url'] ) && is_string( $item['url'] ) ) {
+				$urls[ rtrim( $item['url'], '/' ) ] = true;
+			}
+		}
+
+		$removed = array();
+		foreach ( $current as $item ) {
+			$page_id = $item['page_id'] ?? null;
+			if ( is_int( $page_id ) && 0 !== $page_id ) {
+				$kept = isset( $page_ids[ $page_id ] );
+			} else {
+				$url  = is_string( $item['url'] ?? null ) ? rtrim( $item['url'], '/' ) : '';
+				$kept = '' === $url || isset( $urls[ $url ] );
+			}
+			if ( ! $kept ) {
+				$removed[] = self::itemLabels( array( $item ), $current );
+			}
+		}
+
+		return $removed;
 	}
 
 	/**
@@ -239,23 +361,45 @@ final class ContentSummary {
 
 	/**
 	 * A comma-joined, escaped list of item labels, or a placeholder when
-	 * there are none.
+	 * there are none. A nested item reads as its path ("Services › Web
+	 * Design"), resolved through the `key`/`parent` the items carry.
 	 *
-	 * @param array<int|string,mixed> $items {@see Navigation}'s item shape,
-	 *                                       or a call's proposed item list —
-	 *                                       each entry is checked, never
-	 *                                       assumed, since the proposed side
-	 *                                       comes straight from the call.
+	 * @param array<int|string,mixed>       $items   {@see Navigation}'s item shape,
+	 *                                               or a call's proposed item list —
+	 *                                               each entry is checked, never
+	 *                                               assumed, since the proposed side
+	 *                                               comes straight from the call.
+	 * @param array<int|string,mixed>|null  $context The full list the paths resolve
+	 *                                               against, when `$items` is a subset.
 	 */
-	private static function itemLabels( array $items ): string {
+	private static function itemLabels( array $items, ?array $context = null ): string {
 		if ( array() === $items ) {
 			return esc_html__( '(none)', 'senroflux' );
 		}
 
+		$by_key = array();
+		foreach ( $context ?? $items as $item ) {
+			if ( is_array( $item ) && is_string( $item['key'] ?? null ) ) {
+				$by_key[ $item['key'] ] = $item;
+			}
+		}
+
 		$labels = array();
 		foreach ( $items as $item ) {
-			$label    = is_array( $item ) && is_string( $item['label'] ?? null ) ? $item['label'] : '';
-			$labels[] = sprintf( '&quot;%s&quot;', esc_html( $label ) );
+			$path   = array();
+			$seen   = array();
+			$cursor = is_array( $item ) ? $item : array();
+			while ( true ) {
+				$path[] = esc_html( is_string( $cursor['label'] ?? null ) ? $cursor['label'] : '' );
+				$parent = $cursor['parent'] ?? null;
+				if ( ! is_string( $parent ) || ! isset( $by_key[ $parent ] ) || isset( $seen[ $parent ] ) ) {
+					break;
+				}
+				$seen[ $parent ] = true;
+				$cursor          = $by_key[ $parent ];
+			}
+
+			$labels[] = sprintf( '&quot;%s&quot;', implode( ' › ', array_reverse( $path ) ) );
 		}
 
 		return implode( ', ', $labels );

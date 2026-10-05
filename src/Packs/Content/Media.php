@@ -10,7 +10,10 @@ declare ( strict_types = 1 );
 namespace Specflux\SenroFlux\Packs\Content;
 
 use Specflux\SenroFlux\Model\AiClientMediaGateway;
+use Specflux\SenroFlux\Model\ImageCapability;
 use Specflux\SenroFlux\Model\MediaGatewayInterface;
+use Specflux\SenroFlux\Model\OpenverseStockImageGateway;
+use Specflux\SenroFlux\Model\StockImageGatewayInterface;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\RunStore;
 use WP_Error;
@@ -21,10 +24,12 @@ defined( 'ABSPATH' ) || exit;
 /**
  * Registers the shared media/attachment/term abilities.
  *
- * stage 6; `read-media` added by the report defect fix): `media-search`,
- * `media-upload`, `generate-image`, `generate-alt-text`,
+ * stage 6; `read-media` added by the report defect fix; `stock-image-search`/
+ * `stock-image-import` added by the stock-photo-fallback build plan):
+ * `media-search`, `media-upload`, `generate-image`, `generate-alt-text`,
  * `set-featured-image`, `list-missing-alt`, `update-alt`, `read-media`,
- * `set-terms`, `create-term`.
+ * `set-terms`, `create-term`, `list-terms`, `stock-image-search`,
+ * `stock-image-import`.
  *
  * TARGET REPO PATH: src/Packs/Content/Media.php
  *
@@ -80,6 +85,16 @@ final class Media {
 	public const ATTACHMENT_CAP = 25;
 
 	/**
+	 * The taxonomies `list-terms` answers for: the two a post carries.
+	 */
+	private const LISTABLE_TAXONOMIES = array( 'category', 'post_tag' );
+
+	/**
+	 * `list-terms` never returns more than this many terms.
+	 */
+	private const LIST_TERMS_LIMIT = 50;
+
+	/**
 	 * The `media-alt:` key prefix inside a run's `objects_json` map — kept
 	 * distinct from a post/page id recorded by {@see Abilities}. Pack-internal
 	 * bookkeeping ONLY, for the S5 25-attachment cap; never surfaced in the
@@ -100,6 +115,82 @@ final class Media {
 	public const OBJECT_ID_PREFIX = 'attachment:';
 
 	/**
+	 * The same qualification for a term `create-term` made (proof-run
+	 * defect fix): a term id shares its number space with posts and
+	 * attachments, and no ability reads a term back, so
+	 * {@see \Specflux\SenroFlux\Packs\ObjectLookup} resolves it through
+	 * {@see termLookup()} and its report row says it was not checked.
+	 */
+	public const TERM_ID_PREFIX = 'term:';
+
+	/**
+	 * Cap on the file `generateAltText()` will inline as base64 — well above
+	 * anything a WordPress intermediate size produces, but an explicit fail
+	 * closed rather than an unbounded request body should a site's
+	 * intermediate sizes be disabled and the ORIGINAL file used instead.
+	 */
+	private const ALT_TEXT_MAX_FILE_BYTES = 10 * 1024 * 1024;
+
+	/**
+	 * `stock-image-import` refuses a 9th call in one run — the escape hatch
+	 * this pairs with ({@see noImageSourceLeft()}) is meant to unblock a run
+	 * that genuinely cannot get an image, not to substitute stock search for
+	 * unbounded free image sourcing. Live J5: at 3, a four-page skeleton
+	 * (every page opens with a hero that needs its own image) dead-ended on
+	 * the fourth hero and burned its token budget; 8 covers a hero plus one
+	 * more image on each of four pages.
+	 */
+	public const STOCK_IMPORT_CAP = 8;
+
+	/**
+	 * 0.3 quality fix (stock image choice): live runs picked 3D renders,
+	 * illustrations and engravings for pages that needed a real photo — the
+	 * model only ever sees what {@see executeStockImageSearch()} returns, so
+	 * this filters the PROVIDER's results rather than relying on the model
+	 * to judge a title/tag itself. Matched as whole words/phrases (never a
+	 * bare substring — "illustrated guide" is a real photo's title, not a
+	 * drawing) against a result's title and tags, case-insensitively.
+	 *
+	 * @var list<string>
+	 */
+	private const NON_PHOTO_KEYWORDS = array(
+		'3d render',
+		'3d rendering',
+		'3d',
+		'illustration',
+		'engraving',
+		'drawing',
+		'vector',
+		'clip art',
+		'clipart',
+		'cartoon',
+		'painting',
+		'sculpture',
+		'statue',
+		'mannequin',
+		'cgi',
+		// Dated photos: 1918 Walter Reed shots reached a clinic's pages
+		// (live batch 2026-09-29-seed2).
+		'vintage',
+		'retro',
+		'antique',
+		'history',
+		'historical',
+		'black and white',
+	);
+
+	/**
+	 * `stock-image-import` records the provider id it downloaded under this
+	 * key (a plain string, alongside the full `_senroflux_stock_source`
+	 * record) so {@see usedStockImageIds()} can find every already-imported
+	 * image with one `get_posts()` meta lookup, without decoding the full
+	 * record for every attachment on the site.
+	 *
+	 * @var string
+	 */
+	private const STOCK_SOURCE_ID_META_KEY = '_senroflux_stock_source_id';
+
+	/**
 	 * Whether {@see register()} has run for this request.
 	 */
 	private static bool $registered = false;
@@ -108,6 +199,11 @@ final class Media {
 	 * Test seam: overrides the real {@see AiClientMediaGateway}.
 	 */
 	private static ?MediaGatewayInterface $gateway = null;
+
+	/**
+	 * Test seam: overrides the real {@see OpenverseStockImageGateway}.
+	 */
+	private static ?StockImageGatewayInterface $stock_gateway = null;
 
 	/**
 	 * The ticking run's id, or null outside one. Scoped per tick by
@@ -138,8 +234,9 @@ final class Media {
 	 * Forget the per-request registered flag (test-only).
 	 */
 	public static function reset(): void {
-		self::$registered = false;
-		self::$gateway    = null;
+		self::$registered    = false;
+		self::$gateway       = null;
+		self::$stock_gateway = null;
 	}
 
 	/**
@@ -147,6 +244,13 @@ final class Media {
 	 */
 	public static function setGateway( ?MediaGatewayInterface $gateway ): void {
 		self::$gateway = $gateway;
+	}
+
+	/**
+	 * Test seam: override the stock-image gateway. Null restores the real one.
+	 */
+	public static function setStockGateway( ?StockImageGatewayInterface $gateway ): void {
+		self::$stock_gateway = $gateway;
 	}
 
 	/**
@@ -188,7 +292,7 @@ final class Media {
 	}
 
 	/**
-	 * Register the ten abilities. Idempotent per request.
+	 * Register the thirteen abilities. Idempotent per request.
 	 */
 	public static function register(): void {
 		if ( self::$registered ) {
@@ -210,6 +314,9 @@ final class Media {
 		self::registerReadMedia();
 		self::registerSetTerms();
 		self::registerCreateTerm();
+		self::registerListTerms();
+		self::registerStockImageSearch();
+		self::registerStockImageImport();
 	}
 
 	// ------------------------------------------------------------------
@@ -241,10 +348,11 @@ final class Media {
 							'items' => array(
 								'type'       => 'object',
 								'properties' => array(
-									'id'    => array( 'type' => 'integer' ),
-									'url'   => array( 'type' => 'string' ),
-									'title' => array( 'type' => 'string' ),
-									'alt'   => array( 'type' => 'string' ),
+									'id'           => array( 'type' => 'integer' ),
+									'url'          => array( 'type' => 'string' ),
+									'title'        => array( 'type' => 'string' ),
+									'alt'          => array( 'type' => 'string' ),
+									'already_used' => array( 'type' => 'boolean' ),
 								),
 							),
 						),
@@ -672,6 +780,177 @@ final class Media {
 	}
 
 	/**
+	 * Tier-0 read: the names a post may be filed under. A model that cannot
+	 * see them guesses, and a guess at a category a Contributor may not
+	 * create is refused (live J7: create-term refused five times).
+	 */
+	private static function registerListTerms(): void {
+		wp_register_ability(
+			'senroflux/list-terms',
+			array(
+				'label'               => __( 'List terms', 'senroflux' ),
+				'description'         => __( 'List the existing categories or tags, most used first (up to 50), optionally narrowed by a search word. Call this before choosing terms for a post and reuse an existing name.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'required'             => array( 'taxonomy' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'taxonomy' => array(
+							'type' => 'string',
+							'enum' => self::LISTABLE_TAXONOMIES,
+						),
+						'search'   => array( 'type' => 'string' ),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'terms' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'terms' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'                 => 'object',
+								'required'             => array( 'name', 'count' ),
+								'additionalProperties' => false,
+								'properties'           => array(
+									'name'  => array( 'type' => 'string' ),
+									'count' => array( 'type' => 'integer' ),
+								),
+							),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeListTerms( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					return self::mayListTerms( is_array( $input ) ? $input : array() );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
+						'destructive' => false,
+						'idempotent'  => true,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * Read-only stock-photo search — the escape hatch this repo's build plan
+	 * added between `generate-image` (spends the `images` budget) and giving
+	 * up: media library -> generate-image (budget allowing) -> THIS ->
+	 * publish with `no_image_reason`. Same permission as `media-search`
+	 * (`edit_posts`): it never writes anything.
+	 */
+	private static function registerStockImageSearch(): void {
+		wp_register_ability(
+			'senroflux/stock-image-search',
+			array(
+				'label'               => __( 'Search stock photos', 'senroflux' ),
+				'description'         => __( 'Search Openverse for a CC0/public-domain stock photo when the media library has nothing suitable and the image-generation budget is exhausted. Use one or two plain words about the people or the work itself — not rooms, desks, corridors or buildings, which return off-topic photos. Skip results whose title does not match the page.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'required'             => array( 'query' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'query' => array( 'type' => 'string' ),
+					),
+				),
+				'output_schema'       => array(
+					'type'                 => 'object',
+					'required'             => array( 'results' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'results' => array(
+							'type'  => 'array',
+							'items' => array(
+								'type'       => 'object',
+								'properties' => array(
+									'id'      => array( 'type' => 'string' ),
+									'title'   => array( 'type' => 'string' ),
+									'tags'    => array(
+										'type'  => 'array',
+										'items' => array( 'type' => 'string' ),
+									),
+									'creator' => array( 'type' => 'string' ),
+									'source'  => array( 'type' => 'string' ),
+									'license' => array( 'type' => 'string' ),
+									'width'   => array( 'type' => 'integer' ),
+									'height'  => array( 'type' => 'integer' ),
+								),
+							),
+						),
+					),
+				),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeStockImageSearch( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					unset( $input );
+
+					return function_exists( 'current_user_can' ) && current_user_can( 'edit_posts' );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => true,
+						'destructive' => false,
+						'idempotent'  => true,
+					)
+				),
+			)
+		);
+	}
+
+	/**
+	 * Import (download + register as an attachment) one stock photo by id.
+	 * SECURITY (build plan): the model supplies only the provider id — never
+	 * a URL — and this ability re-fetches the detail record itself before
+	 * trusting the license/source/mature/url fields (see
+	 * {@see stockImageIneligibilityReason()}). Requires `upload_files`, same
+	 * as `media-upload`/`generate-image` (it creates an attachment).
+	 */
+	private static function registerStockImageImport(): void {
+		wp_register_ability(
+			'senroflux/stock-image-import',
+			array(
+				'label'               => __( 'Import a stock photo', 'senroflux' ),
+				'description'         => __( 'Download a stock photo previously found with stock-image-search and register it as an attachment. Does not spend the images budget; capped at 3 imports per run.', 'senroflux' ),
+				'category'            => self::CATEGORY,
+				'input_schema'        => array(
+					'type'                 => 'object',
+					'required'             => array( 'id', 'alt' ),
+					'additionalProperties' => false,
+					'properties'           => array(
+						'id'  => array( 'type' => 'string' ),
+						'alt' => array( 'type' => 'string' ),
+					),
+				),
+				'output_schema'       => self::attachmentOutputSchema(),
+				'execute_callback'    => static function ( $input = array() ) {
+					return self::executeStockImageImport( is_array( $input ) ? $input : array() );
+				},
+				'permission_callback' => static function ( $input = array() ) {
+					unset( $input );
+
+					return function_exists( 'current_user_can' ) && current_user_can( 'upload_files' );
+				},
+				'meta'                => self::meta(
+					array(
+						'readonly'    => false,
+						'destructive' => false,
+						'idempotent'  => false,
+					)
+				),
+			)
+		);
+	}
+
+	/**
 	 * The shared `{attachment_id, url}` output shape.
 	 *
 	 * @return array<string,mixed>
@@ -714,18 +993,65 @@ final class Media {
 			)
 		);
 
+		$used    = self::usedInPageContent();
 		$results = array();
 		foreach ( $attachments as $attachment ) {
 			$id        = (int) $attachment->ID;
+			$url       = self::attachmentUrl( $id );
 			$results[] = array(
-				'id'    => $id,
-				'url'   => self::attachmentUrl( $id ),
-				'title' => function_exists( 'get_the_title' ) ? (string) get_the_title( $id ) : '',
-				'alt'   => self::altText( $id ),
+				'id'           => $id,
+				'url'          => $url,
+				'title'        => function_exists( 'get_the_title' ) ? (string) get_the_title( $id ) : '',
+				'alt'          => self::altText( $id ),
+				'already_used' => '' !== $url && isset( $used[ $url ] ),
 			);
 		}
 
+		// Bug 1 (live run: the same hero + media-text images on every page)
+		// — mirrors {@see executeStockImageSearch()}'s ranking: a stable
+		// sort moves every already-used image to the end without removing
+		// it, so the model still has it as a fallback.
+		usort(
+			$results,
+			static fn ( array $a, array $b ): int => ( $a['already_used'] ? 1 : 0 ) <=> ( $b['already_used'] ? 1 : 0 )
+		);
+
 		return array( 'results' => $results );
+	}
+
+	/**
+	 * Every image URL already used in ANY page's stored content (0.3
+	 * quality fix, bug 1 live run: the same hero + media-text images on
+	 * every page) — so {@see executeMediaSearch()} can rank an
+	 * already-spoken-for result last instead of steering the model at an
+	 * image another page is already using.
+	 *
+	 * @return array<string,true> URL => true (a set, not a list).
+	 */
+	private static function usedInPageContent(): array {
+		if ( ! function_exists( 'get_posts' ) ) {
+			return array();
+		}
+
+		$urls = array();
+		foreach (
+			get_posts(
+				array(
+					'post_type'      => 'page',
+					'post_status'    => array( 'publish', 'draft', 'pending', 'private', 'future' ),
+					'posts_per_page' => -1,
+				)
+			) as $page
+		) {
+			if ( ! is_object( $page ) ) {
+				continue;
+			}
+			foreach ( ContentImages::urls( (string) $page->post_content ) as $url ) {
+				$urls[ $url ] = true;
+			}
+		}
+
+		return $urls;
 	}
 
 	/**
@@ -797,17 +1123,398 @@ final class Media {
 		if ( self::imagesExhausted() ) {
 			return new WP_Error(
 				'budget_exhausted',
-				__( 'This run has used up its image-generation budget.', 'senroflux' ),
+				__( 'This run has used up its image-generation budget. Try stock-image-search next; if that finds nothing either, publish without an image using `no_image_reason`.', 'senroflux' ),
 				array( 'status' => 409 )
 			);
 		}
 
+		// A site-wide verdict from an earlier attempt: refuse without calling
+		// the provider.
+		if ( ImageCapability::knownUnavailable() ) {
+			return self::imageGenerationUnavailable();
+		}
+
 		$generated = self::gateway()->generateImage( $prompt );
 		if ( $generated instanceof WP_Error ) {
+			if ( 'image_generation_unavailable' === $generated->get_error_code() ) {
+				ImageCapability::markUnavailable();
+
+				return self::imageGenerationUnavailable();
+			}
+
 			return $generated;
 		}
 
 		return self::insertAttachmentFromFile( $generated['path'], $prompt );
+	}
+
+	private static function imageGenerationUnavailable(): WP_Error {
+		return new WP_Error(
+			'image_generation_unavailable',
+			__( 'Image generation is not available on this site: none of its configured AI models can generate images. Do not call generate-image again. Use stock-image-search then stock-image-import (or media-search for an existing library image) instead.', 'senroflux' ),
+			array( 'status' => 409 )
+		);
+	}
+
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeStockImageSearch( array $input ): array|WP_Error {
+		if ( ! self::stockImagesEnabled() ) {
+			return new WP_Error(
+				'stock_images_disabled',
+				__( 'Stock image search is disabled on this site. Publish without an image using `no_image_reason` instead.', 'senroflux' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		$query = is_string( $input['query'] ?? null ) ? trim( $input['query'] ) : '';
+		if ( '' === $query ) {
+			return new WP_Error( 'invalid_input', __( 'A query is required.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$raw = self::stockGateway()->search( $query );
+		if ( $raw instanceof WP_Error ) {
+			return new WP_Error(
+				'stock_images_unavailable',
+				$raw->get_error_message() . ' ' . __( 'Publish without an image using `no_image_reason` instead.', 'senroflux' ),
+				array( 'status' => 502 )
+			);
+		}
+
+		$used    = self::usedStockImageIds();
+		$results = array();
+		foreach ( $raw as $row ) {
+			if ( ! is_array( $row ) ) {
+				continue;
+			}
+
+			$title = is_string( $row['title'] ?? null ) ? $row['title'] : '';
+			$tags  = self::stockTagNames( $row['tags'] ?? array() );
+			if ( self::isNonPhotoStockResult( $title, self::stockTagNames( $row['tags'] ?? array(), PHP_INT_MAX ) ) || self::isUntitledStockResult( $title ) || self::isWatermarkedStockResult( $row ) ) {
+				continue;
+			}
+
+			$id        = (string) ( $row['id'] ?? '' );
+			$results[] = array(
+				'id'           => $id,
+				'title'        => $title,
+				'tags'         => $tags,
+				'creator'      => is_string( $row['creator'] ?? null ) ? $row['creator'] : '',
+				'source'       => is_string( $row['source'] ?? null ) ? $row['source'] : '',
+				'license'      => is_string( $row['license'] ?? null ) ? $row['license'] : '',
+				'width'        => (int) ( $row['width'] ?? 0 ),
+				'height'       => (int) ( $row['height'] ?? 0 ),
+				'already_used' => isset( $used[ $id ] ),
+			);
+		}
+
+		// A stable sort (guaranteed since PHP 8.0): every already-used image
+		// moves to the end, in the SAME relative order the provider returned
+		// them and each other in — never removed, just ranked last, so the
+		// model still has it as a fallback rather than losing it outright.
+		usort(
+			$results,
+			static fn ( array $a, array $b ): int => ( $a['already_used'] ? 1 : 0 ) <=> ( $b['already_used'] ? 1 : 0 )
+		);
+
+		return array( 'results' => $results );
+	}
+
+	/**
+	 * Whether a result's title/tags mark it as something other than a real
+	 * photo (0.3 quality fix, stock image choice) — {@see NON_PHOTO_KEYWORDS}.
+	 * Word/phrase-boundary matched, case-insensitively, against the title and
+	 * every tag joined together.
+	 *
+	 * @param string       $title The result's title.
+	 * @param list<string> $tags  The result's tags (already extracted, at
+	 *                            most 6, by {@see stockTagNames()}).
+	 */
+	private static function isNonPhotoStockResult( string $title, array $tags ): bool {
+		$haystack = strtolower( trim( $title . ' ' . implode( ' ', $tags ) ) );
+		if ( '' === $haystack ) {
+			return false;
+		}
+
+		foreach ( self::NON_PHOTO_KEYWORDS as $keyword ) {
+			if ( 1 === preg_match( '/\b' . preg_quote( $keyword, '/' ) . '\b/', $haystack ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * An untitled result: every one live runs imported (2026-09-29-final to
+	 * final5) was a 3D render, a tag-stuffed interior or a building exterior,
+	 * and none of their tags said so. A heuristic from that evidence, not a
+	 * rule of the provider.
+	 */
+	private static function isUntitledStockResult( string $title ): bool {
+		return '' === trim( $title );
+	}
+
+	/**
+	 * A rawpixel preview served from `images.rawpixel.com/image_*` carries a
+	 * tiled watermark (live batch 2026-09-29-cards2); its clean photos are
+	 * served from `/editor_*`.
+	 *
+	 * @param array<string,mixed> $row One raw search result.
+	 */
+	private static function isWatermarkedStockResult( array $row ): bool {
+		$url = is_string( $row['url'] ?? null ) ? $row['url'] : '';
+
+		return str_contains( $url, '//images.rawpixel.com/image_' );
+	}
+
+	/**
+	 * Every stock-provider image id already imported as an attachment on
+	 * this site ({@see STOCK_SOURCE_ID_META_KEY}), so
+	 * {@see executeStockImageSearch()} can rank a re-offered image last
+	 * instead of letting a run re-import (and so duplicate) a photo it
+	 * already used (0.3 quality fix, stock image choice).
+	 *
+	 * @return array<string,true> Provider id => true (a set, not a list).
+	 */
+	private static function usedStockImageIds(): array {
+		if ( ! function_exists( 'get_posts' ) || ! function_exists( 'get_post_meta' ) ) {
+			return array();
+		}
+
+		$used = array();
+		foreach ( get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'meta_key'       => self::STOCK_SOURCE_ID_META_KEY, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- a bounded, site-local lookup (attachments only), not a hot path.
+				'posts_per_page' => -1,
+			)
+		) as $post ) {
+			$id = get_post_meta( (int) $post->ID, self::STOCK_SOURCE_ID_META_KEY, true );
+			if ( is_string( $id ) && '' !== $id ) {
+				$used[ $id ] = true;
+			}
+		}
+
+		return $used;
+	}
+
+	/**
+	 * The attachment already imported from stock photo `$source_id`, or null.
+	 */
+	private static function attachmentForStockSource( string $source_id ): ?int {
+		if ( ! function_exists( 'get_posts' ) ) {
+			return null;
+		}
+
+		$posts = get_posts(
+			array(
+				'post_type'      => 'attachment',
+				'meta_key'       => self::STOCK_SOURCE_ID_META_KEY, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- same bounded attachment lookup as usedStockImageIds().
+				'meta_value'     => $source_id, // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- as above.
+				'posts_per_page' => 1,
+			)
+		);
+
+		return array() !== $posts ? (int) $posts[0]->ID : null;
+	}
+
+	/**
+	 * Up to `$limit` tag names (6 for the result the model sees), accepting either Openverse's `{name: string}` shape
+	 * or a plain string list (so a fake test gateway can use whichever is
+	 * convenient).
+	 *
+	 * @return list<string>
+	 */
+	private static function stockTagNames( mixed $raw, int $limit = 6 ): array {
+		$names = array();
+		foreach ( is_array( $raw ) ? $raw : array() as $tag ) {
+			if ( is_string( $tag ) && '' !== $tag ) {
+				$names[] = $tag;
+			} elseif ( is_array( $tag ) && is_string( $tag['name'] ?? null ) && '' !== $tag['name'] ) {
+				$names[] = $tag['name'];
+			}
+			if ( count( $names ) >= $limit ) {
+				break;
+			}
+		}
+
+		return $names;
+	}
+
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array<string,mixed>|WP_Error
+	 */
+	private static function executeStockImageImport( array $input ): array|WP_Error {
+		if ( ! self::stockImagesEnabled() ) {
+			return new WP_Error(
+				'stock_images_disabled',
+				__( 'Stock image import is disabled on this site. Publish without an image using `no_image_reason` instead.', 'senroflux' ),
+				array( 'status' => 409 )
+			);
+		}
+
+		$id  = is_string( $input['id'] ?? null ) ? trim( $input['id'] ) : '';
+		$alt = is_string( $input['alt'] ?? null ) ? trim( $input['alt'] ) : '';
+
+		if ( ! self::isValidStockImageId( $id ) ) {
+			return new WP_Error( 'invalid_input', __( 'A valid stock image id is required.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+		if ( '' === $alt ) {
+			return new WP_Error( 'invalid_input', __( 'Alt text is required.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+		// Same photo, same attachment: a second copy would carry a new url
+		// and slip past the hero-reuse check (live batch 2026-09-29-final).
+		$existing = self::attachmentForStockSource( $id );
+		if ( null !== $existing ) {
+			return array(
+				'attachment_id' => $existing,
+				'url'           => (string) wp_get_attachment_url( $existing ),
+			);
+		}
+
+		if ( self::stockImportsExhausted() ) {
+			return new WP_Error(
+				'stock_import_cap',
+				sprintf(
+					/* translators: %d: the most stock images one run may import. */
+					__( 'This run has already imported %d stock images — the most one run may.', 'senroflux' ),
+					self::STOCK_IMPORT_CAP
+				),
+				array( 'status' => 409 )
+			);
+		}
+
+		// SECURITY: never trust a URL the model supplies — re-fetch the
+		// detail record by id server-side, then validate license/source/
+		// mature/scheme before anything is downloaded.
+		$detail = self::stockGateway()->fetch( $id );
+		if ( $detail instanceof WP_Error ) {
+			return new WP_Error( 'stock_images_unavailable', $detail->get_error_message(), array( 'status' => 502 ) );
+		}
+
+		$ineligible = self::stockImageIneligibilityReason( $detail );
+		if ( null !== $ineligible ) {
+			return new WP_Error( 'stock_image_ineligible', $ineligible, array( 'status' => 400 ) );
+		}
+
+		$downloaded = self::stockGateway()->download( $detail );
+		if ( $downloaded instanceof WP_Error ) {
+			return $downloaded;
+		}
+
+		$title    = is_string( $detail['title'] ?? null ) && '' !== $detail['title'] ? $detail['title'] : null;
+		$inserted = self::insertAttachmentFromFile( $downloaded['path'], $title );
+		if ( $inserted instanceof WP_Error ) {
+			return $inserted;
+		}
+
+		$attachment_id = (int) $inserted['attachment_id'];
+
+		if ( function_exists( 'update_post_meta' ) ) {
+			update_post_meta( $attachment_id, '_wp_attachment_image_alt', $alt );
+		}
+
+		if ( function_exists( 'wp_update_post' ) ) {
+			wp_update_post(
+				array(
+					'ID'           => $attachment_id,
+					'post_excerpt' => self::stockAttributionLine( $detail ),
+				)
+			);
+		}
+
+		if ( function_exists( 'update_post_meta' ) ) {
+			update_post_meta(
+				$attachment_id,
+				'_senroflux_stock_source',
+				array(
+					'provider'        => 'openverse',
+					'id'              => $id,
+					'source'          => (string) ( $detail['source'] ?? '' ),
+					'license'         => (string) ( $detail['license'] ?? '' ),
+					'license_version' => (string) ( $detail['license_version'] ?? '' ),
+					'creator'         => (string) ( $detail['creator'] ?? '' ),
+					'landing_url'     => (string) ( $detail['foreign_landing_url'] ?? '' ),
+				)
+			);
+			// 0.3 quality fix (stock image choice): a plain-string companion
+			// to the record above — {@see usedStockImageIds()} reads this
+			// with one `get_posts()` meta lookup so `stock-image-search` can
+			// rank an already-imported image last instead of the run
+			// re-importing (and so duplicating) a photo it already used.
+			update_post_meta( $attachment_id, self::STOCK_SOURCE_ID_META_KEY, $id );
+		}
+
+		return $inserted;
+	}
+
+	/**
+	 * The re-fetched-by-id detail record's eligibility check (build plan
+	 * SECURITY note): license must be CC0/public-domain, source must be one
+	 * of the allowed stock sources, the image must not be flagged mature, and
+	 * its file URL must be https. Null means eligible.
+	 *
+	 * @param array<string,mixed> $detail The provider's own detail record.
+	 */
+	private static function stockImageIneligibilityReason( array $detail ): ?string {
+		$license = strtolower( (string) ( $detail['license'] ?? '' ) );
+		if ( ! in_array( $license, array( 'cc0', 'pdm' ), true ) ) {
+			return __( "That image's license is not CC0 or public domain.", 'senroflux' );
+		}
+
+		$source = (string) ( $detail['source'] ?? '' );
+		if ( ! in_array( $source, OpenverseStockImageGateway::defaultSources(), true ) ) {
+			return __( 'That image is not from an allowed stock source.', 'senroflux' );
+		}
+
+		if ( true === ( $detail['mature'] ?? false ) ) {
+			return __( 'That image is flagged as mature content.', 'senroflux' );
+		}
+
+		$url = is_string( $detail['url'] ?? null ) ? $detail['url'] : '';
+		if ( ! str_starts_with( $url, 'https://' ) ) {
+			return __( "That image's file URL is not https.", 'senroflux' );
+		}
+
+		return null;
+	}
+
+	/**
+	 * A human-readable attribution line, stored as the imported attachment's
+	 * caption (`post_excerpt`).
+	 *
+	 * @param array<string,mixed> $detail The provider's own detail record.
+	 */
+	private static function stockAttributionLine( array $detail ): string {
+		$title   = is_string( $detail['title'] ?? null ) ? $detail['title'] : '';
+		$creator = is_string( $detail['creator'] ?? null ) ? $detail['creator'] : '';
+		$license = strtoupper( (string) ( $detail['license'] ?? '' ) );
+		$source  = (string) ( $detail['source'] ?? '' );
+		$landing = is_string( $detail['foreign_landing_url'] ?? null ) ? $detail['foreign_landing_url'] : '';
+
+		$parts = array_values(
+			array_filter(
+				array(
+					'' !== $title ? '"' . $title . '"' : null,
+					/* translators: %s: the image's creator/photographer. */
+					'' !== $creator ? sprintf( __( 'by %s', 'senroflux' ), $creator ) : null,
+					'' !== $license ? $license : null,
+					'' !== $source ? $source : null,
+				)
+			)
+		);
+
+		$line = implode( ', ', $parts );
+
+		return '' !== $landing ? $line . ' — ' . $landing : $line;
+	}
+
+	private static function isValidStockImageId( string $id ): bool {
+		return 1 === preg_match( '/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i', $id );
 	}
 
 	/**
@@ -820,12 +1527,80 @@ final class Media {
 			return new WP_Error( 'not_found', __( 'Attachment not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
 
-		$alt = self::gateway()->generateAltText( self::attachmentUrl( $id ) );
+		// 0.3 quality fix 3 (live run): the gateway used to send the
+		// attachment's PUBLIC URL, which OpenAI cannot fetch from
+		// `localhost`/staging/password-protected/intranet sites ("Bad
+		// Request (400) - Error while downloading file. Upstream status
+		// code: 407."). A local file path always works — the gateway
+		// inlines it as base64, so the request never depends on the site
+		// being reachable from the outside at all.
+		$path = self::attachmentFilePath( $id );
+		if ( $path instanceof WP_Error ) {
+			return $path;
+		}
+
+		$alt = self::gateway()->generateAltText( $path );
 		if ( $alt instanceof WP_Error ) {
 			return $alt;
 		}
 
 		return array( 'alt' => $alt );
+	}
+
+	/**
+	 * 0.3 quality fix 3: an absolute, on-disk path for `$id`, preferring the
+	 * `large` intermediate size (falls back to `medium_large`, then the
+	 * original file) to keep the alt-text request small. A missing file on
+	 * disk (any size registered in the DB but never generated, or since
+	 * deleted) is a clear, distinct refusal rather than the gateway silently
+	 * treating a bad path as literal text.
+	 */
+	private static function attachmentFilePath( int $id ): string|WP_Error {
+		$path = self::intermediateFilePath( $id, 'large' )
+			?? self::intermediateFilePath( $id, 'medium_large' )
+			?? ( function_exists( 'get_attached_file' ) ? get_attached_file( $id ) : false );
+
+		if ( ! is_string( $path ) || '' === $path || ! file_exists( $path ) ) {
+			return new WP_Error(
+				'attachment_file_missing',
+				__( 'The attachment file could not be found on disk.', 'senroflux' ),
+				array( 'status' => 404 )
+			);
+		}
+
+		$size = filesize( $path );
+		if ( is_int( $size ) && $size > self::ALT_TEXT_MAX_FILE_BYTES ) {
+			return new WP_Error(
+				'attachment_file_too_large',
+				__( 'The attachment file is too large to send for alt-text generation.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return $path;
+	}
+
+	/**
+	 * The on-disk path of one registered intermediate size, or null when that
+	 * size does not exist for this attachment (never generated, or too small
+	 * a source image to need it).
+	 */
+	private static function intermediateFilePath( int $id, string $size ): ?string {
+		if ( ! function_exists( 'image_get_intermediate_size' ) || ! function_exists( 'wp_upload_dir' ) ) {
+			return null;
+		}
+
+		$intermediate = image_get_intermediate_size( $id, $size );
+		if ( ! is_array( $intermediate ) || ! isset( $intermediate['path'] ) || ! is_string( $intermediate['path'] ) ) {
+			return null;
+		}
+
+		$dirs = wp_upload_dir();
+		if ( ! is_array( $dirs ) || ! isset( $dirs['basedir'] ) || ! is_string( $dirs['basedir'] ) ) {
+			return null;
+		}
+
+		return trailingslashit( $dirs['basedir'] ) . $intermediate['path'];
 	}
 
 	/**
@@ -839,8 +1614,26 @@ final class Media {
 		if ( 'attachment' !== self::postType( $attachment_id ) ) {
 			return new WP_Error( 'not_found', __( 'Attachment not found.', 'senroflux' ), array( 'status' => 400 ) );
 		}
-		if ( ! function_exists( 'get_post' ) || null === get_post( $post_id ) ) {
+		$post = function_exists( 'get_post' ) ? get_post( $post_id ) : null;
+		if ( null === $post ) {
 			return new WP_Error( 'not_found', __( 'Post not found.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		// 0.3 quality fix (bug 2, live run: a café photo repeated at the top
+		// of a post): TT25's `single.html` prints the featured image ABOVE
+		// the content, so setting this attachment as featured when it is
+		// already an image block in the post's own content would show it
+		// twice. Posts only — a page's own template never doubles the image
+		// this way.
+		if ( 'post' === (string) ( $post->post_type ?? '' ) ) {
+			$url = self::attachmentUrl( $attachment_id );
+			if ( '' !== $url && ContentImages::containsUrl( (string) ( $post->post_content ?? '' ), $url ) ) {
+				return new WP_Error(
+					'featured_image_duplicated',
+					__( 'This image is already in the post\'s content, and the theme shows the featured image above the post, so it would appear twice. Remove it from the content with update-draft, or pick a different featured image.', 'senroflux' ),
+					array( 'status' => 400 )
+				);
+			}
 		}
 
 		if ( function_exists( 'set_post_thumbnail' ) ) {
@@ -1020,6 +1813,37 @@ final class Media {
 	}
 
 	/**
+	 * The S12 report lookup for one term: the object type is its taxonomy
+	 * (`category`, `post_tag`, …) the way a post's is its post type, and the
+	 * edit link is the term's own screen. Unknown when the term is gone or
+	 * the term functions are absent.
+	 *
+	 * @return array{object_type:string,title:string,status:string,edit_url:?string,preview_url:?string}
+	 */
+	public static function termLookup( int $term_id ): array {
+		$term = function_exists( 'get_term' ) ? get_term( $term_id ) : null;
+		if ( ! is_object( $term ) || ! isset( $term->name, $term->taxonomy ) ) {
+			return array(
+				'object_type' => 'unknown',
+				'title'       => '',
+				'status'      => '',
+				'edit_url'    => null,
+				'preview_url' => null,
+			);
+		}
+
+		$edit = function_exists( 'get_edit_term_link' ) ? get_edit_term_link( $term_id, (string) $term->taxonomy ) : null;
+
+		return array(
+			'object_type' => (string) $term->taxonomy,
+			'title'       => (string) $term->name,
+			'status'      => '',
+			'edit_url'    => ( is_string( $edit ) && '' !== $edit ) ? $edit : null,
+			'preview_url' => null,
+		);
+	}
+
+	/**
 	 * @param array<string,mixed> $input Call input.
 	 * @return array<string,mixed>|WP_Error
 	 */
@@ -1076,6 +1900,51 @@ final class Media {
 		return array( 'term_id' => (int) ( $inserted['term_id'] ?? 0 ) );
 	}
 
+	/**
+	 * @param array<string,mixed> $input Call input.
+	 * @return array{terms:list<array{name:string,count:int}>}|WP_Error
+	 */
+	private static function executeListTerms( array $input ): array|WP_Error {
+		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
+		if ( ! in_array( $taxonomy, self::LISTABLE_TAXONOMIES, true ) ) {
+			return new WP_Error( 'invalid_input', __( 'taxonomy must be category or post_tag.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+		if ( ! function_exists( 'get_terms' ) ) {
+			return new WP_Error( 'gateway_unavailable', __( 'Terms are not available.', 'senroflux' ), array( 'status' => 400 ) );
+		}
+
+		$args   = array(
+			'taxonomy'   => $taxonomy,
+			'hide_empty' => false,
+			'number'     => self::LIST_TERMS_LIMIT,
+			'orderby'    => 'count',
+			'order'      => 'DESC',
+		);
+		$search = is_string( $input['search'] ?? null ) ? trim( $input['search'] ) : '';
+		if ( '' !== $search ) {
+			$args['search'] = $search;
+		}
+
+		$found = get_terms( $args );
+		if ( $found instanceof WP_Error ) {
+			return $found;
+		}
+
+		$terms = array();
+		foreach ( is_array( $found ) ? $found : array() as $term ) {
+			$row = is_object( $term ) ? get_object_vars( $term ) : array();
+			if ( ! isset( $row['name'] ) ) {
+				continue;
+			}
+			$terms[] = array(
+				'name'  => html_entity_decode( (string) $row['name'], ENT_QUOTES ),
+				'count' => (int) ( $row['count'] ?? 0 ),
+			);
+		}
+
+		return array( 'terms' => array_slice( $terms, 0, self::LIST_TERMS_LIMIT ) );
+	}
+
 	// ------------------------------------------------------------------
 	// Permissions
 	// ------------------------------------------------------------------
@@ -1103,12 +1972,50 @@ final class Media {
 	}
 
 	/**
+	 * Creating a term needs what core's REST terms controller requires: the
+	 * taxonomy's manage cap for a hierarchical one (categories), its assign
+	 * cap for a flat one (tags) — the same rule create-post applies to a new
+	 * name. A refused category says so, instead of a bare denial.
+	 *
 	 * @param array<string,mixed> $input Call input.
 	 */
-	private static function mayCreateTerm( array $input ): bool {
+	private static function mayCreateTerm( array $input ): bool|WP_Error {
+		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
+		if ( ! function_exists( 'current_user_can' ) ) {
+			return false;
+		}
+
+		$object       = function_exists( 'get_taxonomy' ) ? get_taxonomy( $taxonomy ) : false;
+		$fields       = is_object( $object ) ? get_object_vars( $object ) : array();
+		$hierarchical = isset( $fields['hierarchical'] ) ? (bool) $fields['hierarchical'] : 'category' === $taxonomy;
+
+		if ( ! $hierarchical ) {
+			return current_user_can( self::assignTermsCap( $taxonomy ) );
+		}
+		if ( current_user_can( self::manageTermsCap( $taxonomy ) ) ) {
+			return true;
+		}
+
+		return new WP_Error(
+			'term_create_forbidden',
+			'category' === $taxonomy
+				? __( 'Your account can\'t create categories. Call list-terms and use a category that already exists.', 'senroflux' )
+				: __( 'Your account can\'t create terms in this taxonomy. Call list-terms and use one that already exists.', 'senroflux' ),
+			array( 'status' => 403 )
+		);
+	}
+
+	/**
+	 * Listing names is what assigning them needs: the taxonomy's `assign_terms`.
+	 *
+	 * @param array<string,mixed> $input Call input.
+	 */
+	private static function mayListTerms( array $input ): bool {
 		$taxonomy = is_string( $input['taxonomy'] ?? null ) ? $input['taxonomy'] : '';
 
-		return function_exists( 'current_user_can' ) && current_user_can( self::manageTermsCap( $taxonomy ) );
+		return in_array( $taxonomy, self::LISTABLE_TAXONOMIES, true )
+			&& function_exists( 'current_user_can' )
+			&& current_user_can( self::assignTermsCap( $taxonomy ) );
 	}
 
 	private static function assignTermsCap( string $taxonomy ): string {
@@ -1119,7 +2026,7 @@ final class Media {
 			}
 		}
 
-		return 'assign_categories';
+		return 'post_tag' === $taxonomy ? 'assign_post_tags' : 'assign_categories';
 	}
 
 	private static function manageTermsCap( string $taxonomy ): string {
@@ -1265,6 +2172,126 @@ final class Media {
 		return self::$gateway;
 	}
 
+	private static function stockGateway(): StockImageGatewayInterface {
+		if ( null === self::$stock_gateway ) {
+			self::$stock_gateway = new OpenverseStockImageGateway();
+		}
+
+		return self::$stock_gateway;
+	}
+
+	/**
+	 * `senroflux_stock_images_enabled` (build plan): a site that forbids
+	 * outbound requests turns the whole stock-photo feature off. `@internal`.
+	 */
+	private static function stockImagesEnabled(): bool {
+		return function_exists( 'apply_filters' ) ? (bool) apply_filters( 'senroflux_stock_images_enabled', true ) : true;
+	}
+
+	/**
+	 * The number of PRIOR successful `stock-image-import` calls in this run
+	 * (same derivation as {@see spentImages()}), capped at {@see STOCK_IMPORT_CAP}.
+	 */
+	private static function stockImportsExhausted(): bool {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return false;
+		}
+
+		return Budget::spentCount( self::$store, self::$current_run_id, 'stock-image-import' ) >= self::STOCK_IMPORT_CAP;
+	}
+
+	/**
+	 * The pageImageCheck() escape hatch (build plan point 4): true only when
+	 * a run genuinely has no image source left — the `images` budget is
+	 * exhausted AND either stock images are disabled site-wide, or this run
+	 * already tried `stock-image-search` and it came back empty/erroring.
+	 * Fails closed (false) with no run context resolved, same reasoning as
+	 * {@see imagesExhausted()}: outside a run there is no budget to have
+	 * exhausted, so the ordinary (stricter) refusal stands.
+	 */
+	public static function noImageSourceLeft(): bool {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return false;
+		}
+
+		if ( ! self::imagesExhausted() ) {
+			return false;
+		}
+
+		if ( ! self::stockImagesEnabled() ) {
+			return true;
+		}
+
+		return self::stockSearchTriedAndFailed();
+	}
+
+	/**
+	 * Whether this run already called `stock-image-search` and it either
+	 * errored or came back with zero results — read from the persisted step
+	 * history (no new schema), the same derivation style {@see spentImages()}
+	 * uses.
+	 */
+	private static function stockSearchTriedAndFailed(): bool {
+		if ( null === self::$current_run_id || null === self::$store ) {
+			return false;
+		}
+
+		foreach ( self::$store->getSteps( self::$current_run_id ) as $step ) {
+			if ( null === $step->toolName || 'stock-image-search' !== self::baseAbilityName( $step->toolName ) ) {
+				continue;
+			}
+
+			if ( 'error' === $step->status ) {
+				return true;
+			}
+
+			if ( 'ok' === $step->status ) {
+				$response = self::stepFunctionResponse( $step );
+				$results  = is_array( $response ) ? ( $response['results'] ?? null ) : null;
+				if ( is_array( $results ) && array() === $results ) {
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The ability name's final segment (namespace stripped). Steps store the
+	 * mangled function name the model called (`wpab__senroflux__stock-image-search`),
+	 * so it is un-mangled first or nothing would ever match.
+	 */
+	private static function baseAbilityName( string $ability ): string {
+		$ability = \Specflux\SenroFlux\Tools\ToolRegistry::abilityName( $ability );
+		$pos     = strrpos( $ability, '/' );
+
+		return false === $pos ? $ability : substr( $ability, $pos + 1 );
+	}
+
+	/**
+	 * Extract the `functionResponse.response` payload a tool_result step's
+	 * `message_json` carries (see {@see \Specflux\SenroFlux\Run\Runner::appendToolResult()}),
+	 * or null when the step carries no such part.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private static function stepFunctionResponse( \Specflux\SenroFlux\Run\Step $step ): ?array {
+		$parts = is_array( $step->messageArray ) ? ( $step->messageArray['parts'] ?? null ) : null;
+		if ( ! is_array( $parts ) ) {
+			return null;
+		}
+
+		foreach ( $parts as $part ) {
+			$response = is_array( $part ) ? ( $part['functionResponse']['response'] ?? null ) : null;
+			if ( is_array( $response ) ) {
+				return $response;
+			}
+		}
+
+		return null;
+	}
+
 	/**
 	 * Whether the run's `images` budget key is already spent. Fails OPEN
 	 * (never exhausted) with no run context resolved — this is a resource
@@ -1351,7 +2378,15 @@ final class Media {
 		}
 
 		$objects = self::currentObjects();
-		$objects[ self::ALT_KEY_PREFIX . $attachment_id ] = true;
+		// Defect fix (live run, 2026-09-27 baseline): this entry must stay
+		// invisible to {@see \Specflux\SenroFlux\Run\Tracker} and
+		// {@see \Specflux\SenroFlux\Run\Report} — both fail-close a
+		// non-array `objects_json` value to "permanently unverified", and
+		// this id is never qualified with {@see OBJECT_ID_PREFIX} so no read
+		// could ever clear it. Deliberately omitting `last_write_seq` makes
+		// this a READ-ONLY-shaped entry (Tracker::unverified()'s existing
+		// rule), so it never opens a verify nudge or a phantom report row.
+		$objects[ self::ALT_KEY_PREFIX . $attachment_id ] = array( 'cap_marker' => true );
 		self::$store->updateRun( self::$current_run_id, array( 'objects_json' => $objects ) );
 	}
 

@@ -147,6 +147,7 @@ final class GateModeTest extends TestCase {
 
 		$this->gateway->script[] = self::callTurn( 'call_1', 'agsafe-smoke/read' );
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
@@ -186,6 +187,27 @@ final class GateModeTest extends TestCase {
 		$this->assertNotSame( 'awaiting_approval', $result['run']['status'], 'the approved call must not re-park itself' );
 	}
 
+	public function test_the_park_tick_carries_the_packs_approval_summary(): void {
+		add_filter(
+			'agent_safety_approval_summary',
+			static fn ( string $summary, string $verb ): string => 'agsafe-smoke/write' === $verb ? 'Write it &quot;now&quot;' : $summary,
+			10,
+			2
+		);
+		$run_id = $this->createRun( GateMode::BuiltIn );
+
+		$this->gateway->script[] = self::planTurn( 'call_p', array( 'agsafe-smoke/write' ) );
+		$this->runner->tick( $run_id, 0, null );
+		$run                     = $this->store->getRun( $run_id );
+		$this->gateway->script[] = self::callTurn( 'call_w', 'agsafe-smoke/write', array( 'x' => 1 ) );
+		$result                  = $this->runner->tick( $run_id, (int) $run->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+		remove_all_filters( 'agent_safety_approval_summary' );
+
+		$this->assertSame( 'awaiting_approval', $result['run']['status'] );
+		$this->assertSame( 'Write it &quot;now&quot;', $result['ui']['approval']['summary'] );
+		$this->assertSame( array( 'x' => 1 ), $result['ui']['approval']['args_preview'] );
+	}
+
 	public function test_an_unmapped_verb_parks_in_built_in_mode(): void {
 		$GLOBALS['senroflux_test_abilities']['agsafe-smoke/unmapped'] = new SenroFlux_Test_Fake_Ability( 'agsafe-smoke/unmapped' );
 
@@ -211,6 +233,7 @@ final class GateModeTest extends TestCase {
 		$run_id = $this->createRun( GateMode::BuiltIn );
 
 		$this->gateway->script[] = self::textTurn( 'Working…' );
+		$this->gateway->script[] = self::textTurn( 'Working…' );
 		$in_progress             = $this->runner->tick( $run_id, 0, null );
 		$this->assertSame( 'completed', $in_progress['run']['status'] );
 
@@ -231,5 +254,64 @@ final class GateModeTest extends TestCase {
 
 		$fresh = $this->store->getRun( $run_id );
 		$this->assertSame( 'gate_mode_changed', $fresh->error['code'] ?? null );
+	}
+
+	// ------------------------------------------------------------------
+	// An invalid write is refused before the park, never after a click
+	// ------------------------------------------------------------------
+
+	public function test_a_pack_refused_write_never_parks_in_built_in_mode(): void {
+		$pack = new class() extends \Specflux\SenroFlux\Packs\Pack {
+			public function __construct() {
+				parent::__construct( array() );
+			}
+
+			public function name(): string {
+				return 'fixture';
+			}
+
+			public function verbMap(): array {
+				return array( 'agsafe-smoke/write' => 1 );
+			}
+
+			protected function agentSafetyBindingError( int $user_id ): ?\WP_Error {
+				unset( $user_id );
+
+				return null;
+			}
+
+			public function validateCall( string $ability, array $input ): ?\WP_Error {
+				unset( $input );
+
+				return 'agsafe-smoke/write' === $ability ? new \WP_Error( 'bad_markup', 'The post content is not well-formed block markup.' ) : null;
+			}
+		};
+
+		$runner = new Runner(
+			$this->store,
+			new ToolExecutor(),
+			$this->gateway,
+			new ApprovalBridge(),
+			null,
+			null,
+			null,
+			static fn (): \Specflux\SenroFlux\Packs\Pack => $pack,
+			null,
+			new \Specflux\SenroFlux\Approval\GrantBridge(),
+			null,
+			fn (): GateMode => GateMode::BuiltIn
+		);
+		$run_id = $this->createRun( GateMode::BuiltIn );
+
+		$this->gateway->script[] = self::planTurn( 'call_p', array( 'agsafe-smoke/write' ) );
+		$runner->tick( $run_id, 0, null );
+		$run                     = $this->store->getRun( $run_id );
+		$this->gateway->script[] = self::callTurn( 'call_w', 'agsafe-smoke/write' );
+		$this->gateway->script[] = self::textTurn( 'Giving up.' );
+		$result                  = $runner->tick( $run_id, (int) $run->stepCount, array( 'plan' => array( 'action' => 'accept' ) ) );
+
+		$this->assertIsArray( $result );
+		$this->assertNotSame( 'awaiting_approval', $result['run']['status'] );
+		$this->assertNotContains( 'approval', array_column( $result['new_steps'], 'kind' ) );
 	}
 }

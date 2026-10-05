@@ -62,7 +62,7 @@ final class Budget {
 		$base = self::mergeOver( self::shipped(), $pack_overrides );
 
 		/**
-		 * Filters the default budget for new runs.
+		 * Filters the default budget for new runs. `@api` (S23).
 		 *
 		 * @param array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int,refunds:int} $defaults
 		 */
@@ -272,9 +272,14 @@ final class Budget {
 		return $spent;
 	}
 
-	/** The ability name's final segment (namespace stripped). */
+	/**
+	 * The ability name's final segment (namespace stripped). Steps store the
+	 * mangled function name the model called (`wpab__senroflux__orders-refund`),
+	 * so it is un-mangled first or nothing would ever be counted.
+	 */
 	private static function baseName( string $ability ): string {
-		$pos = strrpos( $ability, '/' );
+		$ability = \Specflux\SenroFlux\Tools\ToolRegistry::abilityName( $ability );
+		$pos     = strrpos( $ability, '/' );
 
 		return false === $pos ? $ability : substr( $ability, $pos + 1 );
 	}

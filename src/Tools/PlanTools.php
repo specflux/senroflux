@@ -50,6 +50,16 @@ final class PlanTools {
 	public const MAX_STEPS           = 10;
 	public const MAX_STEP_TEXT_CHARS = 200;
 	public const MAX_ASSUMPTIONS     = 10;
+	public const MAX_OBJECT_LIST     = 20;
+	public const MAX_STEP_OBJECTS    = 25;
+
+	/**
+	 * The character caps above are what the model is told (schema maxLength,
+	 * refusals); enforcement sits this far above them. A model cannot count
+	 * characters, and live runs resubmitted near misses (207, 203, 203 against
+	 * 200) for a full turn each.
+	 */
+	public const LENGTH_TOLERANCE_PERCENT = 25;
 
 	/** S7 invalid-payload code (a tool_result error, never an HTTP error). */
 	public const ERROR_INVALID_PLAN = 'invalid_plan';
@@ -69,6 +79,59 @@ final class PlanTools {
 	 * this code and still counts as a tool call.
 	 */
 	public const ERROR_PLANS_EXHAUSTED = 'plans_exhausted';
+
+	/**
+	 * 0.3 quality fix (live run 2026-09-27, scenario-2-1): a plan that creates a
+	 * page but names no way to get an image ran the SAME failure loop
+	 * `ERROR_UNKNOWN_VERB` exists to prevent — the page write was refused
+	 * `page_needs_image` (see {@see \Specflux\SenroFlux\Packs\Content\Abilities::executeCreatePost()}),
+	 * the follow-up `generate-image` call was then refused `not_in_plan`
+	 * (its verb was never in the accepted plan), and the run burned its
+	 * max_plans re-planning around a mistake the FENCE could see up front.
+	 * Deliberately reuses the ability-layer's own `page_needs_image` code —
+	 * one vocabulary for "this page write has no image", whichever layer
+	 * catches it first.
+	 */
+	public const ERROR_PAGE_NEEDS_IMAGE = 'page_needs_image';
+
+	/**
+	 * PACK VERBS, not ability ids (see {@see \Specflux\SenroFlux\Packs\Pack}'s
+	 * isolation rule — this class may not depend on src/Packs, so the handful
+	 * of verb strings the image check needs are duplicated here as bare
+	 * strings, sourced from PagesPack::verbMap()/SitePack::verbMap()).
+	 *
+	 * Posts pack's own `posts/create-draft` is deliberately absent: a POST's
+	 * image rule is enforced on its own terms elsewhere (see the "never
+	 * enforced on a post" note in `executeCreatePost()`) and was never part of
+	 * this defect.
+	 */
+	private const PAGE_CREATE_VERBS  = array( 'pages/create-draft', 'site/create-draft' );
+	private const MEDIA_SEARCH_VERBS = array( 'pages/media-search', 'site/media-search' );
+	/**
+	 * Either an AI-generated image or an uploaded one counts as "a way to get
+	 * an image" — requiring generate specifically would refuse an otherwise
+	 * complete plan that searches, comes up empty, and uploads instead.
+	 */
+	private const MEDIA_ACQUIRE_VERBS = array( 'pages/media-generate', 'site/media-generate', 'pages/media-upload', 'site/media-upload', 'pages/media-stock-import', 'site/media-stock-import' );
+
+	/**
+	 * The verbs an accepted plan covers: its own, plus `<pack>/media-stock-import`
+	 * wherever it lists `<pack>/media-generate` — the stock photo is what a
+	 * run falls back to once the image budget is spent, so a plan that may
+	 * generate an image may import one instead.
+	 *
+	 * @param list<string> $verbs The plan's own verbs.
+	 * @return list<string>
+	 */
+	public static function coveredVerbs( array $verbs ): array {
+		foreach ( $verbs as $verb ) {
+			if ( str_ends_with( $verb, '/media-generate' ) ) {
+				$verbs[] = substr( $verb, 0, -strlen( 'media-generate' ) ) . 'media-stock-import';
+			}
+		}
+
+		return array_values( array_unique( $verbs ) );
+	}
 
 	/**
 	 * The function name exposed to the model (no `wpab__` prefix).
@@ -92,15 +155,28 @@ final class PlanTools {
 	 * returns an empty map then — the Runner passes whatever it yields into the
 	 * registry handed to the model.
 	 *
-	 * @param int $remaining_plans Live count of remaining plans.
+	 * @param int                $remaining_plans Live count of remaining plans.
+	 * @param list<string>|null  $known_verbs     0.3 quality fix (instruction
+	 *                                            ceiling): the run's OWN verb
+	 *                                            list, spelled out in the
+	 *                                            declaration itself instead of
+	 *                                            a pack skill — the same list
+	 *                                            {@see \Specflux\SenroFlux\Run\Runner::knownVerbs()}
+	 *                                            already resolves for
+	 *                                            `validateProposePlan()`'s
+	 *                                            `unknown_verb` check, so this
+	 *                                            can never drift from what the
+	 *                                            fence actually accepts. Null
+	 *                                            omits the list (a direct-allow
+	 *                                            run with no pack).
 	 * @return array<string, FunctionDeclaration|array<string,mixed>>
 	 */
-	public static function declarations( int $remaining_plans ): array {
+	public static function declarations( int $remaining_plans, ?array $known_verbs = null ): array {
 		if ( $remaining_plans <= 0 ) {
 			return array();
 		}
 
-		return array( self::TOOL_NAME => self::proposePlanDeclaration() );
+		return array( self::TOOL_NAME => self::proposePlanDeclaration( $known_verbs ) );
 	}
 
 	/**
@@ -113,32 +189,93 @@ final class PlanTools {
 	 * present we build the real DTO; otherwise we hand back the array shape so
 	 * SDK-less contexts (tests) still see the same contract.
 	 *
+	 * @param list<string>|null $known_verbs 0.3 quality fix (instruction ceiling):
+	 *                                       see {@see declarations()}.
 	 * @return FunctionDeclaration|array<string,mixed>
 	 */
-	public static function proposePlanDeclaration(): FunctionDeclaration|array {
+	public static function proposePlanDeclaration( ?array $known_verbs = null ): FunctionDeclaration|array {
+		$verbs_description = __( 'The Agent Tollgate verbs this step uses.', 'senroflux' );
+		if ( null !== $known_verbs ) {
+			$verbs_description .= ' ' . sprintf(
+				/* translators: %s is a comma-separated list of verb names. */
+				__( 'Spell each one exactly as one of: %s. Any other word is refused as unknown_verb.', 'senroflux' ),
+				implode( ', ', $known_verbs )
+			);
+		}
+
+		// 0.3 quality fix (images budget 0): a media-generate verb is only
+		// ever "known" (see Runner::knownVerbs()) when the run's images
+		// budget is above zero, so its absence from a non-null list IS the
+		// budget-zero signal — the step description must not steer the model
+		// toward a verb the tool surface has already withheld, or it repeats
+		// the observed live-run loop (media-search -> generate-image refused
+		// budget_exhausted -> re-plan -> stock-image-search).
+		$media_generate_available = null === $known_verbs || array() !== array_filter(
+			$known_verbs,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-generate' )
+		);
+
+		// A role withheld at start (an account without upload_files) takes
+		// every media verb with it; no media-search verb means no image step
+		// can ever be carried out, so the description must not ask for one.
+		$images_off = null !== $known_verbs && array() === array_filter(
+			$known_verbs,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-search' )
+		);
+
+		$step_text_description = $images_off
+			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its terms, excerpt) belong in its step. This run cannot add or edit images, so plan no image step.', 'senroflux' )
+			: ( $media_generate_available
+			? __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-generate/generate-image, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' )
+			: __( 'One ordered step of the plan. A step that writes a page must state: who the page is for, what it must achieve, its sections in order, and the next step for the visitor. Give each post, page, product, price, image or order you change its own step, never one step for several of them: the plan\'s approval count, and any pre-approval, is counted from the steps, so a step covering several under-states what you will ask and its extra writes stop for approval again. Changes to that same object (its featured image, terms, excerpt, alt text) belong in its step. A step that adds or edits an image must ALSO list every media verb it will call in that SAME step\'s verbs — media-search, media-stock-import, generate-alt-text, update-alt, read-media, whichever apply, spelled exactly as this pack\'s own verb list gives them. This run has no image-generation budget left, so use media-search then media-stock-import for any image. A media call whose verb is missing from every step is refused not_in_plan.', 'senroflux' ) );
+
+		// A pre-approval is bound to objects, so a step that edits EXISTING
+		// ones must name them (live J10: five price changes all parked).
+		$step_text_description .= ' ' . __( 'When a step changes existing objects, list their ids in that step\'s "objects": a pre-approval covers only objects named in the plan or created by this run.', 'senroflux' );
+
 		$schema = array(
 			'type'                 => 'object',
 			'properties'           => array(
-				'goal'        => array(
+				'goal'         => array(
 					'type'        => 'string',
 					'maxLength'   => self::MAX_GOAL_CHARS,
 					'description' => __( 'The goal this plan proposes to achieve.', 'senroflux' ),
 				),
-				'steps'       => array(
+				'steps'        => array(
 					'type'        => 'array',
 					'maxItems'    => self::MAX_STEPS,
 					'items'       => array(
 						'type'                 => 'object',
 						'properties'           => array(
-							'text'  => array(
+							'text'    => array(
 								'type'        => 'string',
 								'maxLength'   => self::MAX_STEP_TEXT_CHARS,
-								'description' => __( 'One ordered step of the plan.', 'senroflux' ),
+								// 0.3 quality fix 4 (page brief): a step that
+								// writes a page must set out the brief the
+								// write tools expect it to follow — see their
+								// own descriptions.
+								//
+								// 0.3 quality fix (live run: media verbs kept
+								// getting left off a step, forcing not_in_plan
+								// refusals on generate-image/update-alt, a
+								// re-plan to fix it, then a SECOND re-plan
+								// when the fix was incomplete — burning
+								// max_plans before the page budget did any
+								// real work). Naming every media verb the
+								// step needs, up front, is the one edit that
+								// avoids the whole retry loop.
+								'description' => $step_text_description,
 							),
-							'verbs' => array(
+							'verbs'   => array(
 								'type'        => 'array',
 								'items'       => array( 'type' => 'string' ),
-								'description' => __( 'The Agent Safety verbs this step uses.', 'senroflux' ),
+								'description' => $verbs_description,
+							),
+							'objects' => array(
+								'type'        => 'array',
+								'maxItems'    => self::MAX_STEP_OBJECTS,
+								'items'       => array( 'type' => 'string' ),
+								'description' => __( 'Ids of the EXISTING objects this step changes, as strings: a plain post, page or product id, or the prefixed id the tool reports (term:12). Leave out for a step that only creates.', 'senroflux' ),
 							),
 						),
 						'required'             => array( 'text', 'verbs' ),
@@ -147,12 +284,14 @@ final class PlanTools {
 					),
 					'description' => __( 'The ordered steps the plan will carry out.', 'senroflux' ),
 				),
-				'assumptions' => array(
+				'assumptions'  => array(
 					'type'        => 'array',
 					'items'       => array( 'type' => 'string' ),
 					'maxItems'    => self::MAX_ASSUMPTIONS,
 					'description' => __( 'Assumptions the plan rests on, if any.', 'senroflux' ),
 				),
+				'adopted'      => self::objectListSchema( __( 'Existing objects (pages, for example) this plan adopts as they are instead of creating new ones — each with its ID. Leave out when it adopts nothing.', 'senroflux' ) ),
+				'left_for_you' => self::objectListSchema( __( 'Existing objects the run will NOT touch but the human may want to remove, such as default-install leftovers — each with its ID. Leave out when there are none.', 'senroflux' ) ),
 			),
 			'required'             => array( 'goal', 'steps' ),
 			// Fail closed: the model may not smuggle extra fields in.
@@ -199,6 +338,10 @@ final class PlanTools {
 	 *                                               the check; an EMPTY list means nothing is known.
 	 * @param int|null          $remaining_questions The run's remaining question budget; at 0 the
 	 *                                               plan must state its assumptions (S7). Null = unknown.
+	 * @param callable|null     $object_lookup       `(string $id): array{object_type:string,...}` — the
+	 *                                               report's object lookup, used to refuse step
+	 *                                               `objects` ids that name nothing. Null refuses any
+	 *                                               step that lists objects (fail closed).
 	 * @return array<string,mixed>|WP_Error Validated payload or an error.
 	 */
 	public static function validateProposePlan(
@@ -206,7 +349,8 @@ final class PlanTools {
 		?int $run_id = null,
 		?array $verb_map = null,
 		?array $known_verbs = null,
-		?int $remaining_questions = null
+		?int $remaining_questions = null,
+		?callable $object_lookup = null
 	): array|WP_Error {
 		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
 			self::ERROR_INVALID_PLAN,
@@ -223,11 +367,12 @@ final class PlanTools {
 		if ( ! is_string( $goal ) || '' === trim( $goal ) ) {
 			return $invalid( __( 'a non-empty "goal" is required.', 'senroflux' ) );
 		}
-		if ( mb_strlen( $goal ) > self::MAX_GOAL_CHARS ) {
+		if ( self::overCap( $goal, self::MAX_GOAL_CHARS ) ) {
 			return $invalid(
 				sprintf(
-					/* translators: %d is the character cap. */
-					__( '"goal" may be at most %d characters.', 'senroflux' ),
+					/* translators: %1$d is the actual character count, %2$d is the character cap. */
+					__( '"goal" is %1$d characters; the limit is %2$d. Shorten it and propose the plan again.', 'senroflux' ),
+					mb_strlen( $goal ),
 					self::MAX_GOAL_CHARS
 				)
 			);
@@ -238,9 +383,12 @@ final class PlanTools {
 		if ( ! is_array( $steps ) ) {
 			return $invalid( __( '"steps" must be an array of steps.', 'senroflux' ) );
 		}
+		// A model can send "steps" as a JSON object; its string keys must not
+		// reach the 1-based step numbering below (string + int is a fatal).
+		$steps = array_values( $steps );
 
 		$normalized_steps = array();
-		foreach ( $steps as $step ) {
+		foreach ( $steps as $step_index => $step ) {
 			if ( ! is_array( $step ) ) {
 				return $invalid( __( 'every "steps" entry must be an object.', 'senroflux' ) );
 			}
@@ -249,11 +397,13 @@ final class PlanTools {
 			if ( ! is_string( $text ) || '' === trim( $text ) ) {
 				return $invalid( __( 'every step needs a non-empty "text".', 'senroflux' ) );
 			}
-			if ( mb_strlen( $text ) > self::MAX_STEP_TEXT_CHARS ) {
+			if ( self::overCap( $text, self::MAX_STEP_TEXT_CHARS ) ) {
 				return $invalid(
 					sprintf(
-						/* translators: %d is the character cap. */
-						__( 'a step "text" may be at most %d characters.', 'senroflux' ),
+						/* translators: %1$d is the 1-based step number, %2$d is the actual character count, %3$d is the character cap. */
+						__( 'step %1$d "text" is %2$d characters; the limit is %3$d. Shorten it and propose the plan again.', 'senroflux' ),
+						$step_index + 1,
+						mb_strlen( $text ),
 						self::MAX_STEP_TEXT_CHARS
 					)
 				);
@@ -288,18 +438,32 @@ final class PlanTools {
 				return $invalid( __( 'every step needs at least one verb.', 'senroflux' ) );
 			}
 
-			// S7: annotate the step with the highest tier among its verbs,
-			// through the RUN's map so the card and the fence agree.
-			$tier = 0;
-			foreach ( $normalized_verbs as $verb ) {
-				$tier = max( $tier, VerbTier::tierFor( $verb, $verb_map, $run_id ) );
+			$objects = self::normaliseStepObjects( $step['objects'] ?? null, $step_index + 1, $object_lookup );
+			if ( $objects instanceof WP_Error ) {
+				return $objects;
 			}
 
-			$normalized_steps[] = array(
-				'text'  => $text,
-				'verbs' => $normalized_verbs,
-				'tier'  => $tier,
+			// S7: annotate the step with the highest tier among its verbs,
+			// through the RUN's map so the card and the fence agree. The
+			// per-verb tiers ride along so the card counts only the verbs
+			// that actually park (live J4 told the approver 15, not 5).
+			$tier       = 0;
+			$verb_tiers = array();
+			foreach ( $normalized_verbs as $verb ) {
+				$verb_tiers[ $verb ] = VerbTier::tierFor( $verb, $verb_map, $run_id );
+				$tier                = max( $tier, $verb_tiers[ $verb ] );
+			}
+
+			$normalized_step = array(
+				'text'       => $text,
+				'verbs'      => $normalized_verbs,
+				'tier'       => $tier,
+				'verb_tiers' => $verb_tiers,
 			);
+			if ( array() !== $objects ) {
+				$normalized_step['objects'] = $objects;
+			}
+			$normalized_steps[] = $normalized_step;
 		}
 
 		// S7: a plan with no steps authorises nothing and cannot be acted on;
@@ -349,11 +513,298 @@ final class PlanTools {
 			return $invalid( __( 'no questions remain, so the plan must state its assumptions.', 'senroflux' ) );
 		}
 
-		return array(
+		$image_error = self::missingImageStepError( $normalized_steps, $known_verbs );
+		if ( null !== $image_error ) {
+			return $image_error;
+		}
+
+		// S7 quality fix (2026-09-28): a pack-contributed plan-time check, kept
+		// out of this file the same way `missingImageStepError()`'s own
+		// PAGE_CREATE_VERBS duplicates pack verb strings rather than reaching
+		// into `src/Packs` (this class's own isolation rule, see the class
+		// docblock) — a hook, not a hardcoded pack name, so ANY pack may
+		// refuse a plan through it. Each registered callback is passed the
+		// PRIOR error (null the first time) and must pass an existing WP_Error
+		// through unmodified; {@see \Specflux\SenroFlux\Packs\Site\Navigation::filterPlanError()}
+		// is the site pack's own contribution (the stock-Sample-Page-left-in-nav
+		// check), a no-op for every other pack's plan.
+		/** Filters an accepted plan for a pack-specific extra refusal. `@internal`. */
+		$pack_error = apply_filters( 'senroflux_plan_error', null, $normalized_steps, $known_verbs, $run_id );
+		if ( $pack_error instanceof WP_Error ) {
+			return $pack_error;
+		}
+
+		$payload = array(
 			'goal'        => $goal,
 			'steps'       => $normalized_steps,
 			'assumptions' => $normalized_assumptions,
 		);
+
+		// 0.3 stage 22b (S7/S12): the objects the plan adopts, and the ones it
+		// leaves for the human — the report reads them back from the accepted
+		// plan. Optional; a plan naming none keeps its old payload shape.
+		foreach ( array( 'adopted', 'left_for_you' ) as $key ) {
+			if ( ! array_key_exists( $key, $args ) || null === $args[ $key ] ) {
+				continue;
+			}
+			$list = self::normaliseObjectList( $key, $args[ $key ] );
+			if ( $list instanceof WP_Error ) {
+				return $list;
+			}
+			if ( array() !== $list ) {
+				$payload[ $key ] = $list;
+			}
+		}
+
+		return $payload;
+	}
+
+	/**
+	 * One step's `objects`: the existing objects a pre-approval may cover.
+	 *
+	 * Ids are the strings the run tracks written objects under (a bare post or
+	 * product id, or a pack-prefixed one such as `term:12`), so a plan id and
+	 * the id a call's arguments carry compare equal. Every id must resolve to a
+	 * real object, or the grant would bind to nothing the human could see.
+	 *
+	 * @param mixed         $objects       The step's raw `objects`.
+	 * @param int           $step_number   1-based, for the message.
+	 * @param callable|null $object_lookup See {@see validateProposePlan()}.
+	 * @return list<string>|WP_Error
+	 */
+	private static function normaliseStepObjects( mixed $objects, int $step_number, ?callable $object_lookup ): array|WP_Error {
+		if ( null === $objects ) {
+			return array();
+		}
+
+		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
+			self::ERROR_INVALID_PLAN,
+			/* translators: %s names the offending field. */
+			sprintf( __( 'Invalid propose-plan call: %s', 'senroflux' ), $what )
+		);
+
+		if ( ! is_array( $objects ) ) {
+			/* translators: %d is the 1-based step number. */
+			return $invalid( sprintf( __( 'step %d "objects" must be an array of ids.', 'senroflux' ), $step_number ) );
+		}
+		if ( count( $objects ) > self::MAX_STEP_OBJECTS ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: 1-based step number, 2: maximum ids per step. */
+					__( 'step %1$d "objects" lists more than %2$d ids; split the work across steps.', 'senroflux' ),
+					$step_number,
+					self::MAX_STEP_OBJECTS
+				)
+			);
+		}
+
+		$ids = array();
+		foreach ( $objects as $object ) {
+			if ( is_int( $object ) ) {
+				$object = (string) $object;
+			}
+			if ( ! is_string( $object ) || '' === trim( $object ) ) {
+				/* translators: %d is the 1-based step number. */
+				return $invalid( sprintf( __( 'step %d "objects" entries must be non-empty string or integer ids.', 'senroflux' ), $step_number ) );
+			}
+			$ids[ trim( $object ) ] = true;
+		}
+		$ids = array_map( 'strval', array_keys( $ids ) );
+
+		$unknown = array();
+		foreach ( $ids as $id ) {
+			$found = is_callable( $object_lookup ) ? $object_lookup( $id ) : null;
+			if ( ! is_array( $found ) || 'unknown' === ( $found['object_type'] ?? 'unknown' ) ) {
+				$unknown[] = $id;
+			}
+		}
+		if ( array() !== $unknown ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: 1-based step number, 2: comma-separated ids. */
+					__( 'step %1$d "objects" names ids that are not existing objects: %2$s. Use the id exactly as the read tool reports it.', 'senroflux' ),
+					$step_number,
+					implode( ', ', $unknown )
+				)
+			);
+		}
+
+		return $ids;
+	}
+
+	/**
+	 * The schema of one `adopted` / `left_for_you` list.
+	 *
+	 * @param string $description What the list means, for the model.
+	 * @return array<string,mixed>
+	 */
+	private static function objectListSchema( string $description ): array {
+		return array(
+			'type'        => 'array',
+			'maxItems'    => self::MAX_OBJECT_LIST,
+			'description' => $description,
+			'items'       => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'id'    => array(
+						'type'        => 'string',
+						'description' => __( 'The object\'s ID, as a string.', 'senroflux' ),
+					),
+					'title' => array(
+						'type'        => 'string',
+						'maxLength'   => self::MAX_STEP_TEXT_CHARS,
+						'description' => __( 'Its title, if you know it.', 'senroflux' ),
+					),
+				),
+				'required'             => array( 'id' ),
+				'additionalProperties' => false,
+			),
+		);
+	}
+
+	/**
+	 * Validate one `adopted` / `left_for_you` list into `{ id, title }` rows.
+	 * The model's title is untrusted display text; the report resolves the
+	 * real one from the object itself where it can.
+	 *
+	 * @param string $key   The field name, for the error message.
+	 * @param mixed  $value The model's value.
+	 * @return list<array{id:string,title:string}>|WP_Error
+	 */
+	private static function normaliseObjectList( string $key, mixed $value ): array|WP_Error {
+		$invalid = static fn ( string $what ): WP_Error => new WP_Error(
+			self::ERROR_INVALID_PLAN,
+			/* translators: %s names the offending field. */
+			sprintf( __( 'Invalid propose-plan call: %s', 'senroflux' ), $what )
+		);
+
+		if ( ! is_array( $value ) || count( $value ) > self::MAX_OBJECT_LIST ) {
+			return $invalid(
+				sprintf(
+					/* translators: 1: the field name, 2: the maximum number of entries. */
+					__( '"%1$s" must be a list of at most %2$d objects.', 'senroflux' ),
+					$key,
+					self::MAX_OBJECT_LIST
+				)
+			);
+		}
+
+		$rows = array();
+		foreach ( $value as $entry ) {
+			$id = is_array( $entry ) ? ( $entry['id'] ?? null ) : null;
+			if ( is_int( $id ) ) {
+				$id = (string) $id;
+			}
+			if ( ! is_string( $id ) || '' === trim( $id ) ) {
+				return $invalid(
+					sprintf(
+						/* translators: %s: the field name. */
+						__( 'every "%s" entry needs an "id".', 'senroflux' ),
+						$key
+					)
+				);
+			}
+
+			$title = is_array( $entry ) && is_string( $entry['title'] ?? null ) ? trim( $entry['title'] ) : '';
+			if ( self::overCap( $title, self::MAX_STEP_TEXT_CHARS ) ) {
+				$title = mb_substr( $title, 0, self::MAX_STEP_TEXT_CHARS );
+			}
+
+			$rows[] = array(
+				'id'    => trim( $id ),
+				'title' => $title,
+			);
+		}
+
+		return $rows;
+	}
+
+	/**
+	 * 0.3 quality fix (S7 plan-time image check): refuse a plan that creates a
+	 * page (a `PAGE_CREATE_VERBS` verb on any step) unless SOME step also lists
+	 * a media-search verb AND a media-generate/upload verb. Create-only: an
+	 * `update-post` step cannot be checked here — the plan names a VERB, never
+	 * the `content`/`no_image_reason` arguments the actual call will carry, so
+	 * whether that particular update needs an image is undecidable at plan
+	 * time (see {@see \Specflux\SenroFlux\Packs\Content\Abilities}'s own
+	 * per-call check for that half of the rule).
+	 *
+	 * `senroflux_require_page_image` off disables this too — same filter, same
+	 * meaning ("this site's runs don't need page images").
+	 *
+	 * @param list<array{text:string,verbs:list<string>,tier:int}> $steps       Normalized steps.
+	 * @param list<string>|null                                    $known_verbs The run's own verb vocabulary
+	 *                                                                          (narrows which verbs the
+	 *                                                                          message suggests); null lists
+	 *                                                                          every candidate verb.
+	 */
+	private static function missingImageStepError( array $steps, ?array $known_verbs ): ?WP_Error {
+		/** Filters whether a page write must include an image step. `@internal`. */
+		if ( ! apply_filters( 'senroflux_require_page_image', true ) ) {
+			return null;
+		}
+
+		$verbs        = array();
+		$creates_page = false;
+		foreach ( $steps as $step ) {
+			foreach ( $step['verbs'] as $verb ) {
+				$verbs[] = $verb;
+				if ( in_array( $verb, self::PAGE_CREATE_VERBS, true ) ) {
+					$creates_page = true;
+				}
+			}
+		}
+
+		if ( ! $creates_page ) {
+			return null;
+		}
+
+		$has_search  = array() !== array_intersect( self::MEDIA_SEARCH_VERBS, $verbs );
+		$has_acquire = array() !== array_intersect( self::MEDIA_ACQUIRE_VERBS, $verbs );
+		if ( $has_search && $has_acquire ) {
+			return null;
+		}
+
+		// Suggest only verbs this run can actually produce, so the fix the
+		// message names is never itself refused as unknown_verb.
+		$narrow = static fn ( array $candidates ): array => null !== $known_verbs
+			? array_values( array_intersect( $candidates, $known_verbs ) )
+			: $candidates;
+
+		$narrowed_acquire = $narrow( self::MEDIA_ACQUIRE_VERBS );
+
+		// 0.3 quality fix (images budget 0): when narrowing dropped every
+		// media-generate verb (the run's images budget is 0, see
+		// Runner::knownVerbs()), the message must not tell the model to add
+		// one anyway — that is the exact refused-then-re-plan loop this fix
+		// removes.
+		$has_generate_option = array() !== array_filter(
+			$narrowed_acquire,
+			static fn ( string $verb ): bool => str_ends_with( $verb, '/media-generate' )
+		);
+
+		$message = $has_generate_option
+			? sprintf(
+				/* translators: 1: media-search verb list, 2: media-generate/upload/stock-import verb list. */
+				__( 'This plan creates a page but no step lists a way to get an image. Add a media-search verb (%1$s) AND a media-generate, media-upload or media-stock-import verb (%2$s) to a step, spelled exactly as this pack\'s own verb list gives them, then propose the plan again.', 'senroflux' ),
+				implode( ', ', $narrow( self::MEDIA_SEARCH_VERBS ) ),
+				implode( ', ', $narrowed_acquire )
+			)
+			: sprintf(
+				/* translators: 1: media-search verb list, 2: media-upload/stock-import verb list. */
+				__( 'This plan creates a page but no step lists a way to get an image. Add a media-search verb (%1$s) AND a media-upload or media-stock-import verb (%2$s) to a step, spelled exactly as this pack\'s own verb list gives them, then propose the plan again.', 'senroflux' ),
+				implode( ', ', $narrow( self::MEDIA_SEARCH_VERBS ) ),
+				implode( ', ', $narrowed_acquire )
+			);
+
+		return new WP_Error( self::ERROR_PAGE_NEEDS_IMAGE, $message );
+	}
+
+	/**
+	 * Is `$text` past `$cap` plus {@see LENGTH_TOLERANCE_PERCENT}?
+	 */
+	public static function overCap( string $text, int $cap ): bool {
+		return mb_strlen( $text ) > intdiv( $cap * ( 100 + self::LENGTH_TOLERANCE_PERCENT ), 100 );
 	}
 
 	/**

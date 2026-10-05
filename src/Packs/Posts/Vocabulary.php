@@ -92,7 +92,10 @@ final class Vocabulary implements ContentVocabulary {
 
 	/**
 	 * Every block name the vocabulary admits: prose plus the feature
-	 * patterns' own constituent blocks (Validator step 2).
+	 * patterns' own constituent blocks (Validator step 2) and `core/list-item`,
+	 * which WordPress 6.1+ nests inside every `core/list`. It is deliberately
+	 * not prose: it is never a top-level block (the Validator admits it only
+	 * as a direct child of `core/list`).
 	 *
 	 * @return list<string>
 	 */
@@ -101,7 +104,7 @@ final class Vocabulary implements ContentVocabulary {
 			array_unique(
 				array_merge(
 					$this->proseBlockNames(),
-					array( 'core/group', 'core/buttons', 'core/button', 'core/pullquote' )
+					array( 'core/group', 'core/buttons', 'core/button', 'core/pullquote', 'core/list-item' )
 				)
 			)
 		);
@@ -141,11 +144,38 @@ final class Vocabulary implements ContentVocabulary {
 	 * so unlike the pages/site packs there is no optional-attribute rule to
 	 * document here.
 	 *
-	 * @return array<string,mixed> { patterns: list<array<string,mixed>> }
+	 * Token cost, same shape as the pages/site packs': with `$names`
+	 * empty, returns a compact INDEX (name, title, description only). With
+	 * `$names` given, returns full entries (today's shape, including
+	 * `markup` where a pattern has any) for exactly those names, in
+	 * vocabulary order; an unrecognised name is reported in `not_found`
+	 * rather than failing the call.
+	 *
+	 * @param list<string> $names Pattern names to return full entries for.
+	 * @return array<string,mixed> { patterns: list<array<string,mixed>>, not_found?: list<string> }
 	 */
-	public function listPayload(): array {
+	public function listPayload( array $names = array() ): array {
+		if ( empty( $names ) ) {
+			$patterns = array();
+			foreach ( $this->all() as $pattern ) {
+				$patterns[] = array(
+					'name'        => $pattern['name'],
+					'title'       => $pattern['title'],
+					'description' => $pattern['description'],
+				);
+			}
+
+			return array( 'patterns' => $patterns );
+		}
+
+		$wanted   = array_flip( $names );
 		$patterns = array();
 		foreach ( $this->all() as $pattern ) {
+			if ( ! isset( $wanted[ $pattern['name'] ] ) ) {
+				continue;
+			}
+			unset( $wanted[ $pattern['name'] ] );
+
 			$entry = array(
 				'name'        => $pattern['name'],
 				'title'       => $pattern['title'],
@@ -158,7 +188,13 @@ final class Vocabulary implements ContentVocabulary {
 			$patterns[] = $entry;
 		}
 
-		return array( 'patterns' => $patterns );
+		$payload = array( 'patterns' => $patterns );
+
+		if ( ! empty( $wanted ) ) {
+			$payload['not_found'] = array_keys( $wanted );
+		}
+
+		return $payload;
 	}
 
 	/**
@@ -321,15 +357,7 @@ final class Vocabulary implements ContentVocabulary {
 			'title'       => 'Closing call to action',
 			'description' => __( 'A full-width closing call to action. At most one per post.', 'senroflux' ),
 			'kind'        => 'feature',
-			'markup'      => <<<'HTML'
-<!-- wp:group {"metadata":{"name":"senroflux/closing-cta"},"align":"full","layout":{"type":"constrained"}} -->
-<div class="wp-block-group alignfull">
-<!-- wp:heading {"textAlign":"center"} --><h2 class="wp-block-heading has-text-align-center">Keep reading</h2><!-- /wp:heading -->
-<!-- wp:paragraph {"align":"center"} --><p class="has-text-align-center">One line of supporting benefit before the button.</p><!-- /wp:paragraph -->
-<!-- wp:buttons {"layout":{"type":"flex","justifyContent":"center"}} --><div class="wp-block-buttons"><!-- wp:button --><div class="wp-block-button"><a class="wp-block-button__link wp-element-button" href="#">Read more</a></div><!-- /wp:button --></div><!-- /wp:buttons -->
-</div><!-- /wp:group -->
-HTML
-			,
+			'markup'      => $this->markup( 'closing-cta' ),
 			'repeatable'  => array(),
 			'constraints' => array(
 				'slots'  => array(),
@@ -354,12 +382,7 @@ HTML
 			'title'       => 'Pull quote',
 			'description' => __( 'A pulled-out quotation, visually distinct from an inline quote.', 'senroflux' ),
 			'kind'        => 'feature',
-			'markup'      => <<<'HTML'
-<!-- wp:pullquote {"metadata":{"name":"senroflux/pull-quote"}} -->
-<figure class="wp-block-pullquote"><blockquote><p>A short line worth pulling out.</p><cite>Attribution, optional</cite></blockquote></figure>
-<!-- /wp:pullquote -->
-HTML
-			,
+			'markup'      => $this->markup( 'pull-quote' ),
 			'repeatable'  => array(),
 			'constraints' => array(
 				'slots'  => array(),
@@ -368,5 +391,16 @@ HTML
 				),
 			),
 		);
+	}
+
+	/**
+	 * A skeleton's markup from patterns/<slug>.html, byte for byte (the files
+	 * carry no trailing newline).
+	 *
+	 * @param string $slug A literal pattern slug.
+	 * @return string
+	 */
+	private function markup( string $slug ): string {
+		return (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
 	}
 }

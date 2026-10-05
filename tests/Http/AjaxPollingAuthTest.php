@@ -159,7 +159,7 @@ final class AjaxPollingAuthTest extends TestCase {
 			new WpdbRunStore( $db ),
 			new ToolExecutor(),
 			new class() implements ModelGatewayInterface {
-				public function generateTurn( array $history, string $system_instruction, ToolRegistry $tools ): ModelTurn|WP_Error {
+				public function generateTurn( array $history, string $system_instruction, ToolRegistry $tools, ?array $model_preference = null ): ModelTurn|WP_Error {
 					unset( $history, $system_instruction, $tools );
 
 					return new WP_Error( 'unused', 'no model calls in this test' );

@@ -203,6 +203,14 @@ export function stepVerb( step ) {
  * un-parked tool_result, so this returns `null` rather than guessing).
  */
 export function stepTier( step ) {
+	// 0.3 S23: `Plugin::get()` now lifts the tier onto the step itself
+	// (`step.tier`) for every kind, including a plain `tool_result` that ran
+	// without parking — the pre-S23 payload only had it nested inside an
+	// `approval` step's own message. Prefer the top-level field; fall back to
+	// `message.tier` for any payload shape that still only carries it there.
+	if ( Number.isInteger( step.tier ) ) {
+		return step.tier;
+	}
 	if ( step.message && 'object' === typeof step.message && Number.isInteger( step.message.tier ) ) {
 		return step.message.tier;
 	}
@@ -226,9 +234,18 @@ export function stepTier( step ) {
  * @return {Array} One entry per plan step: `{ done, total, active, waiting }`.
  */
 export function planProgress( plan, steps ) {
+	let lastPlan = -1;
+	steps.forEach( ( step, index ) => {
+		if ( 'plan' === step.kind ) {
+			lastPlan = index;
+		}
+	} );
+	// A tool_result records the verb its plan names it by (`plan_verb`);
+	// older rows only carry the function name.
 	const executedVerbs = steps
+		.slice( lastPlan + 1 )
 		.filter( ( step ) => 'tool_result' === step.kind && 'ok' === step.status )
-		.map( ( step ) => stepVerb( step ) );
+		.map( ( step ) => ( step.message && step.message.plan_verb ) || stepVerb( step ) );
 
 	let cursor = 0;
 	const parkedVerb = ( () => {
@@ -240,9 +257,12 @@ export function planProgress( plan, steps ) {
 		const verbs = Array.isArray( planStep.verbs ) ? planStep.verbs : [];
 		let done = 0;
 		verbs.forEach( ( verb ) => {
-			if ( executedVerbs[ cursor ] === verb ) {
+			// Search forward: unplanned calls in between, or a planned verb
+			// that never ran, must not stall the steps after it.
+			const found = executedVerbs.indexOf( verb, cursor );
+			if ( -1 !== found ) {
 				done++;
-				cursor++;
+				cursor = found + 1;
 			}
 		} );
 		return {
@@ -257,23 +277,22 @@ export function planProgress( plan, steps ) {
  * How many approvals a plan implies (S7/S10), so the plan card discloses
  * this BEFORE the human accepts it, not step by step as the run goes.
  *
- * Built-in mode: every Tier >= 1 verb OCCURRENCE across the whole plan, not
- * every qualifying STEP — a step naming three Tier >= 1 verbs parks three
- * times, once per call, not once. Ported from the retired PHP plan card
- * (`RunsScreen::countParksInBuiltinMode()`/`countVerbsAtOrAboveTier()`) after
- * a live-run defect: counting steps instead of verb occurrences told the
- * approver "approve 2" when the real answer was 4 (one step grouped three
- * Tier >= 1 verbs: [create-draft], [media-generate, update-alt,
- * set-featured-image], [read] — the correct count is 1 + 3 + 0 = 4). A verb
- * whose tier is unknown (the step carries no `tier`) is treated as Tier 2 —
- * fail closed, the same rule `VerbTier::tierFor()` uses server-side.
+ * Built-in mode: every verb OCCURRENCE that is itself Tier >= 1, across the
+ * whole plan — a step naming three Tier >= 1 verbs parks three times, once
+ * per call. A verb's own tier comes from the step's `verb_tiers` map; the
+ * step-level `tier` is only the MAX over its verbs, so counting every verb of
+ * a step by it over-counted (live J4: five steps of [Tier 0, Tier 1, Tier 0]
+ * verbs told the approver "15" when exactly 5 approvals happened). A verb
+ * with no tier of its own (a plan stored before `verb_tiers` existed) falls
+ * back to the step's `tier`, and with neither it is treated as Tier 2 — fail
+ * closed, the same rule `VerbTier::tierFor()` uses server-side.
  *
  * Agent Safety mode: no count at all — S3's built-in-only approval count has
  * no AS-mode equivalent here (a Tier-2 verb's own tier badge already
  * discloses it per call), so this returns `null` and the caller renders
  * nothing.
  *
- * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier }] }`).
+ * @param {Object} plan     The plan message payload (`{ steps: [{ verbs, tier, verb_tiers, objects }] }`).
  * @param {string} gateMode 'agent_safety' | 'built_in'.
  * @return {number|null} The approval count in built-in mode, else `null`.
  */
@@ -287,9 +306,16 @@ export function planApprovalCount( plan, gateMode ) {
 
 	return ( plan.steps || [] ).reduce( ( total, step ) => {
 		const verbs = Array.isArray( step.verbs ) ? step.verbs : [];
-		const tier = Number.isInteger( step.tier ) ? step.tier : FAIL_CLOSED_TIER;
-		const qualifying = tier >= THRESHOLD ? verbs.length : 0;
-		return total + qualifying;
+		const verbTiers = step.verb_tiers && 'object' === typeof step.verb_tiers ? step.verb_tiers : {};
+		const stepTier = Number.isInteger( step.tier ) ? step.tier : FAIL_CLOSED_TIER;
+		const qualifying = verbs.filter( ( verb ) => {
+			const tier = Number.isInteger( verbTiers[ verb ] ) ? verbTiers[ verb ] : stepTier;
+			return tier >= THRESHOLD;
+		} );
+		// A step naming N existing objects asks once per object per verb (the
+		// server issues max(1, N) grants for it); one with none asks once.
+		const named = Array.isArray( step.objects ) ? step.objects.length : 0;
+		return total + qualifying.length * Math.max( 1, named );
 	}, 0 );
 }
 
@@ -332,6 +358,18 @@ export function stepLabel( step, fallbackLabel ) {
 }
 
 /**
+ * The distinct labels of a ledger group's calls, in first-seen order, so a
+ * collapsed group's summary never hides a write between reads.
+ *
+ * @param {Array}  calls         `{ step }` entries from `groupSteps`.
+ * @param {string} fallbackLabel Label for a call with no verb.
+ * @return {Array<string>} Labels.
+ */
+export function ledgerLabels( calls, fallbackLabel ) {
+	return [ ...new Set( calls.map( ( call ) => stepLabel( call.step, fallbackLabel ) ) ) ];
+}
+
+/**
  * The plain-text result shown under a ledger row.
  *
  * Rejected calls are NOT handled here: `LedgerGroup.js` branches on
@@ -357,4 +395,44 @@ export function stepResult( step ) {
 		}
 	}
 	return '';
+}
+
+/**
+ * The store report the run produced on demand (J13), if any: the newest
+ * successful `store-report` tool result, in the output shape
+ * `senroflux/store-report` declares. `save-store-report` is a different
+ * ability (it writes a page) and never counts. Returns null when the run made
+ * none, or the result does not have the expected shape.
+ *
+ * @param {Array} steps The run's steps.
+ * @return {?Object} The report output, or null.
+ */
+export function storeReportFromSteps( steps ) {
+	for ( let i = ( steps || [] ).length - 1; i >= 0; i-- ) {
+		const step = steps[ i ];
+		if ( 'tool_result' !== step.kind || 'ok' !== step.status ) {
+			continue;
+		}
+		if ( ! /(^|__|\/)store-report$/.test( step.tool_name || '' ) ) {
+			continue;
+		}
+		const part =
+			step.message && Array.isArray( step.message.parts )
+				? step.message.parts.find( ( p ) => p && p.functionResponse )
+				: null;
+		const response = part ? part.functionResponse.response : null;
+		if ( response && 'object' === typeof response && Number.isInteger( response.order_count ) ) {
+			return response;
+		}
+	}
+	return null;
+}
+
+/** `{ total, notChecked }` over a report's change rows. */
+export function reportCounts( report ) {
+	const changes = report && Array.isArray( report.changes ) ? report.changes : [];
+	return {
+		total: changes.length,
+		notChecked: changes.filter( ( change ) => ! change.verified ).length,
+	};
 }

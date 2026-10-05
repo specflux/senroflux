@@ -61,7 +61,8 @@ if ( ! function_exists( 'wp_register_ability' ) ) {
 			$args['execute_callback'] ?? array( 'ok' => true ),
 			$args['description'] ?? '',
 			$args['input_schema'] ?? null,
-			$args['meta'] ?? array()
+			$args['meta'] ?? array(),
+			$args['output_schema'] ?? null
 		);
 		$GLOBALS['senroflux_test_abilities'][ $name ] = $ability;
 
@@ -226,6 +227,31 @@ if ( ! function_exists( 'wp_update_post' ) ) {
 		$id = (int) ( $postarr['ID'] ?? 0 );
 		if ( isset( $GLOBALS['senroflux_test_posts'][ $id ] ) ) {
 			$post = $GLOBALS['senroflux_test_posts'][ $id ];
+			// Real wp_update_post() (wp-includes/post.php): a never-dated
+			// draft gets "now" instead of the passed date unless edit_date is
+			// set, and wp_insert_post() publishes a `future` post whose date
+			// is not ahead. Without both, a scheduling bug passes here.
+			$clear_date = in_array( (string) ( $post->post_status ?? '' ), array( 'draft', 'pending', 'auto-draft' ), true )
+				&& empty( $postarr['edit_date'] )
+				&& '0000-00-00 00:00:00' === (string) ( $post->post_date_gmt ?? '0000-00-00 00:00:00' );
+			unset( $postarr['edit_date'] );
+			if ( $clear_date ) {
+				$postarr['post_date']     = gmdate( 'Y-m-d H:i:s', class_exists( \Specflux\SenroFlux\Run\Clock::class ) ? \Specflux\SenroFlux\Run\Clock::now() : time() );
+				$postarr['post_date_gmt'] = '';
+			}
+			if ( 'future' === ( $postarr['post_status'] ?? null ) ) {
+				$gmt = (string) ( $postarr['post_date_gmt'] ?? '' );
+				$at  = '' === $gmt ? false : strtotime( $gmt . ' UTC' );
+				$now = class_exists( \Specflux\SenroFlux\Run\Clock::class ) ? \Specflux\SenroFlux\Run\Clock::now() : time();
+				if ( false === $at || $at <= $now ) {
+					$postarr['post_status'] = 'publish';
+				}
+			}
+			foreach ( array( 'post_date', 'post_date_gmt' ) as $date_key ) {
+				if ( array_key_exists( $date_key, $postarr ) ) {
+					$post->{$date_key} = $postarr[ $date_key ];
+				}
+			}
 			foreach ( $postarr as $key => $value ) {
 				if ( 'ID' === $key ) {
 					continue;
@@ -260,11 +286,32 @@ if ( ! function_exists( 'get_post' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_page_by_path' ) ) {
+	/** Like core: matches by slug and type, any non-trashed status. */
+	function get_page_by_path( string $path, string $output = 'OBJECT', string $post_type = 'page' ): ?stdClass {
+		foreach ( (array) ( $GLOBALS['senroflux_test_posts'] ?? array() ) as $post ) {
+			if ( is_object( $post ) && ( $post->post_name ?? '' ) === $path && ( $post->post_type ?? '' ) === $post_type ) {
+				return $post;
+			}
+		}
+
+		return null;
+	}
+}
+
 if ( ! function_exists( 'get_post_status' ) ) {
 	function get_post_status( int $id ): string {
 		$post = get_post( $id );
 
 		return $post ? (string) ( $post->post_status ?? '' ) : '';
+	}
+}
+
+if ( ! function_exists( 'get_post_type' ) ) {
+	function get_post_type( int $id ): string|false {
+		$post = get_post( $id );
+
+		return $post ? (string) ( $post->post_type ?? '' ) : false;
 	}
 }
 

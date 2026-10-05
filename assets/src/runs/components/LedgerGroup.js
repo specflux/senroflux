@@ -1,7 +1,7 @@
 import { useState } from '@wordpress/element';
 import { __, sprintf, _n } from '@wordpress/i18n';
 import TierBadge from './TierBadge';
-import { stepLabel, stepResult, stepVerb, stepTier } from '../utils';
+import { stepLabel, stepResult, stepVerb, stepTier, ledgerLabels } from '../utils';
 
 /**
  * A collapsed run of consecutive tool calls (S10: "consecutive tool calls
@@ -17,16 +17,16 @@ export default function LedgerGroup( { calls, gateMode } ) {
 	const [ open, setOpen ] = useState( false );
 	const count = calls.length;
 	const toolCallFallback = __( 'Tool call', 'senroflux' );
-	const lastLabel = count > 0 ? stepLabel( calls[ count - 1 ].step, toolCallFallback ) : '';
+	const summaryLabels = ledgerLabels( calls, toolCallFallback ).join( ', ' );
 
 	return (
 		<details className="senroflux-ledger-group" open={ open } onToggle={ ( e ) => setOpen( e.target.open ) }>
 			<summary>
 				{ /* translators: %d: number of actions in this ledger group. */ sprintf( _n( '%d action', '%d actions', count, 'senroflux' ), count ) }
-				{ /* S22 pseudo-locale: lastLabel is mechanically derived from
+				{ /* S22 pseudo-locale: the labels are mechanically derived from
 				 * the raw ability id (stepLabel()), not translatable UI
 				 * chrome — data-senroflux-content marks it as data. */ }
-				{ lastLabel && <span data-senroflux-content>{ `: ${ lastLabel }` }</span> }
+				{ summaryLabels && <span data-senroflux-content>{ `: ${ summaryLabels }` }</span> }
 			</summary>
 			<ol className="senroflux-ledger">
 				{ calls.map( ( call, index ) => (

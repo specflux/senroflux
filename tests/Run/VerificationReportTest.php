@@ -56,38 +56,53 @@ final class VerificationReportTest extends TestCase {
 		$GLOBALS['senroflux_test_current_user_id'] = 1;
 		$GLOBALS['senroflux_test_transients']      = array();
 		$GLOBALS['senroflux_test_abilities']       = array(
-			'agsafe-smoke/write' => new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/write'     => new SenroFlux_Test_Fake_Ability(
 				'agsafe-smoke/write',
 				permission_result: true,
 				execute_result: array( 'id' => 42 )
 			),
-			'agsafe-smoke/read'  => new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/read'      => new SenroFlux_Test_Fake_Ability(
 				'agsafe-smoke/read',
 				permission_result: true,
 				execute_result: array( 'ok' => true )
 			),
 			// A tier-1 call that confirms nothing: the model may pass the id
 			// but it is not a read-back.
-			'agsafe-smoke/touch' => new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/touch'     => new SenroFlux_Test_Fake_Ability(
 				'agsafe-smoke/touch',
 				permission_result: true,
 				execute_result: array( 'ok' => true )
 			),
 			// A tier-0 read that happens to echo an id of its own.
-			'agsafe-smoke/list'  => new SenroFlux_Test_Fake_Ability(
+			'agsafe-smoke/list'      => new SenroFlux_Test_Fake_Ability(
 				'agsafe-smoke/list',
 				permission_result: true,
 				execute_result: array( 'id' => 77 )
+			),
+			// A second write, tracked as a distinct object id (43).
+			'agsafe-smoke/write2'    => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/write2',
+				permission_result: true,
+				execute_result: array( 'id' => 43 )
+			),
+			// A tier-0 read whose args name several ids at once via `include`,
+			// mirroring `senroflux/read-content`'s query mode.
+			'agsafe-smoke/read-many' => new SenroFlux_Test_Fake_Ability(
+				'agsafe-smoke/read-many',
+				permission_result: true,
+				execute_result: array( 'ok' => true )
 			),
 		);
 
 		add_filter(
 			'senroflux_verb_map',
 			static fn ( array $map ): array => $map + array(
-				'agsafe-smoke/read'  => VerbTier::TIER_0,
-				'agsafe-smoke/list'  => VerbTier::TIER_0,
-				'agsafe-smoke/write' => VerbTier::TIER_1,
-				'agsafe-smoke/touch' => VerbTier::TIER_1,
+				'agsafe-smoke/read'      => VerbTier::TIER_0,
+				'agsafe-smoke/list'      => VerbTier::TIER_0,
+				'agsafe-smoke/write'     => VerbTier::TIER_1,
+				'agsafe-smoke/touch'     => VerbTier::TIER_1,
+				'agsafe-smoke/write2'    => VerbTier::TIER_1,
+				'agsafe-smoke/read-many' => VerbTier::TIER_0,
 			),
 			10,
 			1
@@ -119,8 +134,9 @@ final class VerificationReportTest extends TestCase {
 
 	/**
 	 * @param array<string,int> $budget_override Keys to merge over Budget::defaults().
+	 * @param list<string>      $verbs           Tier-1 verbs the accepted plan covers (S7).
 	 */
-	private function createRun( array $budget_override = array() ): int {
+	private function createRun( array $budget_override = array(), array $verbs = array( 'agsafe-smoke/write', 'agsafe-smoke/touch' ) ): int {
 		$run_id = $this->store->createRun(
 			1,
 			'test-consumer',
@@ -144,7 +160,7 @@ final class VerificationReportTest extends TestCase {
 				'steps'       => array(
 					array(
 						'text'  => 'Write it',
-						'verbs' => array( 'agsafe-smoke/write', 'agsafe-smoke/touch' ),
+						'verbs' => $verbs,
 						'tier'  => VerbTier::TIER_1,
 					),
 				),
@@ -351,6 +367,7 @@ final class VerificationReportTest extends TestCase {
 			new MessagePart( new FunctionCall( 'call_l', 'wpab__agsafe-smoke__list', array() ) )
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
 
@@ -527,5 +544,127 @@ final class VerificationReportTest extends TestCase {
 
 		$this->assertIsArray( $out );
 		$this->assertSame( $report, $out['run']['report'] ?? null, 'Plugin::get() returns the report on the run' );
+	}
+
+	// ------------------------------------------------------------------
+	// (m) a read naming several ids via `include` verifies every one of
+	// them (live run 61 defect: only a single bare `id`/`post_id` arg was
+	// ever counted, so a multi-id `read-content` call left every written
+	// id unverified and fired a false verify nudge).
+	// ------------------------------------------------------------------
+
+	public function test_m_a_multi_id_read_via_include_verifies_every_written_id(): void {
+		$run_id                  = $this->createRun( array(), array( 'agsafe-smoke/write', 'agsafe-smoke/write2' ) );
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing page 14.' ),
+			new MessagePart( new FunctionCall( 'call_w1', 'wpab__agsafe-smoke__write', array( 'title' => 'Page 14' ) ) )
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing page 15.' ),
+			new MessagePart( new FunctionCall( 'call_w2', 'wpab__agsafe-smoke__write2', array( 'title' => 'Page 15' ) ) )
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Checking both.' ),
+			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read-many', array( 'include' => array( 42, 43 ) ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'Done.' );
+
+		$result = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( 'completed', $result['run']['status'], 'both writes verify in the same read; no false nudge' );
+		$this->assertCount( 0, $this->verifyNudges( $run_id ) );
+
+		$run = $this->store->getRun( $run_id );
+		$this->assertNotNull( $run );
+		$this->assertNotNull( $run->objects['42']['verified_seq'] ?? null );
+		$this->assertNotNull( $run->objects['43']['verified_seq'] ?? null );
+
+		$report  = $result['ui']['report'] ?? array();
+		$changes = $report['changes'] ?? array();
+		$this->assertCount( 2, $changes );
+		foreach ( $changes as $change ) {
+			$this->assertTrue( $change['verified'] ?? false, 'object ' . ( $change['object_id'] ?? '?' ) . ' should verify' );
+		}
+	}
+
+	// ------------------------------------------------------------------
+	// (n) a verify nudge must not clobber the model's real pre-nudge
+	// summary with its post-nudge "just re-read, nothing new" reply (live
+	// run 61 defect: the report always used the LAST model text).
+	// ------------------------------------------------------------------
+
+	public function test_n_the_pre_nudge_summary_survives_when_the_re_read_makes_no_new_write(): void {
+		$run_id                  = $this->createRun();
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'A: wrote the new draft page.' );
+		$first                   = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+		$this->assertNotSame( 'completed', $first['run']['status'] );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
+
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Re-reading it.' ),
+			new MessagePart( new FunctionCall( 'call_r', 'wpab__agsafe-smoke__read', array( 'id' => 42 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'B: verified, no changes were made.' );
+		$second                  = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $second );
+		$this->assertSame( 'completed', $second['run']['status'] );
+
+		$report = $second['ui']['report'] ?? array();
+		$this->assertSame(
+			'A: wrote the new draft page.',
+			$report['summary'] ?? null,
+			'the pre-nudge summary is the real one; the post-nudge reply is a re-read acknowledgement, not a new report'
+		);
+	}
+
+	// ------------------------------------------------------------------
+	// (o) companion to (n): a write made AFTER the nudge means the model
+	// had something new to say, so its latest text is the real summary.
+	// ------------------------------------------------------------------
+
+	public function test_o_the_latest_summary_wins_when_a_new_write_follows_the_nudge(): void {
+		$run_id                  = $this->createRun( array(), array( 'agsafe-smoke/write', 'agsafe-smoke/write2' ) );
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing the page.' ),
+			new MessagePart( new FunctionCall( 'call_w', 'wpab__agsafe-smoke__write', array( 'title' => 'Draft' ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'A: wrote the new draft page.' );
+		$first                   = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+		$this->assertNotSame( 'completed', $first['run']['status'] );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ) );
+
+		// Verify the nudged object, THEN write a second one, THEN verify that
+		// too — a new write after the nudge, fully read back in the same tick.
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Re-reading it.' ),
+			new MessagePart( new FunctionCall( 'call_r1', 'wpab__agsafe-smoke__read', array( 'id' => 42 ) ) )
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Writing a second page.' ),
+			new MessagePart( new FunctionCall( 'call_w2', 'wpab__agsafe-smoke__write2', array( 'title' => 'Second' ) ) )
+		);
+		$this->gateway->script[] = self::turn(
+			new MessagePart( 'Reading it back.' ),
+			new MessagePart( new FunctionCall( 'call_r2', 'wpab__agsafe-smoke__read', array( 'id' => 43 ) ) )
+		);
+		$this->gateway->script[] = self::textTurn( 'B: also wrote a second page.' );
+		$second                  = $this->runner->tick( $run_id, $this->stepCount( $run_id ), null );
+
+		$this->assertIsArray( $second );
+		$this->assertSame( 'completed', $second['run']['status'] );
+		$this->assertCount( 1, $this->verifyNudges( $run_id ), 'both objects verify in this tick; no second nudge' );
+
+		$report = $second['ui']['report'] ?? array();
+		$this->assertSame(
+			'B: also wrote a second page.',
+			$report['summary'] ?? null,
+			'a write after the nudge means the model had something new to report'
+		);
 	}
 }

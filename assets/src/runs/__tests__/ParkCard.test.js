@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import ParkCard from '../components/ParkCard';
 
 /**
@@ -38,7 +38,7 @@ describe( 'the plan card pre-approve radio', () => {
 		expect( screen.getByText( /without asking again/i ) ).toBeInTheDocument();
 	} );
 
-	it( 'is hidden while Agent Safety grants are off (preapprove_available: false)', () => {
+	it( 'is hidden while Agent Tollgate grants are off (preapprove_available: false)', () => {
 		render(
 			<ParkCard
 				kind="plan"
@@ -149,5 +149,113 @@ describe( 'park resolutions call onResolve with the S5 resume shape', () => {
 		fireEvent.click( vetoButton );
 
 		expect( onResolve ).toHaveBeenCalledWith( { plan: { action: 'veto', note: 'Too risky' } } );
+	} );
+} );
+
+describe( 'the plan card names the existing objects a step will change', () => {
+	const plan = {
+		steps: [
+			{
+				text: 'Raise the mug price',
+				verbs: [ 'commerce/price-change' ],
+				tier: 2,
+				objects: [
+					{ id: '12', title: 'Ceramic Mug', type: 'product' },
+					{ id: 'term:7', title: 'Accessories', type: 'term' },
+					{ id: '99', title: '', type: 'product' },
+				],
+			},
+			{ text: 'Create a post', verbs: [ 'posts/create-draft' ], tier: 1 },
+		],
+	};
+
+	it( 'renders each object as plain text marked as site content', () => {
+		const { container } = render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const mug = screen.getByText( 'Ceramic Mug (#12)' );
+		expect( mug ).toHaveAttribute( 'data-senroflux-content' );
+		expect( screen.getByText( 'Accessories (term:7)' ) ).toBeInTheDocument();
+		expect( screen.getByText( '#99' ) ).toBeInTheDocument();
+		expect( container.querySelectorAll( '.senroflux-plan-objects' ) ).toHaveLength( 1 );
+	} );
+
+	it( 'never interprets a hostile title as markup', () => {
+		const hostile = {
+			steps: [
+				{
+					text: 'Edit',
+					verbs: [ 'commerce/price-change' ],
+					tier: 2,
+					objects: [ { id: '5', title: '<img src=x onerror=alert(1)>', type: 'product' } ],
+				},
+			],
+		};
+		const { container } = render( <ParkCard kind="plan" gateMode="agent_safety" payload={ hostile } /> );
+
+		expect( container.querySelector( 'img' ) ).toBeNull();
+		expect( screen.getByText( '<img src=x onerror=alert(1)> (#5)' ) ).toBeInTheDocument();
+	} );
+} );
+
+describe( 'the plan card lists the existing pages it keeps and leaves alone', () => {
+	const plan = {
+		steps: [ { text: 'Edit the About page', verbs: [ 'posts/update' ], tier: 1 } ],
+		adopted: [ { id: '10', title: 'About', status: 'publish' } ],
+		left_for_you: [
+			{ id: '2', title: 'Sample Page', status: 'publish' },
+			{ id: '3', title: 'Privacy Policy', status: 'draft' },
+			{ id: '9', title: 'Gone', status: null },
+		],
+	};
+
+	it( 'renders both lists with title, #id and status in words', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const kept = screen.getByRole( 'heading', { name: 'Existing pages kept' } ).nextElementSibling;
+		expect( kept.tagName ).toBe( 'UL' );
+		expect( within( kept ).getByText( 'About · #10 · published' ) ).toHaveAttribute( 'data-senroflux-content' );
+
+		const left = screen.getByRole( 'heading', { name: 'Left as they are' } ).nextElementSibling;
+		expect( left.tagName ).toBe( 'UL' );
+		expect( within( left ).getByText( 'Sample Page · #2 · published' ) ).toBeInTheDocument();
+		expect( within( left ).getByText( 'Privacy Policy · #3 · draft' ) ).toBeInTheDocument();
+		expect( within( left ).getByText( 'Gone · #9' ) ).toBeInTheDocument();
+	} );
+
+	it( 'renders neither heading for empty or missing lists', () => {
+		render(
+			<ParkCard
+				kind="plan"
+				gateMode="agent_safety"
+				payload={ { steps: [], adopted: [], left_for_you: undefined } }
+			/>
+		);
+
+		expect( screen.queryByRole( 'heading', { name: 'Existing pages kept' } ) ).toBeNull();
+		expect( screen.queryByRole( 'heading', { name: 'Left as they are' } ) ).toBeNull();
+	} );
+} );
+
+describe( 'a site plan card lists the pages already on the site', () => {
+	it( 'renders the server list with title, #id and status, before the plan\'s own lists', () => {
+		const plan = {
+			steps: [ { text: 'Build the skeleton', verbs: [ 'site/create' ], tier: 1 } ],
+			site_pages: [
+				{ id: '3', title: 'Privacy Policy', status: 'draft' },
+				{ id: '2', title: 'Sample Page', status: 'publish' },
+			],
+		};
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const list = screen.getByRole( 'heading', { name: 'Pages on the site now' } ).nextElementSibling;
+		expect( list.tagName ).toBe( 'UL' );
+		expect( within( list ).getByText( 'Privacy Policy · #3 · draft' ) ).toBeInTheDocument();
+		expect( within( list ).getByText( 'Sample Page · #2 · published' ) ).toBeInTheDocument();
+	} );
+
+	it( 'renders no heading when the server sends no pages', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ { steps: [], site_pages: [] } } /> );
+
+		expect( screen.queryByRole( 'heading', { name: 'Pages on the site now' } ) ).toBeNull();
 	} );
 } );

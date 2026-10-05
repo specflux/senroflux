@@ -9,7 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Http;
 
+use Specflux\SenroFlux\Admin\RunsScreen;
 use Specflux\SenroFlux\Admin\ScreenCapability;
+use Specflux\SenroFlux\Packs\PackRegistry;
 use Specflux\SenroFlux\Plugin;
 use WP_Error;
 
@@ -17,6 +19,14 @@ use WP_Error;
 defined( 'ABSPATH' ) || exit;
 
 /**
+ * `@internal` (S23): the Runs screen's own PRIVATE transport, never the
+ * declared consumer contract — {@see Rest} is the `@api` surface a
+ * third-party consumer integrates against. This class exists only because
+ * the bundled React Runs screen (`assets/src/runs/`) talks admin-ajax, not
+ * REST; its four actions are not guaranteed to stay a superset (or subset)
+ * of `Rest`'s routes and may change shape without a SENROFLUX_API_VERSION
+ * bump.
+ *
  * Four actions mirroring the PHP API: start, tick, cancel, get. Nonce
  * `senroflux_run`, capability `read`, plus per-run ownership enforced in the
  * Runner itself (the tick protocol re-checks it). Start is additionally
@@ -34,7 +44,20 @@ final class Ajax {
 		add_action( 'wp_ajax_senroflux_get', array( $this, 'handleGet' ) );
 	}
 
-	/** POST consumer, goal, budget?. Allow-list comes from ConsumerPolicy. */
+	/**
+	 * POST consumer, goal, pack?, budget?. Allow-list comes from ConsumerPolicy.
+	 *
+	 * Runs-pack fix: the Runs screen's own consumer ({@see RunsScreen::CONSUMER})
+	 * has NO allow-list of its own without a pack — {@see RunsScreen::registerAdminConsumer()}
+	 * unions the registered packs' allow-lists, but `start()` only narrows to
+	 * ONE pack's verb map when a pack is actually given. A pack-less start
+	 * from that consumer would carry an empty verb map, so every read/plan
+	 * call is refused fail-closed and the run can never progress — refused
+	 * outright (400) rather than started to deadlock. Other consumers may
+	 * still start pack-less (a direct-allow run), unchanged.
+	 *
+	 * `@internal` (S23) — see the class docblock.
+	 */
 	public function handleStart(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -46,13 +69,49 @@ final class Ajax {
 		}
 
 		$consumer = sanitize_text_field( wp_unslash( $_POST['consumer'] ?? '' ) );
+		$pack     = sanitize_text_field( wp_unslash( $_POST['pack'] ?? '' ) );
+
+		// 0.3 S20 (stage 22b): a follow-up run started from the Runs screen.
+		// start() forces the pack to the source run's own (fail closed — the
+		// posted pack is never trusted once a source is named), so a
+		// follow-up needs no pack field of its own.
+		$follow_up_of = absint( $_POST['follow_up_of'] ?? 0 );
+		if ( $follow_up_of > 0 ) {
+			// The source run's pack also decides the budget ceiling below. A
+			// source the viewer may not see (or that does not exist) leaves
+			// the posted pack in place; start() refuses it either way.
+			$source = senroflux()->get( $follow_up_of );
+			if ( is_array( $source ) && is_string( $source['run']['pack'] ?? null ) ) {
+				$pack = $source['run']['pack'];
+			}
+		}
+
+		if ( RunsScreen::CONSUMER === $consumer && '' === $pack && 0 === $follow_up_of ) {
+			wp_send_json_error(
+				array(
+					'code'    => 'senroflux_bad_request',
+					'message' => __( 'Choose what to work on before starting a run.', 'senroflux' ),
+				),
+				400
+			);
+		}
+
+		// S7: the chosen pack's own default-budget overrides become the
+		// ceiling ConsumerPolicy clamps against, same as `RunsScreen::handleNewRun()`
+		// — otherwise a pack asking for a flat, high budget (the site pack)
+		// would be clamped straight back down to the generic consumer ceiling.
+		// An unknown pack name overrides nothing here; `start()` still refuses
+		// it with its own `pack_unknown` below.
+		$pack_obj              = '' !== $pack ? PackRegistry::fromFilters()->get( $pack ) : null;
+		$pack_budget_overrides = null !== $pack_obj ? $pack_obj->defaultBudget() : array();
 
 		// The budget arrives as a JSON body; a malformed payload degrades to
 		// the consumer's ceiling. `allow` is never read from the request.
 		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; ConsumerPolicy::resolve() validates each decoded field.
 		$policy     = ConsumerPolicy::resolve(
 			$consumer,
-			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true )
+			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ),
+			$pack_budget_overrides
 		);
 		if ( is_wp_error( $policy ) ) {
 			$this->respond( $policy );
@@ -60,11 +119,22 @@ final class Ajax {
 			return;
 		}
 
+		// Optional per-run model pin. An absent/blank field reads as
+		// null; start() itself refuses a half-specified pair or an
+		// unavailable one.
+		$model_provider = sanitize_text_field( wp_unslash( $_POST['model_provider'] ?? '' ) );
+		$model_id       = sanitize_text_field( wp_unslash( $_POST['model_id'] ?? '' ) );
+
 		$result = senroflux()->start(
 			$consumer,
 			sanitize_textarea_field( wp_unslash( $_POST['goal'] ?? '' ) ),
 			$policy['allow'],
-			$policy['budget']
+			$policy['budget'],
+			'' !== $pack ? $pack : null,
+			null,
+			$follow_up_of > 0 ? $follow_up_of : null,
+			'' !== $model_provider ? $model_provider : null,
+			'' !== $model_id ? $model_id : null
 		);
 
 		$this->respond( $result );
@@ -86,6 +156,8 @@ final class Ajax {
 	 * caller holds that capability. Without it, polling a DELEGATED run 403'd
 	 * while submitting the form on the same page succeeded. A caller who does
 	 * not hold the capability gets the plain owner-only tick, unchanged.
+	 *
+	 * `@internal` (S23) — see the class docblock.
 	 */
 	public function handleTick(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
@@ -150,7 +222,7 @@ final class Ajax {
 		return senroflux()->tick( $run_id, $step_count, $resume );
 	}
 
-	/** POST run_id. */
+	/** POST run_id. `@internal` (S23) — see the class docblock. */
 	public function handleCancel(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 
@@ -164,7 +236,7 @@ final class Ajax {
 		$this->respond( senroflux()->cancel( absint( $_POST['run_id'] ?? 0 ) ) );
 	}
 
-	/** POST run_id. */
+	/** POST run_id. `@internal` (S23) — see the class docblock. */
 	public function handleGet(): void {
 		check_ajax_referer( self::NONCE, 'nonce' );
 

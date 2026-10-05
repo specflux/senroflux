@@ -26,6 +26,32 @@ if ( ! function_exists( 'get_stylesheet_directory' ) ) {
 	}
 }
 
+if ( ! class_exists( 'WP_Theme', false ) ) {
+	/**
+	 * Test-only stand-in: `$GLOBALS['senroflux_test_declared_patterns']` is the
+	 * list of `{slug: ...}` entries `WP_Theme::get_block_patterns()` returns
+	 * (empty unless a test sets it).
+	 */
+	class WP_Theme {
+
+		/** @return list<array<string,mixed>> */
+		public function get_block_patterns(): array {
+			return $GLOBALS['senroflux_test_declared_patterns'] ?? array();
+		}
+
+		/** @return false */
+		public function parent(): bool {
+			return false;
+		}
+	}
+}
+
+if ( ! function_exists( 'wp_get_theme' ) ) {
+	function wp_get_theme(): WP_Theme {
+		return new WP_Theme();
+	}
+}
+
 if ( ! function_exists( 'get_template_directory' ) ) {
 	function get_template_directory(): string {
 		return $GLOBALS['senroflux_test_template_dir'] ?? ( $GLOBALS['senroflux_test_stylesheet_dir'] ?? '/theme' );
@@ -73,9 +99,65 @@ if ( ! function_exists( 'esc_attr_e' ) ) {
 	}
 }
 
+if ( ! function_exists( 'esc_attr_x' ) ) {
+	function esc_attr_x( string $text, string $context, string $domain = 'default' ): string {
+		unset( $context, $domain );
+
+		return htmlspecialchars( $text, ENT_QUOTES );
+	}
+}
+
+if ( ! function_exists( 'trailingslashit' ) ) {
+	// Spectra One's pattern files build their image URLs with it.
+	function trailingslashit( string $value ): string {
+		return rtrim( $value, '/\\' ) . '/';
+	}
+}
+
 if ( ! function_exists( 'get_template_directory_uri' ) ) {
 	function get_template_directory_uri(): string {
 		return 'https://example.test/wp-content/themes/twentytwentyfive';
+	}
+}
+
+if ( ! function_exists( 'wp_get_global_settings' ) ) {
+	/**
+	 * Test-only stand-in for the global-settings palette/gradients lookup
+	 * (D3a, S4). `$GLOBALS['senroflux_test_global_settings']` holds the same
+	 * shape the real function returns for `array( 'color', 'palette' )` /
+	 * `array( 'color', 'gradients' )`: `array( 'color' => array( 'palette'
+	 * => list<array{slug:string,...}>, 'gradients' => list<array{slug:
+	 * string,...}> ) )`. Defaults to Twenty Twenty-Five's real merged
+	 * palette (`base`, `contrast`, `accent-1`..`accent-6`) and no gradients,
+	 * so a fixture that never opts in stays exactly as eligible as before
+	 * D3a.
+	 *
+	 * @param list<string> $path Setting path, e.g. `array( 'color', 'palette' )`.
+	 * @return mixed A list, an origin-keyed map of lists, or a flag.
+	 */
+	function wp_get_global_settings( array $path = array() ): mixed {
+		$settings = $GLOBALS['senroflux_test_global_settings'] ?? array(
+			'color' => array(
+				'palette'   => array(
+					array( 'slug' => 'base' ),
+					array( 'slug' => 'contrast' ),
+					array( 'slug' => 'accent-1' ),
+					array( 'slug' => 'accent-2' ),
+					array( 'slug' => 'accent-3' ),
+					array( 'slug' => 'accent-4' ),
+					array( 'slug' => 'accent-5' ),
+					array( 'slug' => 'accent-6' ),
+				),
+				'gradients' => array(),
+			),
+		);
+
+		$value = $settings;
+		foreach ( $path as $segment ) {
+			$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : array();
+		}
+
+		return $value;
 	}
 }
 

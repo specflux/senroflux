@@ -15,6 +15,35 @@ require_once dirname( __DIR__ ) . '/stubs/blocks.php';
 use Specflux\SenroFlux\Packs\Pages\Validator;
 use Specflux\SenroFlux\Packs\Pages\Vocabulary;
 
+// A palette with real colours, so a toned page resolves its pair as it does in the export.
+require_once dirname( __DIR__ ) . '/stubs/theme-patterns.php';
+$GLOBALS['senroflux_test_global_settings'] = array(
+	'color' => array(
+		'palette' => array(
+			array(
+				'slug'  => 'base',
+				'color' => '#FFFFFF',
+			),
+			array(
+				'slug'  => 'contrast',
+				'color' => '#111111',
+			),
+			array(
+				'slug'  => 'accent-1',
+				'color' => '#FFEE58',
+			),
+			array(
+				'slug'  => 'accent-3',
+				'color' => '#503AA8',
+			),
+			array(
+				'slug'  => 'accent-6',
+				'color' => 'color-mix(in srgb, currentColor 20%, transparent)',
+			),
+		),
+	),
+);
+
 // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- STDIN of a dev-only CLI script.
 $senroflux_inputs    = json_decode( (string) file_get_contents( 'php://stdin' ), true );
 $senroflux_validator = new Validator( new Vocabulary() );

@@ -215,6 +215,35 @@ final class PackTest extends TestCase {
 		$this->assertSame( 'pack_unbound', $refused->get_error_code() );
 	}
 
+	/**
+	 * Smoke run (2026-09-26): an administrator was told to "Ask an
+	 * administrator to bind `user:N` or `role:administrator`", raw.
+	 */
+	public function test_an_unbound_pack_says_plainly_who_can_turn_it_on_and_where(): void {
+		Plugin::set_dependency_probe( true ); // AS mode.
+		$pack = $this->packRequiringCapability(
+			new WP_Error( 'pack_unbound', 'Bind `user:N` to the pack.', array( 'status' => 400 ) )
+		);
+
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array(
+			9 => array(
+				'edit_posts'     => true,
+				'manage_options' => true,
+			),
+		);
+		$admin                                     = $pack->preflight( 9 );
+		$this->assertInstanceOf( WP_Error::class, $admin );
+		$this->assertSame( 'pack_unbound', $admin->get_error_code() );
+		$this->assertStringContainsString( 'Tools > Agent Capability Packs', $admin->get_error_message() );
+		$this->assertStringNotContainsString( '`', $admin->get_error_message() );
+
+		$GLOBALS['senroflux_test_user_caps_by_id'] = array( 9 => array( 'edit_posts' => true ) );
+		$author                                    = $pack->preflight( 9 );
+		$this->assertInstanceOf( WP_Error::class, $author );
+		$this->assertStringContainsString( 'Ask a site administrator', $author->get_error_message() );
+		$this->assertStringNotContainsString( '`', $author->get_error_message() );
+	}
+
 	public function test_agent_safety_mode_passes_when_both_capable_and_bound(): void {
 		Plugin::set_dependency_probe( true ); // AS mode.
 

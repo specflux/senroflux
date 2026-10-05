@@ -9,6 +9,8 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Packs\Pages;
 
+use Specflux\SenroFlux\Packs\BlockRoundTrip;
+use Specflux\SenroFlux\Packs\Content\ImageAlt;
 use Specflux\SenroFlux\Packs\Content\Validator as ContentValidator;
 use WP_Error;
 
@@ -53,6 +55,9 @@ defined( 'ABSPATH' ) || exit;
  *      content"; leftover preset classes are kept as a custom CSS class, so
  *      the colour survives the strip anyway.
  *   3. unresolved `{{placeholder}}` text → `unresolved_placeholder`.
+ *   3b. `core/image` admitted only with non-empty alt (0.3 quality feature 4,
+ *      reusing {@see \Specflux\SenroFlux\Packs\Content\ImageAlt}, the same
+ *      walker the posts pack's own alt check uses) → `missing_alt` (index).
  *   4. pattern identity is STRUCTURAL (blockName tree + layout-defining attrs +
  *      slot counts in min..max) → `unknown_pattern` (index + nearest name),
  *      `slot_count` (slot + allowed range), `page_shape` (rule broken).
@@ -78,10 +83,12 @@ class Validator implements ContentValidator {
 
 	/**
 	 * The ONLY HTML tags the seven patterns can legitimately contain, each
-	 * mapped to the attributes it may carry. Anything else — `img`, `script`,
+	 * mapped to the attributes it may carry. Anything else — `script`,
 	 * `iframe`, `style`, `form`, `svg`, an `on*` handler — is a refusal, not a
-	 * strip. `img` is absent on purpose: S11 forbids `core/image` anywhere, and
-	 * a raw `<img>` is the same capability by another route.
+	 * strip. `img` is admitted only as of 0.3 quality feature 4, and only ever
+	 * with mandatory alt text ({@see checkImageAlt()}) — it never appears
+	 * bare in one of the seven curated patterns' own shapes, only inside a
+	 * theme pattern's own image slot.
 	 *
 	 * @var array<string, list<string>>
 	 */
@@ -125,6 +132,35 @@ class Validator implements ContentValidator {
 	);
 
 	/**
+	 * 0.3 quality feature 4: `img` is allowed ONLY inside an image-bearing
+	 * block's own `innerHTML` ({@see scanHtml()}'s `$extra_tags` param) —
+	 * never as loose HTML inside a paragraph or any other rich-text element,
+	 * which would let an unlabelled image slip past {@see checkImageAlt()}
+	 * (that check walks the BLOCK tree's `attrs.alt`, not raw innerHTML).
+	 * `data-object-fit` is `core/cover`'s/`core/media-text`'s own real save()
+	 * output (0.3 quality fix: cover-hero/media-text), never a model's to add
+	 * or vary; `data-object-position` is `core/cover`'s save() output for a
+	 * chosen focal point.
+	 *
+	 * @var array<string, list<string>>
+	 */
+	private const IMAGE_TAGS = array(
+		'img' => array( 'class', 'style', 'id', 'src', 'alt', 'width', 'height', 'loading', 'decoding', 'data-object-fit', 'data-object-position' ),
+	);
+
+	/**
+	 * 0.3 quality fix (cover-hero): `core/cover`'s own decorative background
+	 * `<span>` — `aria-hidden` is real WordPress save() output, hiding it from
+	 * assistive tech (the `<img>` right after it already carries the alt
+	 * text), never a model's to add.
+	 *
+	 * @var array<string, list<string>>
+	 */
+	private const COVER_TAGS = array(
+		'span' => array( 'class', 'style', 'id', 'aria-hidden' ),
+	);
+
+	/**
 	 * Attributes whose value is a URL and therefore gets a scheme check.
 	 *
 	 * @var list<string>
@@ -150,6 +186,39 @@ class Validator implements ContentValidator {
 	private const STYLE_DENY = array( 'expression(', 'url(', 'javascript', '@import', '\\', '<', '&#' );
 
 	/**
+	 * 0.3 quality fix (hero readability): the lowest `dimRatio` a `core/cover`
+	 * carrying a background image may keep — a live run (or a theme pattern
+	 * the plugin fills, e.g. Twenty Twenty-Five's `hero-full-width-image`,
+	 * which ships 10) put white hero text over a bright photo with too
+	 * little overlay to read. {@see normalizeCoverDim()} raises anything
+	 * below this to exactly this value, silently (a MUTATION, not a
+	 * refusal — there is no unsafe content to keep out, and refusing costs
+	 * the model a turn for something it would trivially get right on retry).
+	 * Below the shipped `cover-hero` pattern's own (stronger) default of 60
+	 * ({@see Vocabulary::coverHero()}) on purpose: the pattern's default is
+	 * this pack's own opinion of what looks best, the minimum here is only
+	 * the floor below which text plausibly stops being readable at all.
+	 *
+	 * @var int
+	 */
+	private const MIN_COVER_DIM_RATIO = 50;
+
+	/**
+	 * Preset colour-slug fragments ({@see \Specflux\SenroFlux\Packs\Pages\BlockShells}'s
+	 * `has-<slug>-color` convention) read as "already dark enough" —
+	 * {@see coverHasExplicitDarkText()}. A heuristic on the SLUG, never a raw
+	 * colour value (S11: this pack never reasons about a hex/rgb value), and
+	 * only ever matched against literal HTML classes already baked into a
+	 * block's markup (a theme pattern may hand-author one directly, without a
+	 * matching `textColor` comment attribute) — never a model-supplied
+	 * colour attribute, which {@see findDecorativeColor()} refuses outright
+	 * regardless of this list.
+	 *
+	 * @var list<string>
+	 */
+	private const DARK_TEXT_COLOR_SLUGS = array( 'black', 'contrast', 'foreground', 'dark', 'charcoal', 'ink' );
+
+	/**
 	 * @param Vocabulary $vocabulary The pattern vocabulary (identity + constraints).
 	 */
 	private readonly BlockShells $shells;
@@ -165,7 +234,7 @@ class Validator implements ContentValidator {
 	 * @param array<string,mixed> $ctx     Context (e.g. post_type); used for messaging.
 	 * @return true|WP_Error true when the markup passes, else a refusal WP_Error.
 	 */
-	public function validate( string $content, array $ctx = array() ): true|WP_Error {
+	public function validate( string $content, array $ctx = array() ): bool|WP_Error {
 		$res = $this->run( $content, $ctx );
 		if ( ! $res['ok'] ) {
 			/** @var WP_Error $error */
@@ -187,6 +256,11 @@ class Validator implements ContentValidator {
 	 * @return array{ok:bool, content:string, wp_error:WP_Error|null}
 	 */
 	public function clean( string $content, array $ctx = array() ): array {
+		// Models often write a preset CSS variable with the block-attribute
+		// separator (`var(--wp--preset--spacing|50)`), which is invalid CSS.
+		// Core's own spelling is unambiguous, so rewrite it rather than refuse.
+		$content = (string) preg_replace( '#var\(--wp--preset--([a-z-]+)\|([a-z0-9-]+)\)#', 'var(--wp--preset--$1--$2)', $content );
+
 		$res = $this->run( $content, $ctx );
 		if ( ! $res['ok'] ) {
 			return array(
@@ -221,9 +295,9 @@ class Validator implements ContentValidator {
 		}
 
 		$reserialized = $this->serialize( $blocks );
-		if ( $this->normalize( $content ) !== $this->normalize( $reserialized ) ) {
+		if ( ! BlockRoundTrip::matches( $content, $reserialized ) ) {
 			return $this->refuse(
-				new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ), array( 'status' => 400 ) )
+				new WP_Error( 'invalid_markup', $this->message( 'invalid_markup', $ctx ) . ' ' . BlockRoundTrip::hint( $content, $reserialized ), array( 'status' => 400 ) )
 			);
 		}
 
@@ -239,8 +313,11 @@ class Validator implements ContentValidator {
 			return $this->refuse( $markup_error );
 		}
 
-		// Step 2c — colour attributes.
-		$color_error = $this->checkDecorativeColor( $blocks );
+		// Step 2c — colour attributes. D3b (S6): the tone pair SenroFlux itself
+		// writes on a curated group is the one colour this step lets through,
+		// here and in the step 4b shell match.
+		$judged      = array_map( fn ( array $block ): array => $this->withoutToneColors( $block ), $blocks );
+		$color_error = $this->checkDecorativeColor( $judged );
 		if ( null !== $color_error ) {
 			return $this->refuse( $color_error );
 		}
@@ -258,6 +335,12 @@ class Validator implements ContentValidator {
 					)
 				)
 			);
+		}
+
+		// Step 3b — `core/image` admitted only with non-empty alt.
+		$alt_error = $this->checkImageAlt( $blocks );
+		if ( null !== $alt_error ) {
+			return $this->refuse( $alt_error );
 		}
 
 		// Step 4 — structural pattern identity, slot counts, page shape.
@@ -310,8 +393,13 @@ class Validator implements ContentValidator {
 			return $this->refuse( $shape_error );
 		}
 
+		$h1_error = $this->checkH1Placement( $blocks, $identities );
+		if ( null !== $h1_error ) {
+			return $this->refuse( $h1_error );
+		}
+
 		// Step 4b — editor parity.
-		$shell_error = $this->checkBlockShells( $blocks );
+		$shell_error = $this->checkBlockShells( $judged );
 		if ( null !== $shell_error ) {
 			return $this->refuse( $shell_error );
 		}
@@ -348,14 +436,6 @@ class Validator implements ContentValidator {
 	 */
 	private function isPatternBlock( array $block ): bool {
 		return is_string( $block['blockName'] ?? null );
-	}
-
-	/**
-	 * Collapse all whitespace runs to a single space and trim — the documented
-	 * normalisation the round-trip compare uses (the prototype's `$norm`).
-	 */
-	private function normalize( string $text ): string {
-		return (string) preg_replace( '/\s+/', ' ', trim( $text ) );
 	}
 
 	/**
@@ -533,14 +613,25 @@ class Validator implements ContentValidator {
 
 	/**
 	 * Step 2c — refuses the whole write on the first block carrying a colour
-	 * attribute, reporting the top-level pattern index it sits in.
+	 * attribute the shipped pattern does not carry at the same position,
+	 * reporting the top-level pattern index it sits in. D3a (S4): a theme
+	 * pattern's OWN shipped colour survives (it was never written by the
+	 * model — {@see ThemePatterns::fill()} never touches a colour attr), so
+	 * the top-level block is matched against the vocabulary here too, the
+	 * same way step 4 will, and its colour attrs are compared against the
+	 * shipped block at the same position in ITS OWN recognised pattern —
+	 * never any other pattern's. A curated pattern's shipped markup carries
+	 * no colour attrs at all, so this degrades to the old "any colour
+	 * anywhere" rule for it, unchanged; the same is true for a block that
+	 * matches no pattern (`unknown_pattern` refuses it on its own merits at
+	 * step 4).
 	 *
 	 * @param list<array<string,mixed>> $blocks Parsed top-level blocks.
 	 */
 	private function checkDecorativeColor( array $blocks ): ?WP_Error {
 		$index = 0;
 		foreach ( $blocks as $block ) {
-			$found = $this->findDecorativeColor( $block );
+			$found = $this->findDecorativeColor( $block, $this->expectedTreeForBlock( $block ) );
 			if ( null !== $found ) {
 				$data = array(
 					'index' => $index,
@@ -563,20 +654,76 @@ class Validator implements ContentValidator {
 	}
 
 	/**
-	 * @param array<string,mixed> $block One parsed block.
+	 * D3b (S6): a top-level block without the `backgroundColor`/`textColor`
+	 * pair of a tone (and its buttons' inverse pair), when SenroFlux's own tone wrote it. That is a curated
+	 * (never theme) `core/group` wearing exactly the pair, and the four classes,
+	 * that {@see Tone::apply()} derives from the active palette. A model can't
+	 * pick the pair: any other slug, a lone attribute, the pair on a nested
+	 * block, on a cover, or beside a `style.color` stays a `decorative_color`.
+	 * A model that copied the whole pair by hand gets exactly what `tone` would
+	 * have given it, no new colour.
+	 *
+	 * @param array<string,mixed> $block One top-level parsed block.
+	 * @return array<string,mixed>
+	 */
+	private function withoutToneColors( array $block ): array {
+		if ( ! Tone::isApplied( $block ) ) {
+			return $block;
+		}
+
+		$slug    = $this->matchPatternSchema( $block );
+		$curated = array_column( $this->vocabulary->curated(), 'slug' );
+		if ( null === $slug || ! in_array( $slug, $curated, true ) ) {
+			return $block;
+		}
+
+		return Tone::withoutAppliedColors( $block );
+	}
+
+	/**
+	 * The shipped block tree for the pattern a top-level block structurally
+	 * matches, or null when it matches none — {@see checkDecorativeColor()}'s
+	 * only caller.
+	 *
+	 * @param array<string,mixed> $block One top-level parsed block.
+	 * @return array<string,mixed>|null
+	 */
+	private function expectedTreeForBlock( array $block ): ?array {
+		return $this->matchPattern( $block )['tree'] ?? null;
+	}
+
+	/**
+	 * @param array<string,mixed>      $block    One parsed block.
+	 * @param array<string,mixed>|null $expected The shipped block at the
+	 *                                            SAME position in the
+	 *                                            pattern `$block` was
+	 *                                            recognised as, or null when
+	 *                                            it was recognised as none
+	 *                                            (or this is a curated
+	 *                                            pattern, which never ships
+	 *                                            a colour attr to match).
 	 * @return array{name:string, attr:string}|null
 	 */
-	private function findDecorativeColor( array $block ): ?array {
-		$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+	private function findDecorativeColor( array $block, ?array $expected = null ): ?array {
+		$attrs          = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+		$expected_attrs = is_array( $expected['attrs'] ?? null ) ? $expected['attrs'] : array();
+
 		foreach ( array( 'backgroundColor', 'textColor', 'gradient' ) as $key ) {
-			if ( array_key_exists( $key, $attrs ) ) {
+			if ( array_key_exists( $key, $attrs )
+				&& ( ! array_key_exists( $key, $expected_attrs ) || $expected_attrs[ $key ] !== $attrs[ $key ] )
+			) {
 				return array(
 					'name' => (string) ( $block['blockName'] ?? '' ),
 					'attr' => $key,
 				);
 			}
 		}
-		if ( is_array( $attrs['style'] ?? null ) && array_key_exists( 'color', $attrs['style'] ) ) {
+
+		$style          = is_array( $attrs['style'] ?? null ) ? $attrs['style'] : array();
+		$expected_style = is_array( $expected_attrs['style'] ?? null ) ? $expected_attrs['style'] : array();
+		if ( array_key_exists( 'color', $style )
+			&& ( ! array_key_exists( 'color', $expected_style ) || $expected_style['color'] !== $style['color'] )
+		) {
 			return array(
 				'name' => (string) ( $block['blockName'] ?? '' ),
 				'attr' => 'style.color',
@@ -585,8 +732,9 @@ class Validator implements ContentValidator {
 
 		$children = $block['innerBlocks'] ?? array();
 		/** @var list<array<string,mixed>> $children */
-		foreach ( $children as $child ) {
-			$found = $this->findDecorativeColor( $child );
+		$expected_children = null !== $expected ? array_values( $expected['innerBlocks'] ?? array() ) : array();
+		foreach ( array_values( $children ) as $i => $child ) {
+			$found = $this->findDecorativeColor( $child, $expected_children[ $i ] ?? null );
 			if ( null !== $found ) {
 				return $found;
 			}
@@ -600,7 +748,18 @@ class Validator implements ContentValidator {
 	 * @return array{reason:string, tag:string, attr:string}|null
 	 */
 	private function findDisallowedMarkup( array $block ): ?array {
-		$found = $this->scanHtml( (string) ( $block['innerHTML'] ?? '' ) );
+		$name  = (string) ( $block['blockName'] ?? '' );
+		$extra = array();
+		// 0.3 quality fix (cover-hero/media-text): both carry a real `<img>`
+		// in their own innerHTML, exactly like `core/image` (0.3 quality
+		// feature 4); `core/cover` also carries its own decorative `<span>`.
+		if ( in_array( $name, array( 'core/image', 'core/cover', 'core/media-text' ), true ) ) {
+			$extra = self::IMAGE_TAGS;
+		}
+		if ( 'core/cover' === $name ) {
+			$extra = array_merge( $extra, self::COVER_TAGS );
+		}
+		$found = $this->scanHtml( (string) ( $block['innerHTML'] ?? '' ), $extra );
 		if ( null !== $found ) {
 			return $found;
 		}
@@ -620,12 +779,19 @@ class Validator implements ContentValidator {
 	/**
 	 * Find the first disallowed tag or attribute in a fragment of HTML.
 	 *
+	 * @param string                       $html       The fragment to scan.
+	 * @param array<string, list<string>>  $extra_tags Additional tag => allowed-attributes
+	 *                                                  entries for this block's own innerHTML
+	 *                                                  only (0.3 quality feature 4/quality fix:
+	 *                                                  {@see IMAGE_TAGS}/{@see COVER_TAGS}).
 	 * @return array{reason:string, tag:string, attr:string}|null
 	 */
-	private function scanHtml( string $html ): ?array {
+	private function scanHtml( string $html, array $extra_tags = array() ): ?array {
 		if ( ! str_contains( $html, '<' ) ) {
 			return null;
 		}
+
+		$allowed_tags = array() === $extra_tags ? self::ALLOWED_TAGS : array_merge( self::ALLOWED_TAGS, $extra_tags );
 
 		$matches = array();
 		if ( ! preg_match_all( '#<\s*(/?)\s*([a-zA-Z][a-zA-Z0-9]*)([^>]*)>?#', $html, $matches, PREG_SET_ORDER ) ) {
@@ -634,7 +800,7 @@ class Validator implements ContentValidator {
 
 		foreach ( $matches as $match ) {
 			$tag = strtolower( $match[2] );
-			if ( ! isset( self::ALLOWED_TAGS[ $tag ] ) ) {
+			if ( ! isset( $allowed_tags[ $tag ] ) ) {
 				return array(
 					'reason' => 'tag',
 					'tag'    => $tag,
@@ -646,7 +812,7 @@ class Validator implements ContentValidator {
 				continue;
 			}
 
-			$found = $this->scanAttributes( $tag, $match[3] );
+			$found = $this->scanAttributes( $tag, $match[3], $allowed_tags );
 			if ( null !== $found ) {
 				return $found;
 			}
@@ -656,10 +822,11 @@ class Validator implements ContentValidator {
 	}
 
 	/**
+	 * @param array<string, list<string>> $allowed_tags {@see scanHtml()}'s resolved allow-list.
 	 * @return array{reason:string, tag:string, attr:string}|null
 	 */
-	private function scanAttributes( string $tag, string $attribute_text ): ?array {
-		$allowed = array_flip( self::ALLOWED_TAGS[ $tag ] );
+	private function scanAttributes( string $tag, string $attribute_text, array $allowed_tags ): ?array {
+		$allowed = array_flip( $allowed_tags[ $tag ] );
 		$attrs   = array();
 		preg_match_all(
 			'#([a-zA-Z_:][a-zA-Z0-9_:.\-]*)\s*(?:=\s*("[^"]*"|\'[^\']*\'|[^\s"\'>]+))?#',
@@ -773,6 +940,34 @@ class Validator implements ContentValidator {
 	}
 
 	/**
+	 * Step 3b (0.3 quality feature 4, mirrors `Posts\Validator::checkImageAlt()`):
+	 * `core/image` admitted only with non-empty alt. Walks the whole tree — an
+	 * image nested inside a theme pattern's own image slot is checked too.
+	 *
+	 * @param list<array<string,mixed>> $blocks Parsed top-level blocks.
+	 */
+	private function checkImageAlt( array $blocks ): ?WP_Error {
+		$index = 0;
+		foreach ( $blocks as $block ) {
+			if ( ImageAlt::missing( $block ) ) {
+				return new WP_Error(
+					'missing_alt',
+					$this->message( 'missing_alt', array(), array( 'index' => $index ) ),
+					array(
+						'status' => 400,
+						'index'  => $index,
+					)
+				);
+			}
+			if ( $this->isPatternBlock( $block ) ) {
+				++$index;
+			}
+		}
+
+		return null;
+	}
+
+	/**
 	 * Structural signature for one parsed block: blockName + layout-defining
 	 * attrs (align, layout.type, heading level) + recursive child signatures.
 	 * Decorative attrs (backgroundColor/textColor/style.color) are excluded so
@@ -811,28 +1006,11 @@ class Validator implements ContentValidator {
 	 * @param array<string,mixed> $block One parsed block.
 	 */
 	private function localSignature( array $block ): string {
-		$name  = (string) ( $block['blockName'] ?? '' );
-		$attrs = $block['attrs'] ?? array();
-		$parts = array();
-
-		if ( isset( $attrs['align'] ) && is_string( $attrs['align'] ) && '' !== $attrs['align'] ) {
-			$parts[] = 'align=' . $attrs['align'];
-		}
-
-		// `{"layout":{"type":"default"}}` IS the absent-layout default.
-		if ( isset( $attrs['layout']['type'] ) && is_string( $attrs['layout']['type'] ) && 'default' !== $attrs['layout']['type'] ) {
-			$parts[] = 'layout=' . $attrs['layout']['type'];
-		}
-
-		// A heading with no `level` IS an h2; spell the effective value out so
-		// `{"level":2}` and no attribute at all cannot diverge.
-		if ( 'core/heading' === $name ) {
-			$level   = isset( $attrs['level'] ) && is_numeric( $attrs['level'] ) ? (int) $attrs['level'] : 2;
-			$parts[] = 'level=' . $level;
-		}
-
-		return array() === $parts ? $name : $name . '[' . implode( ',', $parts ) . ']';
+		return ThemeAdaptation::signature( $block );
 	}
+
+	/** Steps {@see alignAdapted()} may take over one block before it gives up. */
+	private const ADAPT_BUDGET = 4000;
 
 	/**
 	 * The expected structural tree for a pattern's TOP-level block, cached.
@@ -843,12 +1021,33 @@ class Validator implements ContentValidator {
 
 	/**
 	 * Match a top-level block against the vocabulary. Returns the slug when the
-	 * block's structure matches a pattern's, else null.
+	 * block's structure matches a pattern's, else null. Two theme patterns can
+	 * share one structure; a block whose `metadata.name` names one it matches
+	 * keeps that one, otherwise the first match wins.
 	 *
 	 * @param array<string,mixed> $block One parsed block.
 	 */
 	private function matchPatternSchema( array $block ): ?string {
-		foreach ( $this->vocabulary->all() as $pattern ) {
+		return $this->matchPattern( $block )['slug'] ?? null;
+	}
+
+	/**
+	 * {@see matchPatternSchema()} with the shipped tree reshaped to the
+	 * block's own children, so a colour attribute can be compared with the
+	 * shipped block it sits at ({@see checkDecorativeColor()}).
+	 *
+	 * @param array<string,mixed> $block One parsed block.
+	 * @return array{slug:string, tree:array<string,mixed>}|null
+	 */
+	private function matchPattern( array $block ): ?array {
+		$claimed  = (string) ( $block['attrs']['metadata']['name'] ?? '' );
+		$patterns = $this->vocabulary->all();
+		usort(
+			$patterns,
+			static fn ( array $a, array $b ): int => (int) ( 'senroflux/' . $b['slug'] === $claimed ) <=> (int) ( 'senroflux/' . $a['slug'] === $claimed )
+		);
+
+		foreach ( $patterns as $pattern ) {
 			$expected = $this->expectedTree( $pattern );
 			if ( null === $expected ) {
 				continue;
@@ -856,12 +1055,153 @@ class Validator implements ContentValidator {
 
 			/** @var list<string> $repeatable */
 			$repeatable = $pattern['repeatable'] ?? array();
-			if ( $this->matchesShape( $block, $expected, $repeatable ) ) {
-				return (string) $pattern['slug'];
+			// A theme hero's h2 may be written as the page's H1, so a theme
+			// pattern is also tried with its h1s read as h2s. A pattern that
+			// ships an h1 itself (Ollie's heroes) matches as written.
+			$candidates = empty( $pattern['theme_derived'] ) ? array( $block ) : array( $block, $this->h1AsH2( $block ) );
+			foreach ( $candidates as $candidate ) {
+				if ( ! empty( $pattern['adapt'] ) ) {
+					$budget  = self::ADAPT_BUDGET;
+					$aligned = $this->alignAdapted( $candidate, $expected, true, $budget );
+					if ( null !== $aligned ) {
+						return array(
+							'slug' => (string) $pattern['slug'],
+							'tree' => $aligned,
+						);
+					}
+				} elseif ( $this->matchesShape( $candidate, $expected, $repeatable ) ) {
+					return array(
+						'slug' => (string) $pattern['slug'],
+						'tree' => $expected,
+					);
+				}
 			}
 		}
 
 		return null;
+	}
+
+	/**
+	 * Recognise a candidate as the shipped tree with the three adaptations of
+	 * {@see ThemeAdaptation} and nothing else: any block that holds slots may be
+	 * dropped, a repeated item group may be cloned or trimmed, and a heading
+	 * block may head the section when the pattern has none. Returns the shipped
+	 * tree reshaped to mirror the candidate (each candidate child paired with
+	 * the shipped block it came from), or null when it is anything else: an
+	 * added block, a reordered one, one moved to another container.
+	 *
+	 * @param array<string,mixed> $candidate The parsed block being validated.
+	 * @param array<string,mixed> $expected  The shipped pattern's block.
+	 * @param bool                $top       Whether this is the pattern's top-level block.
+	 * @param int                 $budget    Alignment steps left, so a hostile tree cannot run long.
+	 * @return array<string,mixed>|null
+	 */
+	private function alignAdapted( array $candidate, array $expected, bool $top, int &$budget ): ?array {
+		if ( ThemeAdaptation::signature( $candidate ) !== ThemeAdaptation::signature( $expected ) ) {
+			return null;
+		}
+
+		$actual = array_values( $candidate['innerBlocks'] ?? array() );
+		$wanted = array_values( $expected['innerBlocks'] ?? array() );
+		/** @var list<array<string,mixed>> $actual */
+		/** @var list<array<string,mixed>> $wanted */
+
+		if ( array() === $wanted ) {
+			return array() === $actual ? $expected : null;
+		}
+		// A container that lost every child is dropped with them, never left empty,
+		// unless it holds a slot itself (a cover's photo) and every child it
+		// lost was one that may be dropped.
+		if ( array() === $actual ) {
+			if ( array() === ThemeAdaptation::ownSlots( $expected ) ) {
+				return null;
+			}
+			foreach ( $wanted as $model ) {
+				if ( ! ThemeAdaptation::droppable( $model ) ) {
+					return null;
+				}
+			}
+			$expected['innerBlocks'] = array();
+
+			return $expected;
+		}
+
+		$kids = $this->alignChildren( $actual, $wanted, 0, 0, $budget );
+		if ( null === $kids && $top && ! ThemeAdaptation::hasHeadingOutsideRuns( $expected ) ) {
+			$first = $actual[0];
+			$level = isset( $first['attrs']['level'] ) && is_numeric( $first['attrs']['level'] ) ? (int) $first['attrs']['level'] : 2;
+			if ( 'core/heading' === ( $first['blockName'] ?? null ) && array() === ( $first['innerBlocks'] ?? array() ) && $level <= 2 ) {
+				$rest = $this->alignChildren( array_slice( $actual, 1 ), $wanted, 0, 0, $budget );
+				if ( null !== $rest ) {
+					$stub = array(
+						'blockName'    => 'core/heading',
+						'attrs'        => 'center' === ( $first['attrs']['textAlign'] ?? null ) ? array(
+							'level'     => $level,
+							'textAlign' => 'center',
+						) : array( 'level' => $level ),
+						'innerBlocks'  => array(),
+						'innerHTML'    => '',
+						'innerContent' => array(),
+					);
+					$kids = array_merge( array( $stub ), $rest );
+				}
+			}
+		}
+		if ( null === $kids ) {
+			return null;
+		}
+
+		$expected['innerBlocks'] = $kids;
+
+		return $expected;
+	}
+
+	/**
+	 * Align the candidate's children `$actual[$i..]` with the shipped ones
+	 * `$wanted[$j..]`, in order: each shipped child is matched, or skipped when
+	 * it may be dropped; the last of a run of identical shipped children may
+	 * also be matched again and again (a cloned item).
+	 *
+	 * @param list<array<string,mixed>> $actual Candidate children.
+	 * @param list<array<string,mixed>> $wanted Shipped children.
+	 * @return list<array<string,mixed>>|null The shipped block paired with each candidate child.
+	 */
+	private function alignChildren( array $actual, array $wanted, int $i, int $j, int &$budget ): ?array {
+		if ( --$budget < 0 ) {
+			return null;
+		}
+
+		$have = count( $actual );
+		if ( $j >= count( $wanted ) ) {
+			return $i >= $have ? array() : null;
+		}
+
+		$model = $wanted[ $j ];
+		if ( $i < $have ) {
+			$node = $this->alignAdapted( $actual[ $i ], $model, false, $budget );
+			if ( null !== $node ) {
+				$last_of_run = $j > 0 && 1 === ThemeAdaptation::runLength( $wanted, $j ) && ThemeAdaptation::sameShape( $wanted[ $j - 1 ], $model );
+				$extra       = array();
+				if ( $last_of_run ) {
+					// Clones of the last item, as many as follow it.
+					for ( $at = $i + 1; $at < $have && $at <= $i + ThemeAdaptation::MAX_ITEMS; $at++ ) {
+						$copy = $this->alignAdapted( $actual[ $at ], $model, false, $budget );
+						if ( null === $copy ) {
+							break;
+						}
+						$extra[] = $copy;
+					}
+				}
+				for ( $take = count( $extra ); $take >= 0; $take-- ) {
+					$rest = $this->alignChildren( $actual, $wanted, $i + 1 + $take, $j + 1, $budget );
+					if ( null !== $rest ) {
+						return array_merge( array( $node ), array_slice( $extra, 0, $take ), $rest );
+					}
+				}
+			}
+		}
+
+		return ThemeAdaptation::droppable( $model ) ? $this->alignChildren( $actual, $wanted, $i, $j + 1, $budget ) : null;
 	}
 
 	/**
@@ -1109,6 +1449,7 @@ class Validator implements ContentValidator {
 
 		switch ( $slug ) {
 			case 'hero':
+			case 'cover-hero':
 			case 'cta':
 				$buttons = $this->firstByBlockName( $children, 'core/buttons' );
 				$count   = 0;
@@ -1120,6 +1461,18 @@ class Validator implements ContentValidator {
 
 			case 'text-section':
 				return array( 'paragraphs' => array( $this->countByBlockName( $children, 'core/paragraph' ) ) );
+
+			case 'media-text':
+				$buttons = $this->firstByBlockName( $children, 'core/buttons' );
+				$count   = 0;
+				if ( null !== $buttons ) {
+					$count = $this->countByBlockName( $buttons['innerBlocks'] ?? array(), 'core/button' );
+				}
+
+				return array(
+					'paragraphs' => array( $this->countByBlockName( $children, 'core/paragraph' ) ),
+					'buttons'    => array( $count ),
+				);
 
 			case 'feature-grid':
 				return array( 'columns' => array( count( $this->columns( $children ) ) ) );
@@ -1288,6 +1641,31 @@ class Validator implements ContentValidator {
 			);
 		}
 
+		// No more than two text-sections back to back: a run of them renders as
+		// a wall of text (live batch 2026-09-29-final4).
+		$run = 0;
+		foreach ( $slugs as $index => $slug ) {
+			$run = 'text-section' === $slug ? $run + 1 : 0;
+			if ( $run > 2 ) {
+				return new WP_Error(
+					'page_shape',
+					$this->message(
+						'page_shape',
+						array(),
+						array(
+							'rule'  => 'text_run',
+							'first' => $index - 1,
+							'last'  => $index + 1,
+						)
+					),
+					array(
+						'status' => 400,
+						'rule'   => 'text_run',
+					)
+				);
+			}
+		}
+
 		// No pattern more than twice, except text-section.
 		$freq = array();
 		foreach ( $slugs as $slug ) {
@@ -1321,7 +1699,9 @@ class Validator implements ContentValidator {
 
 	/**
 	 * Step 5 — the mutation pass: normalise `metadata.name` to
-	 * `senroflux/<slug>` on each top-level pattern block.
+	 * `senroflux/<slug>` on each top-level pattern block, and raise a
+	 * too-light `core/cover` overlay (0.3 quality fix, hero readability;
+	 * {@see normalizeCoverDim()}) anywhere in the tree.
 	 *
 	 * @param list<array<string,mixed>> $blocks     Parsed top-level blocks.
 	 * @param array<int,string>         $identities parse offset => slug.
@@ -1329,14 +1709,152 @@ class Validator implements ContentValidator {
 	private function mutate( array $blocks, array $identities ): string {
 		$mutated = $blocks;
 		foreach ( $mutated as $i => $block ) {
+			$mutated[ $i ] = $this->normalizeCoverDim( $block );
 			if ( isset( $identities[ $i ] ) ) {
-				$attrs                  = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+				$attrs                  = is_array( $mutated[ $i ]['attrs'] ?? null ) ? $mutated[ $i ]['attrs'] : array();
 				$attrs['metadata']      = array( 'name' => 'senroflux/' . $identities[ $i ] );
 				$mutated[ $i ]['attrs'] = $attrs;
 			}
 		}
 
 		return $this->serialize( $mutated );
+	}
+
+	/**
+	 * 0.3 quality fix (hero readability): a `core/cover` carrying a
+	 * background image whose `dimRatio` is below {@see MIN_COVER_DIM_RATIO}
+	 * gets raised to it — silently, not refused, and skipped when the
+	 * cover's own text already carries an explicit dark colour class
+	 * ({@see coverHasExplicitDarkText()}), which needs no darker overlay to
+	 * stay readable. Recurses into `innerBlocks` so a cover nested inside
+	 * another pattern is still caught, even though every cover in this
+	 * vocabulary is currently a top-level pattern block itself.
+	 *
+	 * `dimRatio` is excluded from {@see BlockShells}'s shape identity (see
+	 * `attributeKey()`), so this mutation can never desync the block from
+	 * the shell it already matched — only the attribute and the derived
+	 * `has-background-dim[-N]` class change, nothing shape-relevant.
+	 *
+	 * @param array<string,mixed> $block One parsed block.
+	 * @return array<string,mixed>
+	 */
+	private function normalizeCoverDim( array $block ): array {
+		if ( 'core/cover' === ( $block['blockName'] ?? null ) ) {
+			$attrs = is_array( $block['attrs'] ?? null ) ? $block['attrs'] : array();
+			$url   = trim( (string) ( $attrs['url'] ?? '' ) );
+			if ( '' !== $url ) {
+				// core/cover's own attribute default, when the key is absent.
+				$current = array_key_exists( 'dimRatio', $attrs ) ? (int) $attrs['dimRatio'] : 50;
+				if ( $current < self::MIN_COVER_DIM_RATIO && ! $this->coverHasExplicitDarkText( $block ) ) {
+					$attrs['dimRatio'] = self::MIN_COVER_DIM_RATIO;
+					$block['attrs']    = $attrs;
+
+					$rounded               = 10 * (int) round( $current / 10 );
+					$block['innerHTML']    = $this->stripDimClass( (string) ( $block['innerHTML'] ?? '' ), $rounded );
+					$block['innerContent'] = array_map(
+						fn ( $chunk ) => is_string( $chunk ) ? $this->stripDimClass( $chunk, $rounded ) : $chunk,
+						is_array( $block['innerContent'] ?? null ) ? $block['innerContent'] : array()
+					);
+				}
+			}
+		}
+
+		/** @var list<array<string,mixed>> $children */
+		$children = $block['innerBlocks'] ?? array();
+		foreach ( $children as $i => $child ) {
+			$block['innerBlocks'][ $i ] = $this->normalizeCoverDim( $child );
+		}
+
+		return $block;
+	}
+
+	/**
+	 * Drops the numbered `has-background-dim-<N>` class a lower ratio left
+	 * behind; the bare `has-background-dim` class needs no change — raising
+	 * to {@see MIN_COVER_DIM_RATIO} (50) is core's own default ratio, which
+	 * `@wordpress/block-library`'s `dimRatioToClass()` never gives a numbered
+	 * class of its own.
+	 *
+	 * @param string $html    The block's `innerHTML` (or one `innerContent` chunk).
+	 * @param int    $rounded The old ratio, rounded to the nearest 10 (how
+	 *                        WordPress derives the numbered class).
+	 */
+	private function stripDimClass( string $html, int $rounded ): string {
+		if ( 50 === $rounded ) {
+			return $html;
+		}
+
+		return (string) preg_replace( '/\s*has-background-dim-' . $rounded . '\b/', '', $html );
+	}
+
+	/**
+	 * Whether a cover's own text already carries an explicit dark colour
+	 * class directly in its HTML — a theme pattern may hand-author one
+	 * without a matching `textColor` comment attribute, which is the only
+	 * form {@see findDecorativeColor()} refuses. A heuristic on WordPress'
+	 * own dark preset-colour SLUGS ({@see DARK_TEXT_COLOR_SLUGS}), never a
+	 * raw colour value (S11: this pack never reasons about a hex/rgb value).
+	 *
+	 * @param array<string,mixed> $block One parsed `core/cover` block.
+	 */
+	private function coverHasExplicitDarkText( array $block ): bool {
+		$html = serialize_block( $block );
+		foreach ( self::DARK_TEXT_COLOR_SLUGS as $slug ) {
+			if ( 1 === preg_match( '/\bhas-' . $slug . '-color\b/', $html ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The block with every h1 heading read as an h2, so a theme pattern's
+	 * hero may carry the page's H1 (theme heroes ship an h2). Where an h1
+	 * may appear is checked on its own by {@see checkH1Placement()}.
+	 *
+	 * @param array<string,mixed> $block One parsed block.
+	 * @return array<string,mixed>
+	 */
+	private function h1AsH2( array $block ): array {
+		if ( 'core/heading' === ( $block['blockName'] ?? null ) && 1 === ( $block['attrs']['level'] ?? null ) ) {
+			unset( $block['attrs']['level'] );
+		}
+
+		/** @var list<array<string,mixed>> $children */
+		$children = $block['innerBlocks'] ?? array();
+		foreach ( $children as $i => $child ) {
+			$block['innerBlocks'][ $i ] = $this->h1AsH2( $child );
+		}
+
+		return $block;
+	}
+
+	/**
+	 * A page has at most one H1, and only in its first pattern (the hero).
+	 *
+	 * @param list<array<string,mixed>> $blocks     Parsed top-level blocks.
+	 * @param array<int,string>         $identities parse offset => slug.
+	 */
+	private function checkH1Placement( array $blocks, array $identities ): ?WP_Error {
+		$first = array_key_first( $identities );
+		foreach ( $blocks as $offset => $block ) {
+			$count = preg_match_all( '/<h1[\s>]/i', serialize_block( $block ) );
+			if ( 0 === $count || ( $offset === $first && 1 === $count ) ) {
+				continue;
+			}
+
+			return new WP_Error(
+				'page_shape',
+				$this->message( 'page_shape', array(), array( 'rule' => 'h1_first' ) ),
+				array(
+					'status' => 400,
+					'rule'   => 'h1_first',
+				)
+			);
+		}
+
+		return null;
 	}
 
 	/**
@@ -1347,7 +1865,10 @@ class Validator implements ContentValidator {
 	 * own `checkPageShape()` override applies the same rule.
 	 */
 	protected function isHeroSlug( string $slug ): bool {
-		if ( 'hero' === $slug ) {
+		// 0.3 quality fix: `cover-hero` is an image-led alternative to `hero`,
+		// not a different kind of section — it counts as the page's hero for
+		// "hero first" the same way `hero` itself does.
+		if ( 'hero' === $slug || 'cover-hero' === $slug ) {
 			return true;
 		}
 
@@ -1441,6 +1962,11 @@ class Validator implements ContentValidator {
 				__( 'Unresolved placeholder "{{%s}}" must be filled before writing.', 'senroflux' ),
 				$data['placeholder'] ?? ''
 			),
+			'missing_alt'            => sprintf(
+				/* translators: %d: pattern index. */
+				__( 'Pattern %d has an image with no alt text; every image needs non-empty, descriptive alt text.', 'senroflux' ),
+				$data['index'] ?? 0
+			),
 			'unknown_pattern'        => '' !== ( $data['shape'] ?? '' )
 				? sprintf(
 					/* translators: %1$d: pattern index, %2$s: nearest pattern name, %3$s: nearest pattern's expected block sequence. */
@@ -1514,11 +2040,18 @@ class Validator implements ContentValidator {
 			),
 			'hero_first'    => __( 'The first pattern on a page must be a hero.', 'senroflux' ),
 			'max_cta'       => __( 'A page may contain at most one call-to-action.', 'senroflux' ),
+			'h1_first'      => __( 'Only the hero may have a level-1 heading, and only one; use level 2 or 3 elsewhere.', 'senroflux' ),
 			'max_repeat'    => sprintf(
 				/* translators: %1$s: pattern, %2$d: occurrences. */
 				__( 'No pattern may repeat more than twice; "%1$s" was used %2$d times.', 'senroflux' ),
 				$data['slug'] ?? '',
 				$data['seen'] ?? 0
+			),
+			'text_run'      => sprintf(
+				/* translators: %1$d: first pattern number, %2$d: last pattern number. */
+				__( 'Page patterns %1$d to %2$d are all text-sections in a row, so the page reads as a wall of text. Make one of them a media-text or feature-grid with its own image, or an FAQ where the content fits, or merge two of them.', 'senroflux' ),
+				$data['first'] ?? 0,
+				$data['last'] ?? 0
 			),
 			default         => __( 'The page does not satisfy the page-shape rules.', 'senroflux' ),
 		};

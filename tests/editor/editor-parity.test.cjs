@@ -101,6 +101,57 @@ test( 'a full page after Validator::clean() opens in the editor without recovery
 	assert.deepEqual( invalidBlocks( fixtures.page ), [] );
 } );
 
+test( 'a page built from layouts after Validator::clean() opens in the editor without recovery', () => {
+	assert.ok( fixtures.layouts.includes( 'wp:cover' ) );
+	assert.deepEqual( invalidBlocks( fixtures.layouts ), [] );
+} );
+
+// D3b (S6): sections SenroFlux itself toned (the attribute pair plus the
+// has-*-color / has-*-background-color / has-text-color / has-background
+// classes) must open in the editor without recovery.
+test( 'a page with toned curated sections opens in the editor without recovery', () => {
+	assert.ok( fixtures.toned.includes( '"backgroundColor":"contrast","textColor":"base"' ) );
+	assert.ok( fixtures.toned.includes( '"backgroundColor":"accent-3","textColor":"base"' ) );
+	assert.ok( fixtures.toned.includes( 'has-accent-3-background-color has-text-color has-background' ) );
+	assert.deepEqual( invalidBlocks( fixtures.toned ), [] );
+} );
+
+// Negative control: a tone's pair with a class dropped, or its attribute
+// changed on one side only, is what the editor flags.
+test( 'a toned section with a class or attribute out of step is flagged', () => {
+	for ( const broken of [
+		fixtures.toned.replace( ' has-text-color', '' ),
+		fixtures.toned.replace( ' has-background', '' ),
+		fixtures.toned.replace( '"textColor":"base"', '"textColor":"contrast"' ),
+	] ) {
+		assert.notEqual( broken, fixtures.toned );
+		assert.ok( invalidBlocks( broken ).length > 0 );
+	}
+} );
+
+// D3a (S4): a real Ollie pattern's shipped colour (backgroundColor="primary",
+// textColor="base"), filled through the plugin's own fill path and cleaned
+// by the Validator, must still open in the editor without recovery.
+test( 'a filled Ollie pattern opens in the editor without recovery', () => {
+	assert.ok( fixtures.ollie.includes( 'numbers-stacked' ) );
+	assert.ok( fixtures.ollie.includes( '"backgroundColor":"primary"' ) );
+	assert.deepEqual( invalidBlocks( fixtures.ollie ), [] );
+} );
+
+// D1 amendment (S5b): an Ollie pattern adapted by all three bounded changes at
+// once (emoji paragraphs dropped, four cards trimmed to three, the layout's
+// heading inserted first) must open in the editor without recovery.
+test( 'an adapted Ollie section (dropped, trimmed, heading inserted) opens in the editor without recovery', () => {
+	assert.ok( fixtures.adapted.includes( 'senroflux/ollie/features-with-emojis' ) );
+	assert.equal( ( fixtures.adapted.match( /<h3/g ) || [] ).length, 3, 'four cards trimmed to three' );
+	assert.ok( ! /😍|😎|🤓|🤣/u.test( fixtures.adapted ), 'the emoji paragraphs are dropped' );
+	assert.ok(
+		fixtures.adapted.indexOf( '<h2' ) < fixtures.adapted.indexOf( '<h3' ),
+		'the inserted heading comes first'
+	);
+	assert.deepEqual( invalidBlocks( fixtures.adapted ), [] );
+} );
+
 // Negative control: the check must be able to fail. Removing a colour from the
 // block comment while the HTML keeps its inline style — what the old step-5
 // strip did — has to be flagged.
@@ -190,7 +241,12 @@ function mutations( page ) {
 }
 
 test( 'the PHP validator never accepts markup the editor would flag', () => {
-	const variants = mutations( fixtures.page );
+	// The toned page too, so a dropped class or a changed slug on a tone's pair is
+	// held to the same bar.
+	const variants = new Map( [
+		...mutations( fixtures.page ),
+		...mutations( fixtures.toned ),
+	] );
 	const inputs = [ ...variants.keys() ];
 	const verdicts = JSON.parse(
 		execFileSync( 'php', [ path.join( __dirname, 'validate-batch.php' ) ], {

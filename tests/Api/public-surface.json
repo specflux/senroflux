@@ -1,0 +1,538 @@
+{
+    "api_version": "0.3.0",
+    "surface": {
+        "classes": {
+            "Specflux\\SenroFlux\\Packs\\Pack": {
+                "kind": "abstract_class",
+                "is_final": false,
+                "methods": {
+                    "__construct": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "roles",
+                                "type": "array",
+                                "has_default": true,
+                                "default": "array (\n)",
+                                "variadic": false
+                            }
+                        ],
+                        "return": null
+                    },
+                    "abilityNamespaces": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "agentSafetyBindingError": {
+                        "static": false,
+                        "abstract": true,
+                        "visibility": "protected",
+                        "params": [
+                            {
+                                "name": "user_id",
+                                "type": "int",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?WP_Error"
+                    },
+                    "agentSafetyPack": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "?object"
+                    },
+                    "agentSafetyVerbMap": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "defaultBudget": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "governedNamespaces": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "guidesHash": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "?string"
+                    },
+                    "inputProperties": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "protected",
+                        "params": [
+                            {
+                                "name": "template",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "array"
+                    },
+                    "name": {
+                        "static": false,
+                        "abstract": true,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "string"
+                    },
+                    "objectIdForRead": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "verb",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "args",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?string"
+                    },
+                    "objectIdForWrite": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "verb",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "args",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "output",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?string"
+                    },
+                    "objectIdKey": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "verb",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "string"
+                    },
+                    "objectIdPrefix": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "verb",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "string"
+                    },
+                    "requiresAgentSafety": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "bool"
+                    },
+                    "roleCapabilities": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "roleVerbs": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "roles": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "runCapability": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "string"
+                    },
+                    "setupChecks": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "user_id",
+                                "type": "int",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "array"
+                    },
+                    "skills": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "images_available",
+                                "type": "bool",
+                                "has_default": true,
+                                "default": "true",
+                                "variadic": false
+                            }
+                        ],
+                        "return": "array"
+                    },
+                    "ungrantableVerbs": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "validateCall": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "ability",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "input",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?WP_Error"
+                    },
+                    "verbFor": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "ability",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "input",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "string"
+                    },
+                    "verbMap": {
+                        "static": false,
+                        "abstract": true,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "withheldRoleNotice": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "withheld",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?string"
+                    }
+                }
+            },
+            "Specflux\\SenroFlux\\Api\\LayoutVocabulary": {
+                "kind": "class",
+                "is_final": true,
+                "methods": {
+                    "imageUrls": {
+                        "static": true,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "sections",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            }
+                        ],
+                        "return": "array"
+                    },
+                    "names": {
+                        "static": true,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "rulesLines": {
+                        "static": true,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "sectionSchema": {
+                        "static": true,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [],
+                        "return": "array"
+                    },
+                    "validate": {
+                        "static": true,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "section",
+                                "type": "array",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "images_budget_zero",
+                                "type": "bool",
+                                "has_default": true,
+                                "default": "false",
+                                "variadic": false
+                            }
+                        ],
+                        "return": "?WP_Error"
+                    }
+                }
+            },
+            "Specflux\\SenroFlux\\Skills\\Skill": {
+                "kind": "class",
+                "is_final": true,
+                "methods": {
+                    "__construct": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "title",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "body",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "required",
+                                "type": "bool",
+                                "has_default": true,
+                                "default": "false",
+                                "variadic": false
+                            },
+                            {
+                                "name": "source",
+                                "type": "Specflux\\SenroFlux\\Skills\\SkillSource",
+                                "has_default": true,
+                                "default": "Specflux\\SenroFlux\\Skills\\SkillSource::Harness",
+                                "variadic": false
+                            },
+                            {
+                                "name": "version",
+                                "type": "string",
+                                "has_default": true,
+                                "default": "'1'",
+                                "variadic": false
+                            }
+                        ],
+                        "return": null
+                    }
+                }
+            },
+            "Specflux\\SenroFlux\\Setup\\SetupCheck": {
+                "kind": "class",
+                "is_final": true,
+                "methods": {
+                    "__construct": {
+                        "static": false,
+                        "abstract": false,
+                        "visibility": "public",
+                        "params": [
+                            {
+                                "name": "id",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "severity",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "passed",
+                                "type": "bool",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "fix_message",
+                                "type": "string",
+                                "has_default": false,
+                                "default": null,
+                                "variadic": false
+                            },
+                            {
+                                "name": "fix_url",
+                                "type": "?string",
+                                "has_default": true,
+                                "default": "NULL",
+                                "variadic": false
+                            },
+                            {
+                                "name": "fix_capability",
+                                "type": "?string",
+                                "has_default": true,
+                                "default": "NULL",
+                                "variadic": false
+                            },
+                            {
+                                "name": "blocked_message",
+                                "type": "string",
+                                "has_default": true,
+                                "default": "''",
+                                "variadic": false
+                            },
+                            {
+                                "name": "error_code",
+                                "type": "string",
+                                "has_default": true,
+                                "default": "''",
+                                "variadic": false
+                            }
+                        ],
+                        "return": null
+                    }
+                }
+            },
+            "Specflux\\SenroFlux\\Skills\\SkillSource": {
+                "kind": "enum",
+                "cases": [
+                    "Harness",
+                    "Pack",
+                    "Consumer"
+                ]
+            }
+        },
+        "hooks": {
+            "senroflux_packs": [
+                "array<string,Pack>"
+            ],
+            "senroflux_run_skills": [
+                "list<Skill>",
+                "Pack|null",
+                "string",
+                "string"
+            ],
+            "senroflux_default_budget": [
+                "array{max_steps:int,max_tool_calls:int,max_tokens:int,max_questions:int,max_plans:int,images:int,refunds:int}"
+            ]
+        }
+    }
+}

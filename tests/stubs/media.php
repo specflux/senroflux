@@ -151,6 +151,35 @@ if ( ! function_exists( 'get_posts' ) ) {
 	}
 }
 
+if ( ! function_exists( 'trailingslashit' ) ) {
+	function trailingslashit( string $path ): string {
+		return rtrim( $path, '/\\' ) . '/';
+	}
+}
+
+if ( ! function_exists( 'get_attached_file' ) ) {
+	/**
+	 * 0.3 quality fix 3: the on-disk path `generateAltText()`'s caller falls
+	 * back to when no intermediate size is registered. Scripted per
+	 * attachment via `$GLOBALS['senroflux_test_attached_files'][$id]`;
+	 * absent means "no file on disk" (the missing-file refusal path).
+	 */
+	function get_attached_file( int $attachment_id ): string|false {
+		return $GLOBALS['senroflux_test_attached_files'][ $attachment_id ] ?? false;
+	}
+}
+
+if ( ! function_exists( 'image_get_intermediate_size' ) ) {
+	/**
+	 * 0.3 quality fix 3: scripted per attachment+size via
+	 * `$GLOBALS['senroflux_test_intermediate_sizes'][$id][$size]` (a
+	 * `basedir`-relative `path`, mirroring the real function's shape).
+	 */
+	function image_get_intermediate_size( int $attachment_id, string $size = 'thumbnail' ): array|false {
+		return $GLOBALS['senroflux_test_intermediate_sizes'][ $attachment_id ][ $size ] ?? false;
+	}
+}
+
 if ( ! function_exists( 'wp_get_attachment_metadata' ) ) {
 	/**
 	 * `read-media`'s dimensions source (defect fix): scripted per attachment
@@ -225,10 +254,21 @@ if ( ! function_exists( 'download_url' ) ) {
 }
 
 if ( ! function_exists( 'get_taxonomy' ) ) {
+	/**
+	 * False by default, which forces the assign/manage-terms fallback caps in
+	 * Media; a test may script `$GLOBALS['senroflux_test_taxonomies'][$name]`.
+	 */
 	function get_taxonomy( string $taxonomy ): object|false {
-		unset( $taxonomy );
+		return $GLOBALS['senroflux_test_taxonomies'][ $taxonomy ] ?? false;
+	}
+}
 
-		return false; // Forces the assign/manage-terms fallback caps in Media.
+if ( ! function_exists( 'is_object_in_taxonomy' ) ) {
+	/** Only `post` carries categories and tags unless a test scripts otherwise. */
+	function is_object_in_taxonomy( string $object_type, string $taxonomy ): bool {
+		$map = $GLOBALS['senroflux_test_object_taxonomies'] ?? array( 'post' => array( 'category', 'post_tag' ) );
+
+		return in_array( $taxonomy, $map[ $object_type ] ?? array(), true );
 	}
 }
 
@@ -264,6 +304,40 @@ if ( ! function_exists( 'wp_insert_term' ) ) {
 	}
 }
 
+if ( ! function_exists( 'get_term' ) ) {
+	/**
+	 * Finds a term by id in the fixture map; the taxonomy is the part of
+	 * the `<taxonomy>:<lowercased name>` key before the colon.
+	 */
+	function get_term( int $term_id, string $taxonomy = '' ): object|null {
+		unset( $taxonomy );
+
+		foreach ( $GLOBALS['senroflux_test_terms'] ?? array() as $key => $id ) {
+			if ( (int) $id !== $term_id ) {
+				continue;
+			}
+
+			list( $term_taxonomy, $name ) = explode( ':', (string) $key, 2 );
+
+			return (object) array(
+				'term_id'  => $term_id,
+				'name'     => ucwords( $name ),
+				'taxonomy' => $term_taxonomy,
+			);
+		}
+
+		return null;
+	}
+}
+
+if ( ! function_exists( 'get_edit_term_link' ) ) {
+	function get_edit_term_link( int $term_id, string $taxonomy = '', string $object_type = '' ): ?string {
+		unset( $object_type );
+
+		return 'https://example.test/wp-admin/term.php?taxonomy=' . $taxonomy . '&tag_ID=' . $term_id;
+	}
+}
+
 if ( ! function_exists( 'wp_set_post_terms' ) ) {
 	function wp_set_post_terms( int $post_id, array $terms, string $taxonomy, bool $append = false ): array|WP_Error {
 		if ( ! $append ) {
@@ -274,5 +348,49 @@ if ( ! function_exists( 'wp_set_post_terms' ) ) {
 		}
 
 		return $GLOBALS['senroflux_test_post_terms'][ $post_id ][ $taxonomy ];
+	}
+}
+
+if ( ! function_exists( 'get_terms' ) ) {
+	/**
+	 * Honours `taxonomy`, `search` (substring of the name), `orderby=count`
+	 * (most used first), `number`. Rows are scripted in
+	 * `$GLOBALS['senroflux_test_term_rows'][$taxonomy]` as name => count;
+	 * `product_cat` reads the commerce stub's `senroflux_test_product_cats`.
+	 *
+	 * @param array<string,mixed> $args
+	 * @return list<object>
+	 */
+	function get_terms( array $args = array() ): array {
+		$taxonomy = (string) ( $args['taxonomy'] ?? '' );
+		$terms    = array();
+		if ( 'product_cat' === $taxonomy ) {
+			foreach ( $GLOBALS['senroflux_test_product_cats'] ?? array() as $id => $row ) {
+				$terms[] = (object) array(
+					'term_id' => (int) $id,
+					'name'    => (string) $row['name'],
+					'slug'    => (string) $row['slug'],
+					'count'   => (int) ( $row['count'] ?? 0 ),
+				);
+			}
+
+			return $terms;
+		}
+
+		foreach ( $GLOBALS['senroflux_test_term_rows'][ $taxonomy ] ?? array() as $name => $count ) {
+			if ( isset( $args['search'] ) && false === stripos( (string) $name, (string) $args['search'] ) ) {
+				continue;
+			}
+			$terms[] = (object) array(
+				'term_id' => count( $terms ) + 1,
+				'name'    => (string) $name,
+				'count'   => (int) $count,
+			);
+		}
+		if ( 'count' === ( $args['orderby'] ?? '' ) ) {
+			usort( $terms, static fn ( $a, $b ) => $b->count <=> $a->count );
+		}
+
+		return isset( $args['number'] ) ? array_slice( $terms, 0, (int) $args['number'] ) : $terms;
 	}
 }

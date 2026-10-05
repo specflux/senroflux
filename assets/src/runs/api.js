@@ -15,6 +15,7 @@
  */
 
 import apiFetch from '@wordpress/api-fetch';
+import { __ } from '@wordpress/i18n';
 
 const NAMESPACE = '/senroflux/v1';
 
@@ -57,8 +58,15 @@ function postAjax( action, fields, config ) {
 			headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
 			body,
 		} )
-		.then( ( response ) => response.json() )
-		.then( ( json ) => {
+		.then( ( response ) => response.json().then( ( json ) => ( { status: response.status, json } ) ) )
+		.then( ( { status, json } ) => {
+			// check_ajax_referer() answers a stale nonce (a tab left open past
+			// its session) with a bare "-1" and HTTP 403: say what to do.
+			if ( 403 === status && -1 === json ) {
+				const expired = new Error( __( 'This page has expired. Reload it to continue.', 'senroflux' ) );
+				expired.code = 'senroflux_session_expired';
+				throw expired;
+			}
 			if ( ! json || true !== json.success ) {
 				const data = ( json && json.data ) || {};
 				const error = new Error( data.message || 'senroflux_request_failed' );
@@ -69,9 +77,50 @@ function postAjax( action, fields, config ) {
 		} );
 }
 
-/** admin-ajax `senroflux_start`: {consumer, goal} -> RunState. */
-export function startRun( goal, config ) {
-	return postAjax( 'senroflux_start', { consumer: config.consumer, goal }, config );
+/**
+ * admin-ajax `senroflux_start`: {consumer, goal, pack?, model_provider?, model_id?}
+ * -> RunState. `model` is `{ provider, id } | null` — null (the "Automatic"
+ * choice) sends neither field, so the request is byte-identical to the
+ * pre-model-picker shape and the server falls back to its own default.
+ *
+ * @param {string}      goal
+ * @param {Object}      config
+ * @param {string}      [pack]
+ * @param {?{provider: string, id: string}} [model] Chosen (provider, model) pair, or null/omitted for automatic.
+ * @param {number}      [followUpOf] A finished run to follow up (0.3 S20). The server forces
+ *                                   the pack to that run's own, whatever `pack` says.
+ */
+export function startRun( goal, config, pack, model, followUpOf ) {
+	const fields = { consumer: config.consumer, goal, pack };
+	if ( followUpOf ) {
+		fields.follow_up_of = followUpOf;
+	}
+	if ( model ) {
+		fields.model_provider = model.provider;
+		fields.model_id = model.id;
+	}
+	return postAjax( 'senroflux_start', fields, config );
+}
+
+/**
+ * admin-ajax `senroflux_setup_panel` (0.3 S11, "refresh on window focus"):
+ * the setup panel's markup plus the whole start state — `{ html,
+ * start_enabled, packs, unavailable_packs }`. Same nonce/capability as every
+ * other write, but read-only: it changes nothing on the server.
+ */
+export function fetchSetupState( config ) {
+	return postAjax( 'senroflux_setup_panel', {}, config );
+}
+
+/**
+ * admin-ajax `senroflux_dismiss_agent_safety_check` (0.3 S11): record the
+ * current user's dismissal of the Agent Safety advisory (user meta, never
+ * re-armed). The nonce is the one the panel's own Dismiss button carries
+ * (`data-nonce`), not the screen's run nonce. Returns `{ html }`, the panel
+ * without the advisory.
+ */
+export function dismissAdvisory( config ) {
+	return postAjax( 'senroflux_dismiss_agent_safety_check', {}, config );
 }
 
 /** admin-ajax `senroflux_tick`: {run_id, step_count, resume?} -> RunState. */

@@ -41,6 +41,14 @@ final class OperationsAbilitiesTest extends TestCase {
 		$GLOBALS['senroflux_test_orders']                   = array();
 		$GLOBALS['senroflux_test_shipping_zones']           = array();
 		$GLOBALS['senroflux_test_next_zone_id']             = 1;
+		$GLOBALS['senroflux_test_next_instance_id']         = 1;
+		$GLOBALS['senroflux_test_options']                  = array();
+		$GLOBALS['senroflux_test_countries']                = array(
+			'CA' => 'Canada',
+			'US' => 'United States',
+		);
+		$GLOBALS['senroflux_test_states']                   = array( 'CA' => array( 'ON' => 'Ontario' ) );
+		$GLOBALS['senroflux_test_continents']               = array( 'NA' => array( 'name' => 'North America' ) );
 		$GLOBALS['senroflux_test_tax_rates']                = array();
 		$GLOBALS['senroflux_test_next_tax_rate_id']         = 1;
 		$GLOBALS['senroflux_test_products']                 = array();
@@ -150,8 +158,10 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertIsArray( $first );
 
 		// Budget::spentCount() reads the run's OWN step history: record the
-		// successful call the way Runner::executeCall() would.
-		$this->recordSuccessfulStep( 'senroflux/orders-refund' );
+		// successful call the way Runner::executeCall() does — under the
+		// mangled function name the model called (live J12 refunded twice
+		// because only the `ns/name` form was ever counted).
+		$this->recordSuccessfulStep( 'wpab__senroflux__orders-refund' );
 
 		$second = $this->callAbility(
 			'senroflux/orders-refund',
@@ -215,7 +225,7 @@ final class OperationsAbilitiesTest extends TestCase {
 						'type' => 'country',
 					),
 				),
-				'methods'   => array( 'flat_rate' ),
+				'methods'   => array( array( 'method_id' => 'flat_rate' ) ),
 			)
 		);
 
@@ -235,7 +245,7 @@ final class OperationsAbilitiesTest extends TestCase {
 						'type' => 'country',
 					),
 				),
-				'methods'   => array( 'flat_rate' ),
+				'methods'   => array( array( 'method_id' => 'flat_rate' ) ),
 			)
 		);
 
@@ -254,7 +264,7 @@ final class OperationsAbilitiesTest extends TestCase {
 						'type' => 'country',
 					),
 				),
-				'methods'   => array( 'flat_rate', 'free_shipping' ),
+				'methods'   => array( array( 'method_id' => 'free_shipping' ) ),
 			)
 		);
 
@@ -262,6 +272,268 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertSame( $created['zone_id'], $updated['zone_id'] );
 		$this->assertNotNull( $updated['previous'] );
 		$this->assertSame( 'United States', $updated['previous']['name'] );
+	}
+
+	public function test_live_zone_args_save_country_code_and_a_configured_flat_rate(): void {
+		$result = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'locations' => array( array( 'code' => 'country:CA' ) ),
+				'methods'   => array(
+					array(
+						'cost'       => '12',
+						'enabled'    => 'true',
+						'method_id'  => 'flat_rate',
+						'tax_status' => 'none',
+						'title'      => 'Canada Shipping',
+					),
+				),
+				'name'      => 'Canada',
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame(
+			array(
+				array(
+					'code' => 'CA',
+					'type' => 'country',
+				),
+			),
+			$result['locations']
+		);
+		$this->assertSame( 'flat_rate', $result['methods'][0]['method_id'] );
+		$this->assertSame( 'Canada Shipping', $result['methods'][0]['title'] );
+		$this->assertSame( '12', $result['methods'][0]['cost'] );
+		$this->assertTrue( $result['methods'][0]['enabled'] );
+
+		$settings = $GLOBALS['senroflux_test_options'][ 'woocommerce_flat_rate_' . $result['methods'][0]['instance_id'] . '_settings' ];
+		$this->assertSame( '12', $settings['cost'] );
+		$this->assertSame( 'Canada Shipping', $settings['title'] );
+		$this->assertSame( 'none', $settings['tax_status'] );
+		$this->assertSame(
+			array(
+				'code' => 'CA',
+				'type' => 'country',
+			),
+			$GLOBALS['senroflux_test_shipping_zones'][ $result['zone_id'] ]['locations'][0]
+		);
+	}
+
+	public function test_prefixed_state_continent_and_postcode_codes_are_split(): void {
+		$result = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Mixed',
+				'locations' => array(
+					array( 'code' => 'state:CA:ON' ),
+					array( 'code' => 'continent:NA' ),
+					array( 'code' => 'postcode:90210' ),
+					array(
+						'code' => 'US',
+						'type' => 'country',
+					),
+				),
+				'methods'   => array(),
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame(
+			array(
+				array(
+					'code' => 'CA:ON',
+					'type' => 'state',
+				),
+				array(
+					'code' => 'NA',
+					'type' => 'continent',
+				),
+				array(
+					'code' => '90210',
+					'type' => 'postcode',
+				),
+				array(
+					'code' => 'US',
+					'type' => 'country',
+				),
+			),
+			$result['locations']
+		);
+	}
+
+	/**
+	 * @return array<string,array{0:array<string,mixed>,1:string}>
+	 */
+	public static function refused_zone_inputs(): array {
+		$zone = static fn( array $locations, array $methods ): array => array(
+			'name'      => 'Bad',
+			'locations' => $locations,
+			'methods'   => $methods,
+		);
+
+		return array(
+			'unknown country'            => array( $zone( array( array( 'code' => 'ZZ' ) ), array() ), 'ZZ' ),
+			'unknown state'              => array( $zone( array( array( 'code' => 'state:CA:XX' ) ), array() ), 'CA:XX' ),
+			'unknown continent'          => array( $zone( array( array( 'code' => 'continent:XX' ) ), array() ), 'XX' ),
+			'type conflicts with prefix' => array(
+				$zone(
+					array(
+						array(
+							'code' => 'country:CA',
+							'type' => 'state',
+						),
+					),
+					array()
+				),
+				'conflicts',
+			),
+			'unknown location field'     => array( $zone( array( array( 'region' => 'CA' ) ), array() ), 'region' ),
+			'unknown method id'          => array( $zone( array(), array( array( 'method_id' => 'teleport' ) ) ), 'method_id' ),
+			'legacy-style id key'        => array( $zone( array(), array( array( 'id' => 'flat_rate' ) ) ), 'method_id' ),
+			'label instead of title'     => array(
+				$zone(
+					array(),
+					array(
+						array(
+							'method_id' => 'flat_rate',
+							'label'     => 'X',
+						),
+					)
+				),
+				'label',
+			),
+			'non-decimal cost'           => array(
+				$zone(
+					array(),
+					array(
+						array(
+							'method_id' => 'flat_rate',
+							'cost'      => '10 * [qty]',
+						),
+					)
+				),
+				'decimal',
+			),
+			'cost on free shipping'      => array(
+				$zone(
+					array(),
+					array(
+						array(
+							'method_id' => 'free_shipping',
+							'cost'      => '5',
+						),
+					)
+				),
+				'free_shipping',
+			),
+			'bad tax status'             => array(
+				$zone(
+					array(),
+					array(
+						array(
+							'method_id'  => 'flat_rate',
+							'tax_status' => 'maybe',
+						),
+					)
+				),
+				'tax_status',
+			),
+		);
+	}
+
+	/**
+	 * @dataProvider refused_zone_inputs
+	 * @param array<string,mixed> $input Ability input.
+	 */
+	public function test_invalid_zone_input_is_refused_and_nothing_is_saved( array $input, string $needle ): void {
+		$result = $this->callAbility( 'senroflux/shipping-zone-save', $input );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertStringContainsString( $needle, $result->get_error_message() );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_shipping_zones'] );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_options'] );
+	}
+
+	public function test_a_bad_second_method_leaves_the_first_unsaved(): void {
+		$result = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Half',
+				'locations' => array( array( 'code' => 'CA' ) ),
+				'methods'   => array(
+					array( 'method_id' => 'flat_rate' ),
+					array( 'method_id' => 'nope' ),
+				),
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( array(), $GLOBALS['senroflux_test_shipping_zones'] );
+	}
+
+	public function test_local_pickup_holds_a_cost_and_a_method_can_be_disabled(): void {
+		$GLOBALS['wpdb'] = new wpdb();
+		$result          = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Pickup',
+				'locations' => array( array( 'code' => 'CA' ) ),
+				'methods'   => array(
+					array(
+						'method_id' => 'local_pickup',
+						'cost'      => '0.50',
+						'enabled'   => false,
+					),
+				),
+			)
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertSame( '0.50', $result['methods'][0]['cost'] );
+		$this->assertFalse( $result['methods'][0]['enabled'] );
+		$this->assertSame( array( 'is_enabled' => 0 ), $GLOBALS['wpdb']->lastUpdate['data'] );
+		$this->assertSame( array( 'instance_id' => $result['methods'][0]['instance_id'] ), $GLOBALS['wpdb']->lastUpdate['where'] );
+	}
+
+	public function test_existing_zone_replaces_locations_and_keeps_existing_methods(): void {
+		$created = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'name'      => 'Old',
+				'locations' => array( array( 'code' => 'US' ) ),
+				'methods'   => array( array( 'method_id' => 'free_shipping' ) ),
+			)
+		);
+
+		$updated = $this->callAbility(
+			'senroflux/shipping-zone-save',
+			array(
+				'zone_id'   => $created['zone_id'],
+				'name'      => 'Canada',
+				'locations' => array( array( 'code' => 'country:CA' ) ),
+				'methods'   => array(
+					array(
+						'method_id' => 'flat_rate',
+						'cost'      => '12',
+					),
+				),
+			)
+		);
+
+		$this->assertIsArray( $updated );
+		$this->assertSame(
+			array(
+				array(
+					'code' => 'CA',
+					'type' => 'country',
+				),
+			),
+			$updated['locations']
+		);
+		$stored = $GLOBALS['senroflux_test_shipping_zones'][ $created['zone_id'] ];
+		$this->assertSame( array( 'free_shipping', 'flat_rate' ), array_column( $stored['methods'], 'method_id' ) );
 	}
 
 	public function test_updating_an_unknown_shipping_zone_is_refused(): void {
@@ -386,6 +658,30 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertEquals( $posts_before, $GLOBALS['senroflux_test_posts'] );
 		$this->assertEquals( $orders_before, $GLOBALS['senroflux_test_orders'] );
 		$this->assertEquals( $products_before, $GLOBALS['senroflux_test_products'] );
+	}
+
+	public function test_store_report_uses_each_products_own_low_stock_threshold(): void {
+		$GLOBALS['senroflux_test_products']             = array(
+			501 => 4, // Above the store amount (2) but at its own threshold (5).
+			502 => 4, // Above the store amount and its own threshold (3).
+			503 => 2, // At the store amount, no product-level override.
+		);
+		$GLOBALS['senroflux_test_low_stock_by_product'] = array(
+			501 => 5,
+			502 => 3,
+		);
+
+		$result = $this->callAbility(
+			'senroflux/store-report',
+			array(
+				'from' => '2026-01-01',
+				'to'   => '2026-01-31',
+			)
+		);
+		unset( $GLOBALS['senroflux_test_low_stock_by_product'] );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( array( 501, 503 ), $result['low_stock_products'] );
 	}
 
 	public function test_a_window_over_92_days_is_refused(): void {

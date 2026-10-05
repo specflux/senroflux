@@ -218,12 +218,13 @@ final class AskUserParkTest extends TestCase {
 		// then completes. Had ask-user counted, the single-call budget would be
 		// exhausted and the run fail instead.
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'answer' => array( 'text' => 'left' ) ) );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'], 'ask-user must not consume the tool-call budget' );
-		$this->assertSame( array( 'tool_result', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'tool_result', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 	}
 
 	// ------------------------------------------------------------------
@@ -238,6 +239,7 @@ final class AskUserParkTest extends TestCase {
 		$this->assertIsArray( $parked );
 		$this->assertSame( 'awaiting_user', $parked['run']['status'], $label . ': parks first' );
 
+		$this->gateway->script[] = self::textTurn( 'Continuing.' );
 		$this->gateway->script[] = self::textTurn( 'Continuing.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 
@@ -344,12 +346,13 @@ final class AskUserParkTest extends TestCase {
 		$this->runner->tick( $run_id, 0, null );
 
 		$this->gateway->script[] = self::textTurn( 'All done.' );
+		$this->gateway->script[] = self::textTurn( 'All done.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'answer' => array( 'choice' => 'a' ) ) );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
-		$this->assertSame( array( 'tool_result', 'tool_result', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'tool_result', 'tool_result', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 
 		$answer = $result['new_steps'][0]['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_q', $answer['id'] ?? null );
@@ -420,6 +423,7 @@ final class AskUserParkTest extends TestCase {
 
 		// Answer the one permitted question; the completion turn has 0 left.
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 		$before                  = $this->store->getRun( $run_id )->stepCount;
 		$result                  = $this->runner->tick( $run_id, $before, array( 'answer' => array( 'choice' => 'light' ) ) );
 		$this->assertIsArray( $result );
@@ -441,17 +445,18 @@ final class AskUserParkTest extends TestCase {
 		$this->gateway->script[] = self::askTurn(
 			'call_q',
 			array(
-				'text'      => str_repeat( 'x', 301 ),
+				'text'      => str_repeat( 'x', 376 ),
 				'rationale' => 'Too long.',
 			)
 		);
+		$this->gateway->script[] = self::textTurn( 'Understood, rephrasing.' );
 		$this->gateway->script[] = self::textTurn( 'Understood, rephrasing.' );
 
 		$result = $this->runner->tick( $run_id, 0, null );
 
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'], 'an invalid ask-user is NOT a park; the run keeps going' );
-		$this->assertSame( array( 'user', 'model', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'user', 'model', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 
 		$error_step = $result['new_steps'][2];
 		$this->assertSame( 'tool_result', $error_step['kind'] );
@@ -461,7 +466,22 @@ final class AskUserParkTest extends TestCase {
 		$responded = $error_step['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_q', $responded['id'] ?? null );
 		$this->assertSame( HarnessTools::FUNCTION_NAME, $responded['name'] ?? null );
-		$this->assertSame( array( 'error' => HarnessTools::ERROR_INVALID_QUESTION ), $responded['response'] ?? null );
+		$this->assertSame( HarnessTools::ERROR_INVALID_QUESTION, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid ask-user call: ', $responded['response']['message'] ?? '' );
+		// 0.3 quality fix: the refusal must state the actual length AND the
+		// limit so the model can tell how far over it is (live runs looped
+		// retrying "Still too long..." without this).
+		$this->assertStringContainsString( '"text" is 376 characters; the limit is 300.', $responded['response']['message'] ?? '' );
+	}
+
+	public function test_ask_user_declaration_schema_caps_text_length(): void {
+		$declaration = HarnessTools::askUserDeclaration();
+		$schema      = $declaration instanceof FunctionDeclaration
+			? $declaration->getParameters()
+			: $declaration['inputSchema'];
+		$schema      = (array) $schema;
+
+		$this->assertSame( HarnessTools::MAX_TEXT_CHARS, $schema['properties']['text']['maxLength'] ?? null );
 	}
 
 	public function test_invalid_payload_counts_as_a_tool_call_for_the_budget(): void {
@@ -476,7 +496,7 @@ final class AskUserParkTest extends TestCase {
 					'call_q',
 					HarnessTools::FUNCTION_NAME,
 					array(
-						'text'      => str_repeat( 'x', 301 ),
+						'text'      => str_repeat( 'x', 376 ),
 						'rationale' => 'Too long.',
 					)
 				)
@@ -501,7 +521,9 @@ final class AskUserParkTest extends TestCase {
 
 		$this->assertIsArray( $result );
 		$responded = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
-		$this->assertSame( array( 'error' => HarnessTools::ERROR_INVALID_QUESTION ), $responded['response'] ?? null );
+		$this->assertSame( HarnessTools::ERROR_INVALID_QUESTION, $responded['response']['error'] ?? null );
+		$this->assertStringStartsWith( 'Invalid ask-user call: ', $responded['response']['message'] ?? '' );
+		$this->assertStringContainsString( 'rationale', $responded['response']['message'] ?? '' );
 	}
 
 	// ------------------------------------------------------------------
@@ -532,6 +554,7 @@ final class AskUserParkTest extends TestCase {
 			)
 		);
 		$this->gateway->script[] = self::textTurn( 'Done.' );
+		$this->gateway->script[] = self::textTurn( 'Done.' );
 
 		$before = $this->store->getRun( $run_id )->stepCount;
 		$result = $this->runner->tick( $run_id, $before, array( 'skip' => true ) );
@@ -539,7 +562,7 @@ final class AskUserParkTest extends TestCase {
 		$this->assertIsArray( $result );
 		$this->assertSame( 'completed', $result['run']['status'] );
 		// skip answer → model (emits call_q2) → refused tool_result → model (done).
-		$this->assertSame( array( 'tool_result', 'model', 'tool_result', 'model' ), array_column( $result['new_steps'], 'kind' ) );
+		$this->assertSame( array( 'tool_result', 'model', 'tool_result', 'model', 'system', 'user', 'model' ), array_column( $result['new_steps'], 'kind' ) );
 
 		$refused = $result['new_steps'][2]['message']['parts'][0]['functionResponse'] ?? array();
 		$this->assertSame( 'call_q2', $refused['id'] ?? null );
@@ -561,7 +584,7 @@ final class AskUserParkTest extends TestCase {
 			)
 		);
 		$this->runner->tick( $run_id, 0, null );
-		$this->gateway->script = array( $this->textTurn( 'Thanks!' ) );
+		$this->gateway->script = array( $this->textTurn( 'Thanks!' ), $this->textTurn( 'Thanks!' ) );
 
 		// A delegated admin (user 2) answers: senroflux_can_tick must allow it.
 		$GLOBALS['senroflux_test_current_user_id'] = 2;
@@ -639,6 +662,7 @@ final class AskUserParkTest extends TestCase {
 		$this->assertSame( RunStatus::AwaitingUser->value, $second['run']['status'], 'the SECOND question parks in turn' );
 		$this->assertSame( 'Which size?', $second['ui']['question']['text'] ?? '', 'not the first question again' );
 
+		$this->gateway->script[] = self::textTurn( 'Thanks!' );
 		$this->gateway->script[] = self::textTurn( 'Thanks!' );
 		$third                   = $this->runner->tick(
 			$run_id,

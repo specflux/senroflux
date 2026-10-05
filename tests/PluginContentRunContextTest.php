@@ -126,10 +126,23 @@ final class PluginContentRunContextTest extends TestCase {
 
 	public static function validContent(): string {
 		$vocabulary = new Vocabulary();
+		$patterns   = $vocabulary->all();
 
 		// Pattern index 0 is hero; index 1 is text-section (same pairing
-		// AbilitiesTest uses as a minimal valid page body).
-		return $vocabulary->all()[0]['markup'] . "\n\n" . $vocabulary->all()[1]['markup'];
+		// AbilitiesTest uses as a minimal valid page body). 0.3 quality fix 2:
+		// this test's `update-post` now supplies content, so it needs an
+		// image too — this is not the test's own concern, so a `media-text`
+		// section is added the same way AbilitiesTest's own
+		// `validContentWithImage()` does, rather than duplicating the rule.
+		$media_text = '';
+		foreach ( $patterns as $pattern ) {
+			if ( 'senroflux/media-text' === $pattern['name'] ) {
+				$media_text = (string) $pattern['markup'];
+				break;
+			}
+		}
+
+		return $patterns[0]['markup'] . "\n\n" . $patterns[1]['markup'] . "\n\n" . $media_text;
 	}
 
 	public static function callTurn( string $function_name, array $args ): ModelTurn {
@@ -220,6 +233,7 @@ final class PluginContentRunContextTest extends TestCase {
 			)
 		);
 		$gateway->script[] = self::textTurn( 'Updated the page.' );
+		$gateway->script[] = self::textTurn( 'Updated the page.' );
 
 		$result = Plugin::instance()->tick( $run_id, 0, null );
 
@@ -272,7 +286,7 @@ final class PluginContentRunContextTest extends TestCase {
 		$gateway = new class() implements ModelGatewayInterface {
 			public int $calls = 0;
 
-			public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools ): ModelTurn|WP_Error {
+			public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools, ?array $model_preference = null ): ModelTurn|WP_Error {
 				unset( $history, $system_instruction, $tools );
 				++$this->calls;
 
@@ -320,5 +334,53 @@ final class PluginContentRunContextTest extends TestCase {
 			$encoded,
 			'the stale_write refusal message must still surface for a genuinely externally-modified object'
 		);
+	}
+
+	/**
+	 * Live run (2026-09-27 rerun2, scenario 1-1): the run had only listed
+	 * pages, then published over one it never read, and was told the page
+	 * "changed since the run last read it", which never happened.
+	 */
+	public function test_a_write_to_a_never_read_object_says_to_read_it_first(): void {
+		Plugin::set_dependency_probe( false );
+		$this->seedDraftPage( 100 );
+
+		$gateway = new class() implements ModelGatewayInterface {
+			public int $calls = 0;
+
+			public function generateTurn( array $history, string $system_instruction, \Specflux\SenroFlux\Tools\ToolRegistry $tools, ?array $model_preference = null ): ModelTurn|WP_Error {
+				unset( $history, $system_instruction, $tools );
+				++$this->calls;
+
+				if ( 1 === $this->calls ) {
+					return PluginContentRunContextTest::callTurn(
+						'wpab__senroflux__update-post',
+						array(
+							'id'      => 100,
+							'content' => PluginContentRunContextTest::validContent(),
+						)
+					);
+				}
+
+				return PluginContentRunContextTest::textTurn( 'Done.' );
+			}
+		};
+
+		$this->seedRunnerGraph( $gateway );
+		$run_id = $this->createPagesRun();
+
+		$result = Plugin::instance()->tick( $run_id, 0, null );
+		$this->assertIsArray( $result, is_object( $result ) ? $result->get_error_message() : '' );
+
+		$encoded = '';
+		foreach ( $result['new_steps'] as $step ) {
+			if ( 'tool_result' === ( $step['kind'] ?? null ) && 'wpab__senroflux__update-post' === ( $step['tool_name'] ?? null ) ) {
+				$this->assertSame( 'error', $step['status'] ?? null );
+				$encoded = (string) wp_json_encode( $step['message'] ?? array() );
+			}
+		}
+
+		$this->assertStringContainsString( 'has not read this item yet', $encoded );
+		$this->assertStringNotContainsString( 'changed since', $encoded );
 	}
 }

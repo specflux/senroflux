@@ -15,7 +15,8 @@
  *   - the same comment attributes, ignoring `metadata`, an explicit default
  *     heading level, key order, and the SLUG of a preset (spacing
  *     `var:preset|spacing|<slug>`, `fontSize`), which may vary as long as
- *     slugs the vocabulary repeats stay equal;
+ *     slugs the vocabulary repeats stay equal (a `core/cover`'s `overlayColor`
+ *     is the same kind of slug: S5 rewrites it to the theme's darkest colour);
  *   - `style.spacing.padding`/`style.spacing.margin` are OPTIONAL: pure
  *     presentation the vocabulary happens to ship, not something the block
  *     editor needs to accept the write, so a block matches whether it
@@ -164,7 +165,7 @@ final class BlockShells {
 		$shells = array();
 		foreach ( $this->vocabulary->all() as $pattern ) {
 			foreach ( parse_blocks( (string) $pattern['markup'] ) as $block ) {
-				$this->collect( $block, $shells );
+				$this->collect( $block, $shells, ! empty( $pattern['theme_derived'] ) );
 			}
 		}
 		$this->shells = $shells;
@@ -175,8 +176,9 @@ final class BlockShells {
 	/**
 	 * @param array<string,mixed>                                           $block  One parsed vocabulary block.
 	 * @param array<string, array<string, list<list<array<string,mixed>>>>> $shells Out: shells collected so far.
+	 * @param bool                                                          $theme  Whether the block is from a theme pattern.
 	 */
-	private function collect( array $block, array &$shells ): void {
+	private function collect( array $block, array &$shells, bool $theme = false ): void {
 		$name = (string) ( $block['blockName'] ?? '' );
 		if ( '' !== $name ) {
 			$slugs = array();
@@ -201,12 +203,23 @@ final class BlockShells {
 				$sparse_shell          = $this->stripOptionalStyle( $shell );
 				$this->addShell( $shells, $name, $sparse_key, $sparse_shell );
 			}
+
+			// A theme hero's h2 may be written as the page's H1 (see
+			// `Layouts`); where an H1 may appear is the Validator's rule.
+			if ( $theme && 'core/heading' === $name && 2 === (int) ( $original_attrs['level'] ?? 2 ) ) {
+				$h1_slugs          = array();
+				$h1_block          = $block;
+				$h1_block['attrs'] = array_merge( $original_attrs, array( 'level' => 1 ) );
+				$h1_html           = (string) preg_replace( array( '#<h2(\s|>)#', '#</h2>#' ), array( '<h1$1', '</h1>' ), (string) ( $block['innerHTML'] ?? '' ) );
+				$h1_key            = $this->attributeKey( $h1_block, $h1_slugs );
+				$this->addShell( $shells, $name, $h1_key, $this->shell( $h1_html, $h1_slugs ) );
+			}
 		}
 
 		$children = $block['innerBlocks'] ?? array();
 		/** @var list<array<string,mixed>> $children */
 		foreach ( $children as $child ) {
-			$this->collect( $child, $shells );
+			$this->collect( $child, $shells, $theme );
 		}
 	}
 
@@ -288,6 +301,34 @@ final class BlockShells {
 		if ( 'core/heading' === ( $block['blockName'] ?? '' ) && 2 === ( $attrs['level'] ?? null ) ) {
 			unset( $attrs['level'] );
 		}
+		// 0.3 quality feature 4: a written `core/image`'s attachment `id` is
+		// NEVER the shipped sample's — a real write always points at a
+		// different attachment — so it is excluded from identity here the
+		// same way `metadata` is, rather than trying to keep it in step with
+		// {@see ThemePatterns::fill()}'s slot substitution.
+		if ( 'core/image' === ( $block['blockName'] ?? '' ) ) {
+			unset( $attrs['id'] );
+		}
+
+		// 0.3 quality fix (images required on new pages): a written
+		// `core/cover`'s `id`/`url`/`alt` are a real attachment's, never the
+		// sample's — excluded from identity the same way `core/image`'s `id`
+		// is, above.
+		// A focal point only crops the chosen photo, so it is not identity either.
+		// 0.3 quality fix (hero readability): `dimRatio` is excluded the same
+		// way — {@see \Specflux\SenroFlux\Packs\Pages\Validator::MIN_COVER_DIM_RATIO}
+		// silently raises a too-light overlay rather than refusing the write,
+		// so a run/theme pattern's own value can never fail this match.
+		if ( 'core/cover' === ( $block['blockName'] ?? '' ) ) {
+			unset( $attrs['id'], $attrs['url'], $attrs['alt'], $attrs['focalPoint'], $attrs['dimRatio'] );
+		}
+
+		// Same rule for a written `core/media-text`'s `mediaId` (its
+		// `mediaAlt`/`mediaUrl` are never in the comment JSON at all — both
+		// are `source: attribute`, sourced from the `<img>` on parse).
+		if ( 'core/media-text' === ( $block['blockName'] ?? '' ) ) {
+			unset( $attrs['mediaId'], $attrs['mediaSizeSlug'] );
+		}
 
 		$attrs = $this->tokenize( $attrs, $slugs );
 
@@ -317,6 +358,10 @@ final class BlockShells {
 				$attrs[ $key ] = 'var:preset|' . $preset[1] . '|' . $token;
 			} elseif ( 'fontSize' === $key && preg_match( self::SLUG, $value ) ) {
 				$attrs[ $key ] = $this->slugToken( $slugs, 'has-', $value, '-font-size' );
+			} elseif ( 'overlayColor' === $key && preg_match( self::SLUG, $value ) ) {
+				// D4 (S5): a curated cover's overlay is rewritten to the active
+				// theme's darkest palette colour, so its slug may vary too.
+				$attrs[ $key ] = $this->slugToken( $slugs, 'has-', $value, '-background-color' );
 			}
 		}
 
@@ -413,13 +458,31 @@ final class BlockShells {
 			$value = trim( $attr[2] ?? '', "\"'" );
 			if ( 'class' === $name ) {
 				$classes = array_values( array_filter( explode( ' ', (string) preg_replace( '#\s+#', ' ', $value ) ) ) );
+				// 0.3 quality fix: `wp-image-<n>` is WordPress' own class for
+				// an attachment id (`core/cover`'s background image,
+				// `core/media-text`'s figure image) — as volatile as the `id`
+				// attribute itself (excluded from identity above), so it is
+				// excluded from the HTML-shell comparison too. Dropped
+				// unconditionally (no block in this vocabulary uses the
+				// literal string for anything else).
+				// 0.3 quality fix (hero readability): `has-background-dim[-N]`
+				// is `core/cover`'s own class for its `dimRatio` attribute
+				// (excluded from identity above for the same reason), so it is
+				// dropped here too — {@see Validator::normalizeCoverDim()}
+				// rewrites it directly rather than relying on this check.
+				$classes = array_values(
+					array_filter(
+						$classes,
+						static fn ( string $class_name ): bool => 1 !== preg_match( '#^(wp-image-\d+|size-[a-z0-9_-]+|has-background-dim(-\d+)?)$#', $class_name )
+					)
+				);
 			} elseif ( 'style' === $name ) {
 				foreach ( explode( ';', $value ) as $declaration ) {
-					if ( '' !== trim( $declaration ) ) {
+					if ( '' !== trim( $declaration ) && ! ( 'img' === $tag && str_starts_with( strtolower( trim( $declaration ) ), 'object-position' ) ) ) {
 						$style[] = (string) preg_replace( '#\s*:\s*#', ':', strtolower( trim( $declaration ) ), 1 );
 					}
 				}
-			} elseif ( ! in_array( $name, self::SOURCED, true ) ) {
+			} elseif ( ! in_array( $name, self::SOURCED, true ) && ! ( 'img' === $tag && 'data-object-position' === $name ) ) {
 				$names[] = $name;
 			}
 		}

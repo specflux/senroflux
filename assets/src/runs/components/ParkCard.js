@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from '@wordpress/element';
 import { __, _n, sprintf } from '@wordpress/i18n';
 import TierBadge from './TierBadge';
+import ApprovalSummary from './ApprovalSummary';
 import { planApprovalCount } from '../utils';
 
 const HEADINGS = {
@@ -170,6 +171,55 @@ function QuestionBody( { payload, onResolve, busy } ) {
 }
 
 /**
+ * One existing object a plan step names: "Ceramic Mug (#12)", or just the id
+ * when it has no title. Plain text only, like every other card line.
+ */
+function planObjectLabel( object ) {
+	const id = String( object?.id ?? '' );
+	const label = /^\d+$/.test( id ) ? `#${ id }` : id;
+	const title = 'string' === typeof object?.title ? object.title : '';
+	return '' !== title ? `${ title } (${ label })` : label;
+}
+
+const PLAN_STATUS_LABELS = () => ( {
+	publish: __( 'published', 'senroflux' ),
+	draft: __( 'draft', 'senroflux' ),
+	pending: __( 'pending review', 'senroflux' ),
+	private: __( 'private', 'senroflux' ),
+	future: __( 'scheduled', 'senroflux' ),
+	trash: __( 'in the trash', 'senroflux' ),
+} );
+
+/**
+ * One adopted / left-alone page on the plan card: title, "#ID" and the
+ * object's current status in words. The status is the server's lookup, not
+ * the model's claim; an unknown status code is shown as-is.
+ */
+function PlanExistingList( { heading, rows } ) {
+	if ( ! Array.isArray( rows ) || 0 === rows.length ) {
+		return null;
+	}
+	const labels = PLAN_STATUS_LABELS();
+	return (
+		<>
+			<h4>{ heading }</h4>
+			<ul>
+				{ rows.map( ( row, index ) => {
+					const status = 'string' === typeof row?.status && '' !== row.status ? row.status : '';
+					return (
+						<li key={ `${ row?.id }-${ index }` } data-senroflux-content dir="auto">
+							{ [ row?.title, `#${ row?.id }`, labels[ status ] ?? status ]
+								.filter( ( part ) => 'string' === typeof part && '' !== part )
+								.join( ' · ' ) }
+						</li>
+					);
+				} ) }
+			</ul>
+		</>
+	);
+}
+
+/**
  * S5 plan shape: `{ "plan": { "action": "accept" | "accept_preapprove" |
  * "veto", "note"? } }`. The pre-approve radio's visibility is decided
  * ENTIRELY by `payload.preapprove_available` (`Runner::planUi()` — true only
@@ -214,6 +264,15 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 						<span data-senroflux-content dir="auto">{ step.text }</span>
 						{ Array.isArray( step.verbs ) &&
 							step.verbs.map( ( verb ) => <TierBadge key={ verb } gateMode={ gateMode } tier={ step.tier } /> ) }
+						{ Array.isArray( step.objects ) && step.objects.length > 0 && (
+							<ul className="senroflux-plan-objects">
+								{ step.objects.map( ( object ) => (
+									<li key={ object.id } data-senroflux-content dir="auto">
+										{ planObjectLabel( object ) }
+									</li>
+								) ) }
+							</ul>
+						) }
 					</li>
 				) ) }
 			</ol>
@@ -238,6 +297,9 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 					) }
 				</p>
 			) }
+			<PlanExistingList heading={ __( 'Pages on the site now', 'senroflux' ) } rows={ payload.site_pages } />
+			<PlanExistingList heading={ __( 'Existing pages kept', 'senroflux' ) } rows={ payload.adopted } />
+			<PlanExistingList heading={ __( 'Left as they are', 'senroflux' ) } rows={ payload.left_for_you } />
 			{ assumptions.length > 0 && (
 				<>
 					<h4>{ __( 'Assumptions', 'senroflux' ) }</h4>
@@ -313,6 +375,7 @@ function PlanBody( { payload, gateMode, onResolve, busy } ) {
 function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 	const args = payload.args && 'object' === typeof payload.args ? payload.args : {};
 	const hasArgs = Object.keys( args ).length > 0;
+	const hasSummary = 'string' === typeof payload.summary && '' !== payload.summary;
 
 	return (
 		<div className="senroflux-park-body">
@@ -320,11 +383,30 @@ function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 				<strong>{ __( 'Requested action', 'senroflux' ) }:</strong> <code>{ payload.verb }</code>
 			</p>
 			<TierBadge gateMode={ gateMode } tier={ payload.tier } />
-			{ hasArgs && (
-				<>
+			{ 'string' === typeof payload.notice && '' !== payload.notice && (
+				<p className="senroflux-approval-notice" role="status">
+					{ payload.notice }
+				</p>
+			) }
+			{ hasSummary && (
+				<div className="senroflux-approval-summary-block">
 					<p>
-						<strong>{ __( 'Arguments', 'senroflux' ) }:</strong>
+						<strong>{ __( 'What will change', 'senroflux' ) }:</strong>
 					</p>
+					{ /*
+					 * The pack's own summary is model-influenced DATA (titles,
+					 * prices, notes), so it carries the pseudo-locale data
+					 * marker; the labels around it stay translatable chrome.
+					 * Plain text, so it reads without colour.
+					 */ }
+					<p className="senroflux-approval-summary" data-senroflux-content>
+						<ApprovalSummary html={ payload.summary } />
+					</p>
+				</div>
+			) }
+			{ hasArgs && (
+				<details className="senroflux-approval-args" open={ ! hasSummary }>
+					<summary>{ __( 'Arguments', 'senroflux' ) }</summary>
 					{ /*
 					 * Live-review finding: approval-card arguments must wrap and
 					 * show in full. No `overflow: hidden`, no `text-overflow:
@@ -335,7 +417,7 @@ function ApprovalBody( { payload, gateMode, onResolve, busy } ) {
 					<pre className="senroflux-args" tabIndex={ 0 }>
 						{ JSON.stringify( args, null, 2 ) }
 					</pre>
-				</>
+				</details>
 			) }
 			<div className="senroflux-park-actions">
 				<button

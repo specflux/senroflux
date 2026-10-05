@@ -107,8 +107,9 @@ if ( ! class_exists( 'WC_Coupon', false ) ) {
 			return $this->expires;
 		}
 
-		public function get_usage_limit(): ?int {
-			return $this->usage_limit;
+		// Real `WC_Coupon::get_usage_limit()` returns 0 (not null) when unlimited.
+		public function get_usage_limit(): int {
+			return $this->usage_limit ?? 0;
 		}
 
 		public function set_code( string $code ): void {
@@ -237,6 +238,14 @@ if ( ! class_exists( 'WC_Order', false ) ) {
 			return ( null !== $row && isset( $row->date_created ) ) ? (int) $row->date_created : null;
 		}
 
+		public function get_order_number(): string {
+			return (string) $this->id;
+		}
+
+		public function get_edit_order_url(): string {
+			return 'https://example.test/wp-admin/admin.php?page=wc-orders&action=edit&id=' . $this->id;
+		}
+
 		/** Stage 14 (AS-15/S19): the recipient a customer-visible note reaches. */
 		public function get_billing_email(): string {
 			return (string) ( $this->row()->billing_email ?? '' );
@@ -300,24 +309,101 @@ if ( ! isset( $GLOBALS['senroflux_test_shipping_zones'] ) ) {
 if ( ! isset( $GLOBALS['senroflux_test_next_zone_id'] ) ) {
 	$GLOBALS['senroflux_test_next_zone_id'] = 1;
 }
+if ( ! isset( $GLOBALS['senroflux_test_next_instance_id'] ) ) {
+	$GLOBALS['senroflux_test_next_instance_id'] = 1;
+}
+
+if ( ! class_exists( 'WC_Shipping_Method', false ) ) {
+	/** Instance-settings surface of the real `WC_Shipping_Method` the zone code touches. */
+	class WC_Shipping_Method {
+
+		public string $id = '';
+		public int $instance_id;
+		/** @var array<string,mixed> */
+		public array $instance_settings = array();
+		public string $enabled          = 'yes';
+
+		public function __construct( int $instance_id = 0 ) {
+			$this->instance_id = $instance_id;
+		}
+
+		public function get_instance_option_key(): string {
+			return $this->instance_id ? 'woocommerce_' . $this->id . '_' . $this->instance_id . '_settings' : '';
+		}
+
+		/** Like the real one: stored settings, else the form-field defaults. */
+		public function init_instance_settings(): void {
+			$stored = get_option( $this->get_instance_option_key(), null );
+			if ( is_array( $stored ) ) {
+				$this->instance_settings = $stored;
+				return;
+			}
+			$defaults = array(
+				'title'      => ucwords( str_replace( '_', ' ', $this->id ) ),
+				'tax_status' => 'taxable',
+				'cost'       => '',
+			);
+			if ( 'free_shipping' === $this->id ) {
+				$defaults = array(
+					'title'    => 'Free shipping',
+					'requires' => '',
+				);
+			}
+			$this->instance_settings = $defaults;
+		}
+
+		public function get_title(): string {
+			$this->init_instance_settings();
+
+			return (string) ( $this->instance_settings['title'] ?? '' );
+		}
+	}
+}
+
+if ( ! class_exists( 'WC_Shipping_Zones', false ) ) {
+	class WC_Shipping_Zones {
+
+		/** @return WC_Shipping_Method|false */
+		public static function get_shipping_method( int $instance_id ) {
+			foreach ( $GLOBALS['senroflux_test_shipping_zones'] as $zone ) {
+				foreach ( $zone['methods'] as $row ) {
+					if ( $row['instance_id'] === $instance_id ) {
+						$method     = new WC_Shipping_Method( $instance_id );
+						$method->id = $row['method_id'];
+
+						return $method;
+					}
+				}
+			}
+
+			return false;
+		}
+	}
+}
 
 if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 	class WC_Shipping_Zone {
 
 		private int $id      = 0;
 		private string $name = '';
-		/** @var list<array{code:string,type:string}> */
+		/** @var list<object{code:string,type:string}> */
 		private array $locations = array();
-		/** @var list<string> */
+		/** @var list<array{instance_id:int,method_id:string}> */
 		private array $methods = array();
 
-		public function __construct( int $id = 0 ) {
-			$existing = $GLOBALS['senroflux_test_shipping_zones'][ $id ] ?? null;
-			if ( $id > 0 && is_array( $existing ) ) {
-				$this->id        = $id;
+		public function __construct( int|null $zone = null ) {
+			$existing = $GLOBALS['senroflux_test_shipping_zones'][ $zone ] ?? null;
+			if ( (int) $zone > 0 && is_array( $existing ) ) {
+				$this->id        = $zone;
 				$this->name      = $existing['name'];
-				$this->locations = $existing['locations'];
-				$this->methods   = $existing['methods'];
+				$this->locations = array_map( static fn( $location ) => (object) $location, $existing['locations'] );
+				foreach ( $existing['methods'] as $method ) {
+					// Fixtures may list bare method ids; real zones always have instances.
+					$this->methods[] = is_array( $method ) ? $method : array(
+						'instance_id' => (int) $GLOBALS['senroflux_test_next_instance_id']++,
+						'method_id'   => (string) $method,
+					);
+				}
 			}
 		}
 
@@ -329,29 +415,58 @@ if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 			return $this->name;
 		}
 
-		/** @return list<array{code:string,type:string}> */
+		/** @return list<object{code:string,type:string}> */
 		public function get_zone_locations(): array {
 			return $this->locations;
 		}
 
-		/** @return list<string> */
+		/** @return array<int,WC_Shipping_Method> instance id => method, like the real one. */
 		public function get_shipping_methods(): array {
-			return $this->methods;
+			$methods = array();
+			foreach ( $this->methods as $row ) {
+				$method                         = new WC_Shipping_Method( $row['instance_id'] );
+				$method->id                     = $row['method_id'];
+				$methods[ $row['instance_id'] ] = $method;
+			}
+
+			return $methods;
 		}
 
 		public function set_zone_name( string $name ): void {
 			$this->name = $name;
 		}
 
+		/** A no-op on a zone with no id yet, exactly like the real one. */
 		public function add_location( string $code, string $type ): void {
-			$this->locations[] = array(
-				'code' => $code,
-				'type' => $type,
-			);
+			if ( 0 !== $this->id ) {
+				$this->locations[] = (object) array(
+					'code' => $code,
+					'type' => $type,
+				);
+			}
 		}
 
-		public function add_shipping_method( string $method_id ): void {
-			$this->methods[] = $method_id;
+		/** @param list<array{code:string,type:string}> $locations */
+		public function set_locations( array $locations = array() ): void {
+			$this->locations = array();
+			foreach ( $locations as $location ) {
+				$this->add_location( $location['code'], $location['type'] );
+			}
+		}
+
+		/** @return int New instance id, 0 when the method is not registered. */
+		public function add_shipping_method( string $type ): int {
+			if ( ! in_array( $type, array( 'flat_rate', 'free_shipping', 'local_pickup' ), true ) ) {
+				return 0;
+			}
+			$instance_id     = (int) $GLOBALS['senroflux_test_next_instance_id']++;
+			$this->methods[] = array(
+				'instance_id' => $instance_id,
+				'method_id'   => $type,
+			);
+			$this->save();
+
+			return $instance_id;
 		}
 
 		public function save(): int {
@@ -362,12 +477,59 @@ if ( ! class_exists( 'WC_Shipping_Zone', false ) ) {
 
 			$GLOBALS['senroflux_test_shipping_zones'][ $this->id ] = array(
 				'name'      => $this->name,
-				'locations' => $this->locations,
+				'locations' => array_map( 'get_object_vars', $this->locations ),
 				'methods'   => $this->methods,
 			);
 
 			return $this->id;
 		}
+	}
+}
+
+if ( ! function_exists( 'WC' ) ) {
+	/** Minimal `WC()` carrying `countries` and `shipping()`, as the approval cards and zone ability read them. */
+	function WC(): object {
+		return new class() {
+			public object $countries;
+
+			public function __construct() {
+				$this->countries = new class() {
+					/** @return array<string,string> */
+					public function get_countries(): array {
+						return $GLOBALS['senroflux_test_countries'] ?? array();
+					}
+
+					/** @return array<string,array{name:string,countries:list<string>}> */
+					public function get_continents(): array {
+						return $GLOBALS['senroflux_test_continents'] ?? array();
+					}
+
+					/** @return array<string,string>|false */
+					public function get_states( ?string $cc = null ): array|false {
+						return $GLOBALS['senroflux_test_states'][ $cc ] ?? false;
+					}
+				};
+			}
+
+			public function shipping(): object {
+				return new class() {
+					/** @return array<string,string> */
+					public function get_shipping_method_class_names(): array {
+						return array(
+							'flat_rate'     => 'WC_Shipping_Flat_Rate',
+							'free_shipping' => 'WC_Shipping_Free_Shipping',
+							'local_pickup'  => 'WC_Shipping_Local_Pickup',
+						);
+					}
+				};
+			}
+		};
+	}
+}
+
+if ( ! function_exists( 'wc_get_price_decimals' ) ) {
+	function wc_get_price_decimals(): int {
+		return 2;
 	}
 }
 
@@ -406,13 +568,14 @@ if ( ! class_exists( 'WC_Tax', false ) ) {
 		}
 
 		/**
-		 * @return array<string,mixed>
+		 * @return array<string,mixed>|null
 		 */
 		// phpcs:ignore PSR2.Methods.MethodDeclaration.Underscore -- mirrors WooCommerce's real WC_Tax method name.
-		public static function _get_tax_rate( int $id ): array {
+		public static function _get_tax_rate( int $id ): ?array {
 			$row = $GLOBALS['senroflux_test_tax_rates'][ $id ] ?? null;
 
-			return is_array( $row ) ? $row : array();
+			// Real `$wpdb->get_row()` returns null for a missing row.
+			return is_array( $row ) ? $row : null;
 		}
 	}
 }
@@ -467,8 +630,12 @@ if ( ! function_exists( 'get_woocommerce_currency' ) ) {
 }
 
 if ( ! function_exists( 'wc_get_low_stock_amount' ) ) {
-	function wc_get_low_stock_amount(): int {
-		return $GLOBALS['senroflux_test_low_stock_amount'] ?? 2;
+	// Real signature: `wc_get_low_stock_amount( WC_Product $product )` (WC 11);
+	// a product-level amount wins, else the store setting.
+	function wc_get_low_stock_amount( WC_Product $product ): int {
+		return $GLOBALS['senroflux_test_low_stock_by_product'][ $product->get_id() ]
+			?? $GLOBALS['senroflux_test_low_stock_amount']
+			?? 2;
 	}
 }
 
@@ -523,6 +690,32 @@ if ( ! class_exists( 'WC_Product', false ) ) {
 		public function get_status(): string {
 			return (string) ( $this->row()->status ?? 'publish' );
 		}
+
+		// Catalogue-read surface (`senroflux/products-catalogue`).
+		public function get_type(): string {
+			return (string) ( $this->row()->type ?? 'simple' );
+		}
+
+		public function get_sku(): string {
+			return (string) ( $this->row()->sku ?? '' );
+		}
+
+		public function get_stock_status(): string {
+			return (string) ( $this->row()->stock_status ?? 'instock' );
+		}
+
+		/** @return list<int> */
+		public function get_category_ids(): array {
+			return array_map( 'intval', (array) ( $this->row()->category_ids ?? array() ) );
+		}
+
+		public function get_description(): string {
+			return (string) ( $this->row()->description ?? '' );
+		}
+
+		public function get_short_description(): string {
+			return (string) ( $this->row()->short_description ?? '' );
+		}
 	}
 }
 
@@ -538,16 +731,63 @@ if ( ! function_exists( 'wc_get_product' ) ) {
 	}
 }
 
+// `product_cat` terms a catalogue test seeds: id => array( name, slug, count ).
+if ( ! isset( $GLOBALS['senroflux_test_product_cats'] ) ) {
+	$GLOBALS['senroflux_test_product_cats'] = array();
+}
+
 if ( ! function_exists( 'wc_get_products' ) ) {
 	/**
+	 * Honours `category` (slugs), `s`, `limit`, `page` and `paginate` like
+	 * WC_Product_Query; every other arg is ignored. No `limit` (or -1) means
+	 * all, which is what the store-report low-stock scan relies on.
+	 *
 	 * @param array<string,mixed> $args
-	 * @return list<WC_Product>
+	 * @return list<WC_Product>|object
 	 */
-	function wc_get_products( array $args ): array {
-		unset( $args );
+	function wc_get_products( array $args ): array|object {
 		$products = array();
 		foreach ( $GLOBALS['senroflux_test_products'] as $id => $stock ) {
 			$products[] = new WC_Product( (int) $id, null === $stock ? null : (int) $stock );
+		}
+
+		if ( ! empty( $args['category'] ) ) {
+			$ids = array();
+			foreach ( $GLOBALS['senroflux_test_product_cats'] as $term_id => $row ) {
+				if ( in_array( $row['slug'], (array) $args['category'], true ) ) {
+					$ids[] = (int) $term_id;
+				}
+			}
+			$products = array_values(
+				array_filter(
+					$products,
+					static fn ( WC_Product $p ): bool => array() !== array_intersect( $p->get_category_ids(), $ids )
+				)
+			);
+		}
+
+		if ( ! empty( $args['s'] ) ) {
+			$products = array_values(
+				array_filter(
+					$products,
+					static fn ( WC_Product $p ): bool => false !== stripos( $p->get_name(), (string) $args['s'] )
+				)
+			);
+		}
+
+		$total = count( $products );
+		$limit = (int) ( $args['limit'] ?? -1 );
+		if ( $limit > 0 ) {
+			$page     = max( 1, (int) ( $args['page'] ?? 1 ) );
+			$products = array_slice( $products, ( $page - 1 ) * $limit, $limit );
+		}
+
+		if ( ! empty( $args['paginate'] ) ) {
+			return (object) array(
+				'products'      => $products,
+				'total'         => $total,
+				'max_num_pages' => $limit > 0 ? (int) ceil( $total / $limit ) : 1,
+			);
 		}
 
 		return $products;

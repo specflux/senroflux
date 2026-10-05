@@ -13,10 +13,9 @@ use Specflux\SenroFlux\Approval\ApprovalBridge;
 use Specflux\SenroFlux\Http\Ajax;
 use Specflux\SenroFlux\Http\Rest;
 use Specflux\SenroFlux\Model\AiClientGateway;
+use Specflux\SenroFlux\Model\ImageCapability;
 use Specflux\SenroFlux\Model\ModelGatewayInterface;
-use Specflux\SenroFlux\Packs\Content\Media;
-use Specflux\SenroFlux\Packs\Site\FrontPage;
-use Specflux\SenroFlux\Packs\Site\Navigation;
+use Specflux\SenroFlux\Packs\ObjectLookup;
 use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Run\GateMode;
 use Specflux\SenroFlux\Run\Report;
@@ -294,6 +293,8 @@ final class Plugin {
 		// registers the shared `senroflux-site` ability category.
 		\Specflux\SenroFlux\Packs\Site\Navigation::boot();
 		\Specflux\SenroFlux\Packs\Site\FrontPage::boot();
+		// 0.3 quality feature 5: the style-variation abilities.
+		\Specflux\SenroFlux\Packs\Site\Style::boot();
 		// 0.3 S4: the pages pack's vocabulary/validator plug into the shared
 		// content registrar under its own slug — `list-patterns` and the write
 		// abilities resolve THIS pair only while a 'pages' run is ticking (see
@@ -350,6 +351,7 @@ final class Plugin {
 			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
 			// 0.3 S20: the site-brief settings submenu.
 			( new \Specflux\SenroFlux\Admin\SettingsScreen() )->register();
+			( new \Specflux\SenroFlux\Admin\PrivacyPolicy() )->register();
 		}
 
 		// 0.3 S3: Agent Safety's absence is advisory only — runs still start
@@ -388,11 +390,18 @@ final class Plugin {
 	 * @param list<string>|null $skills_disable Non-required skill ids to drop (S8).
 	 * @param int|null          $follow_up_of   0.3 S20: a source run id to seed this run
 	 *                                          from. Forces $pack to the source's pack.
+	 * @param string|null       $model_provider Pinned model provider id. Null
+	 *                                          (with $model_id also null) means automatic
+	 *                                          selection. A follow-up run with both null
+	 *                                          inherits the source run's pinned model.
+	 * @param string|null       $model_id       Pinned model id; must be given
+	 *                                          together with $model_provider or not at all.
 	 * @return array<string,mixed>|WP_Error RunState or senroflux_ungoverned /
 	 *                                      senroflux_bad_request / pack_unknown /
 	 *                                      pack_unbound / skills_too_large /
 	 *                                      follow_up_not_found / follow_up_not_finished /
-	 *                                      follow_up_unsupported / follow_up_forbidden.
+	 *                                      follow_up_unsupported / follow_up_forbidden /
+	 *                                      senroflux_model_unavailable.
 	 */
 	public function start(
 		string $consumer,
@@ -401,7 +410,9 @@ final class Plugin {
 		array $budget = array(),
 		?string $pack = null,
 		?array $skills_disable = null,
-		?int $follow_up_of = null
+		?int $follow_up_of = null,
+		?string $model_provider = null,
+		?string $model_id = null
 	): array|WP_Error {
 		if ( ! $this->ready() ) {
 			return $this->ungoverned_error();
@@ -416,6 +427,7 @@ final class Plugin {
 
 		$user_id      = (int) get_current_user_id();
 		$caller_allow = $allow; // Captured BEFORE the pack derives it (S9).
+		$model_chosen = null !== $model_provider || null !== $model_id;
 
 		// 0.3 S20: a follow-up run. Resolved BEFORE pack resolution — the
 		// source's pack REPLACES whatever $pack the caller passed, fail
@@ -426,6 +438,12 @@ final class Plugin {
 			$source = $this->runner()->store()->getRun( $follow_up_of );
 			if ( null === $source ) {
 				return new WP_Error( 'follow_up_not_found', __( 'The source run was not found.', 'senroflux' ), array( 'status' => 404 ) );
+			}
+			// Stage 22b: the viewer must also be able to SEE the source run — its
+			// object list seeds the follow-up, so a run `get()` would refuse
+			// must not leak through here.
+			if ( ! $this->maySee( $source ) ) {
+				return new WP_Error( 'follow_up_forbidden', __( 'This run belongs to another user.', 'senroflux' ), array( 'status' => 403 ) );
 			}
 			if ( ! in_array( $source->status, array( RunStatus::Completed, RunStatus::Failed, RunStatus::Cancelled ), true ) ) {
 				return new WP_Error( 'follow_up_not_finished', __( 'The source run has not finished yet.', 'senroflux' ), array( 'status' => 400 ) );
@@ -441,6 +459,33 @@ final class Plugin {
 			}
 
 			$pack = $source->pack; // Forced (S20), regardless of what the caller asked for.
+
+			// A follow-up with no explicit model choice inherits the
+			// source run's pinned model (also possibly automatic); an explicit
+			// choice from the caller always overrides.
+			if ( ! $model_chosen ) {
+				$model_provider = $source->modelProvider;
+				$model_id       = $source->modelId;
+			}
+		}
+
+		// A candidate pair must be given as BOTH fields or NEITHER —
+		// half a pair can never be silently completed or dropped. Checked
+		// before any DB write, like every other start() refusal.
+		if ( ( null === $model_provider ) !== ( null === $model_id ) ) {
+			return new WP_Error(
+				'senroflux_bad_request',
+				__( 'Provide both a model provider and a model id, or leave both empty for automatic.', 'senroflux' ),
+				array( 'status' => 400 )
+			);
+		}
+		// Only an explicit choice is validated: an inherited pin whose model has
+		// since gone away is still just a preference, and falls back to automatic.
+		if ( $model_chosen && null !== $model_provider && null !== $model_id ) {
+			$model_valid = \Specflux\SenroFlux\Model\ModelChoice::validate( $model_provider, $model_id );
+			if ( is_wp_error( $model_valid ) ) {
+				return $model_valid;
+			}
 		}
 
 		// 0.3 S11: start() re-decides on the server through the SAME evaluator
@@ -535,19 +580,31 @@ final class Plugin {
 		// installed/removed while the run is in flight (S3's mismatch check).
 		$gate_mode = self::currentGateMode();
 
+		$run_budget = Budget::sanitize( $budget, null !== $pack_obj ? $pack_obj->defaultBudget() : array() );
+		if ( ! ImageCapability::available() ) {
+			// Proof-run defect fix: a site whose configured models cannot
+			// output images must not offer generate-image — a zero images
+			// budget withholds the tool, drops the verb from the plan's
+			// vocabulary and steers the pack's guidance to stock search, so
+			// no approval is ever parked for a call that can only fail.
+			$run_budget[ Budget::IMAGES ] = 0;
+		}
+
 		$store  = $this->runner()->store();
 		$run_id = $store->createRun(
 			$user_id,
 			$consumer,
 			$goal,
 			$allow,
-			Budget::sanitize( $budget, null !== $pack_obj ? $pack_obj->defaultBudget() : array() ),
+			$run_budget,
 			$pack,
 			$conversation_locale,
 			$content_locale,
 			$gate_mode,
 			$withheld_roles,
-			$follow_up_of
+			$follow_up_of,
+			$model_provider,
+			$model_id
 		);
 
 		// S9: when a pack drove the allow-list, record that a caller-supplied
@@ -648,12 +705,17 @@ final class Plugin {
 		// the same way — its own OBJECT_ID, so it never collides with
 		// Navigation's marker on the same run.
 		\Specflux\SenroFlux\Packs\Site\FrontPage::useRunContext( $run_id, $this->runner()->store() );
+		// 0.3 quality feature 5: the style registrar's own stale-write
+		// compare, scoped the same way — its own OBJECT_ID.
+		\Specflux\SenroFlux\Packs\Site\Style::useRunContext( $run_id, $this->runner()->store() );
 		// S19: the commerce polyfills' own stale-write compare (coupon-enable
 		// only — see the class docblock), scoped the same way.
 		\Specflux\SenroFlux\Packs\Commerce\Abilities::useRunContext( $run_id, $this->runner()->store() );
 
 		try {
-			return $this->runner()->tick( $run_id, $expected_step_count, $resume );
+			$result = $this->runner()->tick( $run_id, $expected_step_count, $resume );
+
+			return $result;
 		} finally {
 			\Specflux\SenroFlux\Packs\Pages\PublishSummary::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Content\Abilities::forgetRunPack();
@@ -661,6 +723,7 @@ final class Plugin {
 			\Specflux\SenroFlux\Packs\Content\Media::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\Navigation::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Site\FrontPage::forgetRunContext();
+			\Specflux\SenroFlux\Packs\Site\Style::forgetRunContext();
 			\Specflux\SenroFlux\Packs\Commerce\Abilities::forgetRunContext();
 		}
 	}
@@ -776,6 +839,16 @@ final class Plugin {
 				'tokens_in'   => $step->tokensIn,
 				'tokens_out'  => $step->tokensOut,
 				'duration_ms' => $step->durationMs,
+				// 0.3 S23: additive. The tier the gate classified for a
+				// tool_result or approval step (0/1/2), lifted out of the
+				// step's own message_json ({@see Runner::appendToolResult()},
+				// {@see Runner::appendApprovalStep()}) so the Runs screen can
+				// show a tier badge on any ledger row without knowing the
+				// per-kind message shape. Null when the step has no mapped
+				// tier (harness-internal tool results, questions, plans).
+				'tier'        => is_array( $step->messageArray ) && array_key_exists( 'tier', $step->messageArray )
+					? $step->messageArray['tier']
+					: null,
 			);
 
 			// 0.3 S20: brief suggestions, listed with their resolution (a
@@ -801,6 +874,9 @@ final class Plugin {
 			}
 		}
 
+		$plan_ui     = $this->runner()->parkedPlanUi( $run );
+		$approval_ui = $this->runner()->parkedApprovalUi( $run );
+
 		return array(
 			'run'         => array(
 				'id'                  => $run->id,
@@ -822,8 +898,20 @@ final class Plugin {
 				'gate_mode'           => $run->gateMode->value,
 				// 0.3 S6: pinned at start(), rendered once by the run header.
 				'withheld_roles'      => $run->withheldRoles,
+				// Stage 22b (S6): the pack's own one-line notice for those
+				// roles — the run view shows it at start. Null when nothing
+				// is withheld (or the pack has nothing to say).
+				'withheld_notice'     => $this->withheldNoticeFor( $run ),
 				// 0.3 S20: the source run id when this run is a follow-up.
 				'follow_up_of'        => $run->followUpOf,
+				// Pinned at start(), rendered once by the run header.
+				// Null means automatic selection.
+				'model'               => null !== $run->modelProvider && null !== $run->modelId
+					? array(
+						'provider' => $run->modelProvider,
+						'id'       => $run->modelId,
+					)
+					: null,
 				'conversation_locale' => $run->conversationLocale,
 				'content_locale'      => $run->contentLocale,
 				// 0.2 S12: the harness-built report (result_json), surfaced on
@@ -833,7 +921,16 @@ final class Plugin {
 			'steps'       => $steps,
 			// 0.3 S20: keyed by seq in $suggestions above; re-indexed for the caller.
 			'suggestions' => array_values( $suggestions ),
-			'ui'          => array(),
+			// A run parked on a plan carries the plan card's UI facts (e.g.
+			// `preapprove_available`), fresh, so the card survives a reload.
+			// Likewise a run parked on an approval carries the pack's summary.
+			'ui'          => array_filter(
+				array(
+					'plan'     => $plan_ui,
+					'approval' => $approval_ui,
+				),
+				static fn ( ?array $facts ): bool => null !== $facts
+			),
 		);
 	}
 
@@ -930,9 +1027,23 @@ final class Plugin {
 			return true;
 		}
 
+		/** Filters the capability required to see a run. `@internal`. */
 		$capability = apply_filters( 'senroflux_runs_capability', 'manage_options' );
 
 		return function_exists( 'current_user_can' ) && current_user_can( (string) $capability );
+	}
+
+	/**
+	 * The pack's own notice for a run's withheld roles (S6), or null.
+	 */
+	private function withheldNoticeFor( \Specflux\SenroFlux\Run\Run $run ): ?string {
+		if ( null === $run->pack || array() === $run->withheldRoles ) {
+			return null;
+		}
+
+		$pack = $this->packRegistry()->get( $run->pack );
+
+		return null !== $pack ? $pack->withheldRoleNotice( $run->withheldRoles ) : null;
 	}
 
 	/**
@@ -962,6 +1073,7 @@ final class Plugin {
 
 		global $wpdb;
 
+		/** Filters the model gateway class. `@internal`. */
 		$gateway_class = apply_filters( 'senroflux_model_gateway', AiClientGateway::class );
 		if ( ! is_string( $gateway_class ) || ! class_exists( $gateway_class ) ) {
 			$gateway_class = AiClientGateway::class;
@@ -976,31 +1088,11 @@ final class Plugin {
 			$gateway,
 			new ApprovalBridge(),
 			// S12 (defect fix): a report row for a type-qualified id (an
-			// attachment written by the posts pack, {@see Media::OBJECT_ID_PREFIX})
-			// is resolved through the pack's OWN lookup; every other id falls
-			// back to the pre-existing post/page lookup. The composition
-			// root is the one place allowed to know both.
-			static function ( string|int $object_id ): array {
-				$object_id = (string) $object_id;
-				if ( str_starts_with( $object_id, Media::OBJECT_ID_PREFIX ) ) {
-					$attachment_id = substr( $object_id, strlen( Media::OBJECT_ID_PREFIX ) );
-
-					return Media::attachmentLookup( (int) $attachment_id );
-				}
-
-				// S12 (defect fix): the site pack's two singleton objects —
-				// neither is a post, so wpPostLookup() would resolve them
-				// "unknown".
-				if ( Navigation::OBJECT_ID === $object_id ) {
-					return Navigation::reportLookup();
-				}
-
-				if ( FrontPage::OBJECT_ID === $object_id ) {
-					return FrontPage::reportLookup();
-				}
-
-				return ( Report::wpPostLookup() )( $object_id );
-			},
+			// attachment, a term, a coupon…) is resolved through the pack's
+			// OWN lookup; every other id falls back to the post/page lookup.
+			// The composition root is the one place allowed to know all of
+			// them.
+			static fn ( string|int $object_id ): array => ObjectLookup::resolve( $object_id ),
 			// S9: a run started with a pack is fenced/annotated by the PACK's
 			// verb map; direct-allow runs keep the site-wide filter seam. The
 			// composition root is the one place that may reference Packs.
@@ -1099,6 +1191,22 @@ final class Plugin {
 				$value = get_option( 'senroflux_legacy_run_watermark', false );
 
 				return is_numeric( $value ) ? (int) $value : null;
+			},
+			// The read counterpart of the write-id resolver above: a
+			// singleton read takes no id argument, so only the pack can say
+			// which object it read.
+			static function ( \Specflux\SenroFlux\Run\Run $run, string $verb, array $args ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->objectIdForRead( $verb, $args ) : null;
+			},
+			null,
+			// S23 (SPEC-SENROFLUX-PRO.md §5 F4): only the pack knows its own
+			// guidance-hash, if any; a direct-allow run has no pack.
+			static function ( \Specflux\SenroFlux\Run\Run $run ): ?string {
+				$pack = self::pack_for_run( $run );
+
+				return null !== $pack ? $pack->guidesHash() : null;
 			}
 		);
 

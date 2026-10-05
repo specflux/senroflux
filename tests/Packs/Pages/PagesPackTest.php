@@ -43,17 +43,46 @@ final class PagesPackTest extends TestCase {
 		$this->assertSame( 'pages', ( new PagesPack() )->name() );
 	}
 
+	/**
+	 * 0.3 quality fix: raised from the shipped 60/30/250000 once image work
+	 * (cover-hero/media-text) made the shipped table too tight (a live run
+	 * hit `max_steps` at 61). `images` stays at the shipped default.
+	 */
+	public function test_default_budget_raises_steps_calls_and_tokens_for_image_work(): void {
+		$budget = ( new PagesPack() )->defaultBudget();
+
+		$this->assertSame(
+			array(
+				'max_steps'      => 120,
+				'max_tool_calls' => 60,
+				'max_tokens'     => 1000000,
+				'images'         => 6,
+			),
+			$budget
+		);
+	}
+
 	public function test_roles_map_to_templates(): void {
 		$roles = ( new PagesPack() )->roles();
 
 		$this->assertSame(
 			array(
-				'read'     => 'read-content',
-				'create'   => 'create-post',
-				'update'   => 'update-post',
-				'publish'  => 'publish-post',
-				'preview'  => 'get-preview-url',
-				'patterns' => 'list-patterns',
+				'read'         => 'read-content',
+				'create'       => 'create-post',
+				'update'       => 'update-post',
+				'publish'      => 'publish-post',
+				'preview'      => 'get-preview-url',
+				'patterns'     => 'list-patterns',
+				'search'       => 'media-search',
+				'missing-alt'  => 'list-missing-alt',
+				'upload'       => 'media-upload',
+				'generate'     => 'generate-image',
+				'alt-text'     => 'generate-alt-text',
+				'featured'     => 'set-featured-image',
+				'alt'          => 'update-alt',
+				'read-media'   => 'read-media',
+				'stock-search' => 'stock-image-search',
+				'stock-import' => 'stock-image-import',
 			),
 			$roles
 		);
@@ -62,13 +91,23 @@ final class PagesPackTest extends TestCase {
 	public function test_verb_map_matches_s10(): void {
 		$this->assertSame(
 			array(
-				'pages/read'          => 0,
-				'pages/list-patterns' => 0,
-				'pages/preview'       => 0,
-				'pages/create-draft'  => 1,
-				'pages/update-draft'  => 1,
-				'pages/update-live'   => 2,
-				'pages/publish'       => 2,
+				'pages/read'               => 0,
+				'pages/list-patterns'      => 0,
+				'pages/preview'            => 0,
+				'pages/media-search'       => 0,
+				'pages/list-missing-alt'   => 0,
+				'pages/generate-alt-text'  => 0,
+				'pages/read-media'         => 0,
+				'pages/media-stock-search' => 0,
+				'pages/create-draft'       => 1,
+				'pages/update-draft'       => 1,
+				'pages/media-upload'       => 1,
+				'pages/media-generate'     => 1,
+				'pages/set-featured-image' => 1,
+				'pages/update-alt'         => 1,
+				'pages/media-stock-import' => 1,
+				'pages/update-live'        => 2,
+				'pages/publish'            => 2,
 			),
 			( new PagesPack() )->verbMap()
 		);
@@ -107,6 +146,28 @@ final class PagesPackTest extends TestCase {
 				)
 			)
 		);
+	}
+
+	/**
+	 * Stock-photo-fallback build plan: the new verbs, at the right tiers, and
+	 * `stock-import` withheld the same way `upload`/`generate` are.
+	 */
+	public function test_stock_image_verbs_are_tiered_and_gated_like_the_other_media_writes(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame( 'pages/media-stock-search', $pack->verbFor( 'senroflux/stock-image-search', array() ) );
+		$this->assertSame( 'pages/media-stock-import', $pack->verbFor( 'senroflux/stock-image-import', array() ) );
+
+		$map = $pack->verbMap();
+		$this->assertSame( 0, $map['pages/media-stock-search'] );
+		$this->assertSame( 1, $map['pages/media-stock-import'] );
+
+		$this->assertSame( array( 'pages/media-stock-search' ), $pack->roleVerbs()['stock-search'] );
+		$this->assertSame( array( 'pages/media-stock-import' ), $pack->roleVerbs()['stock-import'] );
+
+		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-import'] );
+		$this->assertSame( 'upload_files', $pack->roleCapabilities()['stock-search'] );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'stock-import' ) ) );
 	}
 
 	public function test_verb_for_publish_unchanged_is_update_live(): void {
@@ -154,20 +215,79 @@ final class PagesPackTest extends TestCase {
 
 	public function test_skills_returns_two_pack_skills(): void {
 		// 0.3 S5: `pages/content-language` is promoted to the harness's own
-		// `harness/content-language` — the pages pack now declares only its
-		// two pattern-specific skills.
+		// `harness/content-language`. 0.3 quality feature 4 adds a third,
+		// `pages/media-rules`, for the pack's new image verbs.
 		$skills = ( new PagesPack() )->skills();
 
-		$this->assertCount( 2, $skills );
+		$this->assertCount( 3, $skills );
 		$ids = array_map( static fn ( $s ) => $s->id, $skills );
 		$this->assertContains( 'pages/layout-rules', $ids );
 		$this->assertContains( 'pages/copy-rules', $ids );
+		$this->assertContains( 'pages/media-rules', $ids );
 		$this->assertNotContains( 'pages/content-language', $ids );
 
 		foreach ( $skills as $skill ) {
 			$this->assertSame( '1', $skill->version );
 			$this->assertSame( SkillSource::Pack, $skill->source );
 		}
+	}
+
+	/**
+	 * S12 (defect fix, mirrors PostsPackTest): `update-alt`'s write and
+	 * `read-media`'s verification must resolve the SAME id key + prefix.
+	 */
+	public function test_object_id_key_and_prefix_for_attachment_verbs(): void {
+		$pack = new PagesPack();
+
+		foreach ( array( 'pages/update-alt', 'pages/read-media' ) as $verb ) {
+			$this->assertSame( 'attachment_id', $pack->objectIdKey( $verb ), $verb );
+			$this->assertSame( 'attachment:', $pack->objectIdPrefix( $verb ), $verb );
+		}
+
+		$this->assertSame( 'id', $pack->objectIdKey( 'pages/read' ) );
+		$this->assertSame( '', $pack->objectIdPrefix( 'pages/read' ) );
+	}
+
+	public function test_verb_for_maps_media_verbs(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame( 'pages/media-search', $pack->verbFor( 'senroflux/media-search', array() ) );
+		$this->assertSame( 'pages/list-missing-alt', $pack->verbFor( 'senroflux/list-missing-alt', array() ) );
+		$this->assertSame( 'pages/media-upload', $pack->verbFor( 'senroflux/media-upload', array() ) );
+		$this->assertSame( 'pages/media-generate', $pack->verbFor( 'senroflux/generate-image', array() ) );
+		$this->assertSame( 'pages/generate-alt-text', $pack->verbFor( 'senroflux/generate-alt-text', array() ) );
+		$this->assertSame( 'pages/set-featured-image', $pack->verbFor( 'senroflux/set-featured-image', array() ) );
+		$this->assertSame( 'pages/update-alt', $pack->verbFor( 'senroflux/update-alt', array() ) );
+		$this->assertSame( 'pages/read-media', $pack->verbFor( 'senroflux/read-media', array() ) );
+	}
+
+	public function test_role_capabilities_require_upload_files_for_every_image_role(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame(
+			array(
+				'search'       => 'upload_files',
+				'missing-alt'  => 'upload_files',
+				'upload'       => 'upload_files',
+				'generate'     => 'upload_files',
+				'alt-text'     => 'upload_files',
+				'featured'     => 'upload_files',
+				'alt'          => 'upload_files',
+				'read-media'   => 'upload_files',
+				'stock-search' => 'upload_files',
+				'stock-import' => 'upload_files',
+			),
+			$pack->roleCapabilities()
+		);
+	}
+
+	public function test_withheld_role_notice(): void {
+		$pack = new PagesPack();
+
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'upload' ) ) );
+		$this->assertSame( 'Images are off for this run — your account can\'t upload files.', $pack->withheldRoleNotice( array( 'generate' ) ) );
+		$this->assertNull( $pack->withheldRoleNotice( array( 'read' ) ) );
+		$this->assertNull( $pack->withheldRoleNotice( array() ) );
 	}
 
 	public function test_preflight_fails_closed_without_agent_safety(): void {
@@ -261,12 +381,22 @@ final class PagesPackTest extends TestCase {
 	public function test_agent_safety_verb_map_is_ability_ids_at_the_highest_reachable_tier(): void {
 		$this->assertSame(
 			array(
-				'senroflux/read-content'    => 0,
-				'senroflux/create-post'     => 1,
-				'senroflux/update-post'     => 1,
-				'senroflux/publish-post'    => 2,
-				'senroflux/get-preview-url' => 0,
-				'senroflux/list-patterns'   => 0,
+				'senroflux/read-content'       => 0,
+				'senroflux/create-post'        => 1,
+				'senroflux/update-post'        => 1,
+				'senroflux/publish-post'       => 2,
+				'senroflux/get-preview-url'    => 0,
+				'senroflux/list-patterns'      => 0,
+				'senroflux/media-search'       => 0,
+				'senroflux/list-missing-alt'   => 0,
+				'senroflux/media-upload'       => 1,
+				'senroflux/generate-image'     => 1,
+				'senroflux/generate-alt-text'  => 0,
+				'senroflux/set-featured-image' => 1,
+				'senroflux/update-alt'         => 1,
+				'senroflux/read-media'         => 0,
+				'senroflux/stock-image-search' => 0,
+				'senroflux/stock-image-import' => 1,
 			),
 			( new PagesPack() )->agentSafetyVerbMap()
 		);

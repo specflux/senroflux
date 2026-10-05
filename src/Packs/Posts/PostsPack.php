@@ -21,6 +21,7 @@ namespace Specflux\SenroFlux\Packs\Posts;
 
 use Specflux\SenroFlux\Packs\Content\Media;
 use Specflux\SenroFlux\Packs\Pack;
+use Specflux\SenroFlux\Run\Budget;
 use Specflux\SenroFlux\Skills\Skill;
 use Specflux\SenroFlux\Skills\SkillSource;
 use WP_Error;
@@ -36,22 +37,25 @@ final class PostsPack extends Pack {
 	public function __construct() {
 		parent::__construct(
 			array(
-				'read'        => 'read-content',
-				'create'      => 'create-post',
-				'update'      => 'update-post',
-				'publish'     => 'publish-post',
-				'preview'     => 'get-preview-url',
-				'patterns'    => 'list-patterns',
-				'search'      => 'media-search',
-				'missing-alt' => 'list-missing-alt',
-				'upload'      => 'media-upload',
-				'generate'    => 'generate-image',
-				'alt-text'    => 'generate-alt-text',
-				'featured'    => 'set-featured-image',
-				'alt'         => 'update-alt',
-				'read-media'  => 'read-media',
-				'terms'       => 'set-terms',
-				'new-term'    => 'create-term',
+				'read'         => 'read-content',
+				'create'       => 'create-post',
+				'update'       => 'update-post',
+				'publish'      => 'publish-post',
+				'preview'      => 'get-preview-url',
+				'patterns'     => 'list-patterns',
+				'search'       => 'media-search',
+				'missing-alt'  => 'list-missing-alt',
+				'upload'       => 'media-upload',
+				'generate'     => 'generate-image',
+				'alt-text'     => 'generate-alt-text',
+				'featured'     => 'set-featured-image',
+				'alt'          => 'update-alt',
+				'read-media'   => 'read-media',
+				'terms'        => 'set-terms',
+				'new-term'     => 'create-term',
+				'list-terms'   => 'list-terms',
+				'stock-search' => 'stock-image-search',
+				'stock-import' => 'stock-image-import',
 			)
 		);
 	}
@@ -72,6 +76,24 @@ final class PostsPack extends Pack {
 	 */
 	public function name(): string {
 		return 'posts';
+	}
+
+	/**
+	 * space-bunny live runs (2026-09-28 bunny1-4, fix1) spent 228k-286k tokens
+	 * and 51-62 steps on one post against the shipped 250000/60; three of five
+	 * died of a budget. Live J3 (three illustrated, tagged, scheduled posts in
+	 * one run) then ended at 384k-396k of 400000 tokens mid-work in two runs,
+	 * so the ceiling is 800000 tokens, 150 steps, 75 tool calls (the pack's
+	 * usual one-call-per-two-steps ratio).
+	 *
+	 * @return array<string,int>
+	 */
+	public function defaultBudget(): array {
+		return array(
+			Budget::MAX_STEPS      => 150,
+			Budget::MAX_TOOL_CALLS => 75,
+			Budget::MAX_TOKENS     => 800000,
+		);
 	}
 
 	/**
@@ -108,6 +130,9 @@ final class PostsPack extends Pack {
 			'read-media'         => array( 'attachment_id' ),
 			'set-terms'          => array( 'post_id', 'taxonomy', 'term_ids' ),
 			'create-term'        => array( 'taxonomy', 'name' ),
+			'list-terms'         => array( 'taxonomy', 'search' ),
+			'stock-image-search' => array( 'query' ),
+			'stock-image-import' => array( 'id', 'alt' ),
 			default              => array(),
 		};
 	}
@@ -158,6 +183,9 @@ final class PostsPack extends Pack {
 			'read-media'         => 'posts/read-media',
 			'set-terms'          => 'posts/set-terms',
 			'create-term'        => 'posts/create-term',
+			'list-terms'         => 'posts/list-terms',
+			'stock-image-search' => 'posts/media-stock-search',
+			'stock-image-import' => 'posts/media-stock-import',
 			default              => $ability,
 		};
 	}
@@ -200,6 +228,8 @@ final class PostsPack extends Pack {
 			'posts/list-missing-alt'   => 0,
 			'posts/generate-alt-text'  => 0,
 			'posts/read-media'         => 0,
+			'posts/list-terms'         => 0,
+			'posts/media-stock-search' => 0,
 			'posts/create-draft'       => 1,
 			'posts/update-draft'       => 1,
 			'posts/set-terms'          => 1,
@@ -208,6 +238,7 @@ final class PostsPack extends Pack {
 			'posts/media-generate'     => 1,
 			'posts/set-featured-image' => 1,
 			'posts/update-alt'         => 1,
+			'posts/media-stock-import' => 1,
 			'posts/update-live'        => 2,
 			'posts/publish'            => 2,
 			'posts/schedule'           => 2,
@@ -228,67 +259,95 @@ final class PostsPack extends Pack {
 	 */
 	public function roleVerbs(): array {
 		return array(
-			'read'        => array( 'posts/read' ),
-			'create'      => array( 'posts/create-draft' ),
-			'update'      => array( 'posts/update-draft' ),
-			'publish'     => array( 'posts/update-live', 'posts/publish', 'posts/schedule' ),
-			'preview'     => array( 'posts/preview' ),
-			'patterns'    => array( 'posts/list-patterns' ),
-			'search'      => array( 'posts/media-search' ),
-			'missing-alt' => array( 'posts/list-missing-alt' ),
-			'upload'      => array( 'posts/media-upload' ),
-			'generate'    => array( 'posts/media-generate' ),
-			'alt-text'    => array( 'posts/generate-alt-text' ),
-			'featured'    => array( 'posts/set-featured-image' ),
-			'alt'         => array( 'posts/update-alt' ),
-			'read-media'  => array( 'posts/read-media' ),
-			'terms'       => array( 'posts/set-terms' ),
-			'new-term'    => array( 'posts/create-term' ),
+			'read'         => array( 'posts/read' ),
+			'create'       => array( 'posts/create-draft' ),
+			'update'       => array( 'posts/update-draft' ),
+			'publish'      => array( 'posts/update-live', 'posts/publish', 'posts/schedule' ),
+			'preview'      => array( 'posts/preview' ),
+			'patterns'     => array( 'posts/list-patterns' ),
+			'search'       => array( 'posts/media-search' ),
+			'missing-alt'  => array( 'posts/list-missing-alt' ),
+			'upload'       => array( 'posts/media-upload' ),
+			'generate'     => array( 'posts/media-generate' ),
+			'alt-text'     => array( 'posts/generate-alt-text' ),
+			'featured'     => array( 'posts/set-featured-image' ),
+			'alt'          => array( 'posts/update-alt' ),
+			'read-media'   => array( 'posts/read-media' ),
+			'terms'        => array( 'posts/set-terms' ),
+			'new-term'     => array( 'posts/create-term' ),
+			'list-terms'   => array( 'posts/list-terms' ),
+			'stock-search' => array( 'posts/media-stock-search' ),
+			'stock-import' => array( 'posts/media-stock-import' ),
 		);
 	}
 
 	/**
-	 * S12 (defect fix): `update-alt`'s output and `read-media`'s input both
-	 * carry the attachment id as `attachment_id`, never `id` — the base's
-	 * default would silently track/verify nothing for either.
+	 * S12 (defect fix): which output key carries the id of the object a verb
+	 * wrote (or, for `read-media`, the input key naming the one it read) —
+	 * the base's `id` default would silently track/verify nothing for any of
+	 * these. The three attachment-producing media verbs and `update-alt`
+	 * answer `attachment_id`; `create-term` answers `term_id`; `set-terms`
+	 * and `set-featured-image` answer the `post_id` they changed.
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdKey( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt', 'posts/read-media' => 'attachment_id',
+			'posts/update-alt',
+			'posts/read-media',
+			'posts/media-upload',
+			'posts/media-generate',
+			'posts/media-stock-import' => 'attachment_id',
+			'posts/create-term' => 'term_id',
+			'posts/set-terms',
+			'posts/set-featured-image' => 'post_id',
 			default => parent::objectIdKey( $verb ),
 		};
 	}
 
 	/**
 	 * S12 (defect fix): an attachment and a post can share the same numeric
-	 * id, so the two verbs above qualify it with {@see Media::OBJECT_ID_PREFIX}
-	 * before the harness ever sees it — the same prefix
-	 * {@see Media::attachmentLookup()} expects, stripped back off by the
-	 * composition root's report lookup (Plugin.php). Every other verb here
-	 * keeps a bare id (posts never collide with themselves).
+	 * id, so every verb that writes or reads one qualifies it with
+	 * {@see Media::OBJECT_ID_PREFIX} before the harness ever sees it — the
+	 * same prefix {@see Media::attachmentLookup()} expects, stripped back off
+	 * by {@see \Specflux\SenroFlux\Packs\ObjectLookup}. A created term is
+	 * qualified the same way ({@see Media::TERM_ID_PREFIX}). Every other verb
+	 * here keeps a bare id (posts never collide with themselves).
 	 *
 	 * @param string $verb The pack verb.
 	 */
 	public function objectIdPrefix( string $verb ): string {
 		return match ( $verb ) {
-			'posts/update-alt', 'posts/read-media' => Media::OBJECT_ID_PREFIX,
+			'posts/update-alt',
+			'posts/read-media',
+			'posts/media-upload',
+			'posts/media-generate',
+			'posts/media-stock-import' => Media::OBJECT_ID_PREFIX,
+			'posts/create-term' => Media::TERM_ID_PREFIX,
 			default => parent::objectIdPrefix( $verb ),
 		};
 	}
 
 	/**
-	 * S6: `media-upload` and `generate-image` require `upload_files` — a
-	 * Contributor holds `edit_posts` but not `upload_files` in stock
-	 * WordPress, so those two roles (and only those) are withheld for them.
+	 * S6: every image role requires `upload_files`. A Contributor holds
+	 * `edit_posts` but not `upload_files` in stock WordPress, so no image can
+	 * ever be added for them — searching, describing or attaching one is
+	 * pointless, and a live run spent its token budget doing exactly that.
 	 *
 	 * @return array<string,string>
 	 */
 	public function roleCapabilities(): array {
 		return array(
-			'upload'   => 'upload_files',
-			'generate' => 'upload_files',
+			'search'       => 'upload_files',
+			'missing-alt'  => 'upload_files',
+			'upload'       => 'upload_files',
+			'generate'     => 'upload_files',
+			'alt-text'     => 'upload_files',
+			'featured'     => 'upload_files',
+			'alt'          => 'upload_files',
+			'read-media'   => 'upload_files',
+			'stock-search' => 'upload_files',
+			'stock-import' => 'upload_files',
 		);
 	}
 
@@ -299,8 +358,8 @@ final class PostsPack extends Pack {
 	 * @param list<string> $withheld The role names withheld from this run's start().
 	 */
 	public function withheldRoleNotice( array $withheld ): ?string {
-		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) ) {
-			return __( 'This run cannot add images.', 'senroflux' );
+		if ( in_array( 'upload', $withheld, true ) || in_array( 'generate', $withheld, true ) || in_array( 'stock-import', $withheld, true ) ) {
+			return __( 'Images are off for this run — your account can\'t upload files.', 'senroflux' );
 		}
 
 		return null;
@@ -312,16 +371,29 @@ final class PostsPack extends Pack {
 	 * harness skill (see {@see \Specflux\SenroFlux\Skills\SkillSet::harnessSkills()}),
 	 * so every run carries it, pack or no pack.
 	 *
+	 * @param bool $images_available 0.3 quality fix (images budget 0): see {@see Pack::skills()}.
 	 * @return list<Skill>
 	 */
-	public function skills(): array {
+	public function skills( bool $images_available = true ): array {
+		return $this->skillsForRun( $images_available, array() );
+	}
+
+	/**
+	 * {@see skills()} for a started run: when the run's roles were withheld
+	 * the prose/media rules name none of their verbs.
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   The run's withheld role names.
+	 * @return list<Skill>
+	 */
+	public function skillsForRun( bool $images_available, array $withheld_roles ): array {
 		$vocabulary = new Vocabulary();
 
 		return array(
 			new Skill(
 				'posts/prose-rules',
 				'Prose rules',
-				$this->proseRulesBody(),
+				$this->proseRulesBody( $images_available, $withheld_roles ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -337,7 +409,7 @@ final class PostsPack extends Pack {
 			new Skill(
 				'posts/media-rules',
 				'Media rules',
-				$this->mediaRulesBody(),
+				$this->mediaRulesBody( $images_available, in_array( 'upload', $withheld_roles, true ) ),
 				false,
 				SkillSource::Pack,
 				'1'
@@ -349,8 +421,47 @@ final class PostsPack extends Pack {
 	 * The `posts/prose-rules` body: the shape constraints the model needs
 	 * (mirrors the pages pack's layout-rules — plain English plus the shape
 	 * lines the Validator's structural identity restates).
+	 *
+	 * @param bool         $images_available See {@see skills()}.
+	 * @param list<string> $withheld_roles   Roles withheld at start; their verbs are left out.
 	 */
-	private function proseRulesBody(): string {
+	private function proseRulesBody( bool $images_available = true, array $withheld_roles = array() ): string {
+		$verbs = array(
+			'posts/read',
+			'posts/list-patterns',
+			'posts/preview',
+			'posts/media-search',
+			'posts/list-missing-alt',
+			'posts/create-draft',
+			'posts/update-draft',
+			'posts/list-terms',
+			'posts/set-terms',
+			'posts/create-term',
+			'posts/media-upload',
+			'posts/media-generate',
+			'posts/generate-alt-text',
+			'posts/set-featured-image',
+			'posts/update-alt',
+			'posts/read-media',
+			'posts/media-stock-search',
+			'posts/media-stock-import',
+			'posts/update-live',
+			'posts/publish',
+			'posts/schedule',
+		);
+		if ( ! $images_available ) {
+			// 0.3 quality fix (images budget 0): this run's tool surface
+			// withholds media-generate entirely (see ToolRegistry::forRun());
+			// naming it here would only steer the model into an unknown_verb
+			// or unknown_tool refusal.
+			$verbs = array_values( array_diff( $verbs, array( 'posts/media-generate' ) ) );
+		}
+		// A role withheld at start (S6) is not in the tool surface either.
+		$role_verbs = $this->roleVerbs();
+		foreach ( $withheld_roles as $role ) {
+			$verbs = array_values( array_diff( $verbs, $role_verbs[ $role ] ?? array() ) );
+		}
+
 		return implode(
 			"\n",
 			array(
@@ -358,8 +469,9 @@ final class PostsPack extends Pack {
 				'Use at most one closing call to action, placed at the end. Use at most ' . Vocabulary::RULES_MAX_PULL_QUOTE . ' pull quotes, and only for a line that already appears in the body.',
 				'Never write a block whose name starts with senroflux/. A closing call to action is a core/group with `{"metadata":{"name":"senroflux/closing-cta"},"align":"full"}` containing a heading, a paragraph and one button. A pull quote is a core/pullquote with `{"metadata":{"name":"senroflux/pull-quote"}}`.',
 				'Every core/image MUST carry non-empty, descriptive alt text in its attributes; an image with no alt text is refused.',
+				'A finished post has an excerpt, one real category (never Uncategorized) and two to four tags: pass them as `categories` and `tags` (names) on create-post, in the same write. Before choosing them, call list-terms for category and for post_tag and reuse an existing name; a name that does not exist yet is created only if your account may create terms, otherwise the write is refused and you must pick an existing one. Use set-terms and create-term only to change the terms of a post that already exists.',
 				'Write each block comment with compact JSON (no spaces after : or ,). Close everything you open. Markup that does not survive a parse-and-reserialise round trip is refused whole as invalid_markup.',
-				'When you propose a plan, spell each step\'s verbs exactly as one of: posts/read, posts/list-patterns, posts/preview, posts/media-search, posts/list-missing-alt, posts/create-draft, posts/update-draft, posts/set-terms, posts/create-term, posts/media-upload, posts/media-generate, posts/generate-alt-text, posts/set-featured-image, posts/update-alt, posts/read-media, posts/update-live, posts/publish, posts/schedule. Any other word is refused as unknown_verb.',
+				'When you propose a plan, spell each step\'s verbs exactly as one of: ' . implode( ', ', $verbs ) . '. Any other word is refused as unknown_verb.',
 			)
 		);
 	}
@@ -389,14 +501,40 @@ final class PostsPack extends Pack {
 	 * and — since nothing else re-reads an attachment for you — re-read it
 	 * with `read-media` after changing it.
 	 */
-	private function mediaRulesBody(): string {
+	private function mediaRulesBody( bool $images_available = true, bool $images_off = false ): string {
+		if ( $images_off ) {
+			// S6: the account cannot upload, so every media tool is withheld
+			// (see roleCapabilities()); naming any of them would only invite
+			// a call the run cannot make.
+			return 'This run cannot add images: write a text-only post — no image blocks, no featured image.';
+		}
+
+		if ( ! $images_available ) {
+			// 0.3 quality fix (images budget 0): no mention of the withheld
+			// media-generate ability — go straight to search then stock, the
+			// only path this run's tool surface actually offers (live runs
+			// otherwise burned a media-search -> generate-image (refused
+			// budget_exhausted) -> re-plan -> stock-image-search round trip).
+			return implode(
+				"\n",
+				array(
+					'Image generation is not available in this run. Search the existing media library first; when nothing suitable exists, call stock-image-search for a free CC0/public-domain stock photo, then stock-image-import to use it. If that finds nothing either, publish without an image.',
+					'Every image needs non-empty, descriptive alt text — write it yourself with generate-alt-text or your own words, then save it with update-alt.',
+					'The theme shows the featured image above the post — do not also put it in the content.',
+					'After update-alt, media-upload or stock-image-import, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
+				)
+			);
+		}
+
 		return implode(
 			"\n",
 			array(
 				'Before generating a new image, search the existing media library; only generate one when nothing suitable already exists.',
 				'Every image needs non-empty, descriptive alt text — write it yourself with generate-alt-text or your own words, then save it with update-alt.',
 				'Generating an image costs real money and a limited run budget; do not generate more than the goal actually needs.',
-				'After update-alt, media-upload or generate-image, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
+				'The theme shows the featured image above the post — do not also put it in the content.',
+				'When generate-image refuses budget_exhausted, call stock-image-search for a free CC0/public-domain stock photo, then stock-image-import to use it. If that finds nothing either, publish without an image.',
+				'After update-alt, media-upload, generate-image or stock-image-import, call read-media on that attachment id to confirm the change saved — nothing else re-reads it for you.',
 			)
 		);
 	}

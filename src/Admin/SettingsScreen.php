@@ -21,15 +21,16 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux\Admin;
 
+use Specflux\SenroFlux\Packs\Pages\ThemePatterns;
 use Specflux\SenroFlux\Run\SiteBrief;
 
 // Bail on direct access.
 defined( 'ABSPATH' ) || exit;
 
 /**
- * Renders + saves the site brief.
+ * Renders + saves the site brief and the theme-patterns switch.
  */
-final class SettingsScreen {
+class SettingsScreen {
 
 	private const SLUG = 'senroflux-settings';
 
@@ -38,8 +39,27 @@ final class SettingsScreen {
 
 	/** Register on admin_menu + admin_post. */
 	public function register(): void {
+		add_action( 'init', array( $this, 'registerSettings' ) );
 		add_action( 'admin_menu', array( $this, 'menu' ) );
 		add_action( 'admin_post_senroflux_save_brief', array( $this, 'handleSave' ) );
+	}
+
+	/**
+	 * D2: the theme-patterns switch as a registered boolean setting (default
+	 * true, sanitised to a bool). It is saved by {@see handleSave()} with the
+	 * brief, never through `options.php`.
+	 */
+	public function registerSettings(): void {
+		register_setting(
+			'senroflux',
+			ThemePatterns::OPTION,
+			array(
+				'type'              => 'boolean',
+				'default'           => true,
+				'sanitize_callback' => array( ThemePatterns::class, 'sanitizeOption' ),
+				'show_in_rest'      => false,
+			)
+		);
 	}
 
 	/** The capability required for this screen (S20: fixed at manage_options). */
@@ -82,6 +102,16 @@ final class SettingsScreen {
 			return;
 		}
 
+		// D2: an unticked checkbox is absent from the POST, so the form carries
+		// a marker saying the switch was on the page. A refused brief saves
+		// nothing, switch included.
+		if ( isset( $_POST['senroflux_theme_patterns_present'] ) ) {
+			$use_theme_patterns = isset( $_POST[ ThemePatterns::OPTION ] ) && is_string( $_POST[ ThemePatterns::OPTION ] )
+				? sanitize_text_field( wp_unslash( $_POST[ ThemePatterns::OPTION ] ) )
+				: false;
+			update_option( ThemePatterns::OPTION, ThemePatterns::sanitizeOption( $use_theme_patterns ) );
+		}
+
 		delete_transient( self::PENDING_TRANSIENT_PREFIX . $user );
 		$this->redirect( null );
 	}
@@ -118,7 +148,7 @@ final class SettingsScreen {
 		$error = isset( $_GET['senroflux_brief_error'] ) ? sanitize_text_field( wp_unslash( $_GET['senroflux_brief_error'] ) ) : '';
 		if ( SiteBrief::ERROR_TOO_LONG === $error ) {
 			printf(
-				'<div class="notice notice-error"><p>%s</p></div>',
+				'<div data-senroflux-notice class="notice notice-error"><p>%s</p></div>',
 				esc_html(
 					sprintf(
 						/* translators: %d is the character cap. */
@@ -128,12 +158,12 @@ final class SettingsScreen {
 				)
 			);
 		} elseif ( '' !== $error ) {
-			echo '<div class="notice notice-error"><p>' . esc_html__( 'The site brief could not be saved.', 'senroflux' ) . '</p></div>';
+			echo '<div data-senroflux-notice class="notice notice-error"><p>' . esc_html__( 'The site brief could not be saved.', 'senroflux' ) . '</p></div>';
 		}
 
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only flash.
 		if ( isset( $_GET['senroflux_brief_saved'] ) ) {
-			echo '<div class="notice notice-success"><p>' . esc_html__( 'Site brief saved.', 'senroflux' ) . '</p></div>';
+			echo '<div data-senroflux-notice class="notice notice-success"><p>' . esc_html__( 'Settings saved.', 'senroflux' ) . '</p></div>';
 		}
 
 		echo '<form method="post" action="' . esc_url( admin_url( 'admin-post.php' ) ) . '">';
@@ -148,9 +178,18 @@ final class SettingsScreen {
 			esc_textarea( $this->formText() )
 		);
 
+		echo '<input type="hidden" name="senroflux_theme_patterns_present" value="1">';
+		printf(
+			'<p><label for="senroflux-use-theme-patterns"><input type="checkbox" id="senroflux-use-theme-patterns" name="%s" value="1"%s> %s</label><br><span class="description">%s</span></p>',
+			esc_attr( ThemePatterns::OPTION ),
+			checked( ThemePatterns::enabled(), true, false ),
+			esc_html__( 'Use my theme\'s block patterns', 'senroflux' ),
+			esc_html__( 'Build pages from the active theme\'s own patterns where they fit. Untick to build every page from SenroFlux\'s own layouts.', 'senroflux' )
+		);
+
 		printf(
 			'<p><button type="submit" class="button button-primary">%s</button></p>',
-			esc_html__( 'Save brief', 'senroflux' )
+			esc_html__( 'Save settings', 'senroflux' )
 		);
 
 		echo '</form></div>';

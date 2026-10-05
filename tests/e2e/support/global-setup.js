@@ -17,8 +17,12 @@ const BASE_URL = process.env.SENROFLUX_E2E_BASE_URL || 'http://localhost:8895';
  * wp-env mounts these but leaves them inactive, so senroflux's activation
  * hook (which creates wp_senroflux_runs/steps) never runs and the first
  * spec dies deep inside an unrelated SQL error instead of at setup.
+ *
+ * S22: WooCommerce (`.wp-env.json`'s "plugins" entry, the newest wordpress.org
+ * release) is in this always-active list too — the hardening bar wants Woo
+ * on for every e2e leg, not a Woo-specific project/mode.
  */
-const ALWAYS_ACTIVE_PLUGINS = [ 'abilities-api', 'mcp-adapter', 'senroflux' ];
+const ALWAYS_ACTIVE_PLUGINS = [ 'abilities-api', 'mcp-adapter', 'woocommerce', 'senroflux' ];
 
 /** Fail setup itself, with a clear cause, instead of leaving it to a spec. */
 function assertEnvironmentReady() {
@@ -59,10 +63,37 @@ async function loginAndSaveState( storageStatePath ) {
  *
  * @param {'built_in'|'agent_safety'} gateMode
  */
+/**
+ * S22: every leg runs with the newest WooCommerce RELEASE. `.wp-env.json`
+ * can't express that: `woocommerce.zip` is trunk (a beta), and
+ * `woocommerce.latest-stable.zip` installs under a directory named after the
+ * zip, not `woocommerce`. `wp plugin install` resolves wordpress.org's stable
+ * tag and installs under the right slug.
+ */
+function ensureWooCommerceInstalled() {
+	try {
+		wpCli( [ 'plugin', 'is-installed', 'woocommerce' ] );
+	} catch ( e ) {
+		wpCli( [ 'plugin', 'install', 'woocommerce' ] );
+	}
+}
+
+/**
+ * A freshly activated WooCommerce redirects the first admin page load to its
+ * setup wizard (wc-admin), which the first spec then lands on instead of the
+ * Runs screen.
+ */
+function skipWooCommerceOnboarding() {
+	wpCli( [ 'transient', 'delete', '_wc_activation_redirect' ] );
+	wpCli( [ 'option', 'update', 'woocommerce_onboarding_profile', '{"skipped":true}', '--format=json' ] );
+}
+
 async function setupFor( gateMode, storageStatePath ) {
+	ensureWooCommerceInstalled();
 	for ( const slug of ALWAYS_ACTIVE_PLUGINS ) {
 		activatePlugin( slug );
 	}
+	skipWooCommerceOnboarding();
 
 	if ( 'agent_safety' === gateMode ) {
 		activateAgentSafety();

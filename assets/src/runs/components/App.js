@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from '@wordpress/element';
 import { __ } from '@wordpress/i18n';
-import { listRuns, getRun, startRun, tickRun, cancelRun, resolveSuggestion } from '../api';
+import { listRuns, getRun, startRun, tickRun, cancelRun, resolveSuggestion, fetchSetupState, dismissAdvisory } from '../api';
 import { isParkedStatus, isTerminalStatus, runsForTab, sameRunId } from '../utils';
 import RunList from './RunList';
 import Chat from './Chat';
@@ -27,6 +27,17 @@ export default function App( { config } ) {
 	const [ busy, setBusy ] = useState( false );
 	const [ tickCount, setTickCount ] = useState( 0 );
 	const [ actionError, setActionError ] = useState( '' );
+	// The start state — which packs are runnable, and whether a BLOCKING setup
+	// check (no model provider) stops every start. Seeded from the page's
+	// config, refreshed whenever the user returns to this tab (J1: configure a
+	// provider in Connectors, come back, Start is enabled without a reload).
+	const [ setup, setSetup ] = useState( {
+		packs: config.packs || [],
+		unavailablePacks: config.unavailablePacks || [],
+		startBlocked: Boolean( config.startBlocked ),
+	} );
+	// The finished run a follow-up is being started from (S20), or null.
+	const [ followUp, setFollowUp ] = useState( null );
 
 	// Guards the auto-continue tick chain: "ticks advance only while the page
 	// is open" (S10) — a stale promise resolving after unmount (or after the
@@ -45,6 +56,84 @@ export default function App( { config } ) {
 	);
 
 	const ajaxConfig = { nonce: config.nonce, consumer: config.consumer, ajaxUrl: window.ajaxurl };
+
+	const setupRefreshing = useRef( false );
+	const refreshSetup = useCallback( () => {
+		if ( setupRefreshing.current ) {
+			return;
+		}
+		setupRefreshing.current = true;
+		fetchSetupState( { nonce: config.nonce, consumer: config.consumer, ajaxUrl: window.ajaxurl } )
+			.then( ( state ) => {
+				if ( ! aliveRef.current ) {
+					return;
+				}
+				// The server-rendered panel is outside the React root: swap its
+				// markup (server-escaped, same origin) rather than re-render it.
+				const panel = document.getElementById( 'senroflux-setup-panel' );
+				if ( panel && 'string' === typeof state.html && '' !== state.html ) {
+					panel.outerHTML = state.html;
+				} else if ( panel && '' === state.html ) {
+					panel.innerHTML = '';
+				}
+				setSetup( {
+					packs: Array.isArray( state.packs ) ? state.packs : [],
+					unavailablePacks: Array.isArray( state.unavailable_packs ) ? state.unavailable_packs : [],
+					startBlocked: false === state.start_enabled,
+				} );
+			} )
+			// A failed refresh keeps the last known state: never flip Start on a transport blip.
+			.catch( () => {} )
+			.finally( () => {
+				setupRefreshing.current = false;
+			} );
+	}, [] ); // `config` is the page's fixed localized object.
+
+	useEffect( () => {
+		const onVisible = () => {
+			if ( 'hidden' !== document.visibilityState ) {
+				refreshSetup();
+			}
+		};
+		window.addEventListener( 'focus', refreshSetup );
+		document.addEventListener( 'visibilitychange', onVisible );
+		return () => {
+			window.removeEventListener( 'focus', refreshSetup );
+			document.removeEventListener( 'visibilitychange', onVisible );
+		};
+	}, [ refreshSetup ] );
+
+	// The Agent Safety advisory's Dismiss button lives in the server-rendered
+	// panel, which is swapped wholesale on refresh — so the listener is
+	// delegated on `document`. The server records the dismissal per user, and
+	// every later refresh renders the panel without it.
+	useEffect( () => {
+		const onClick = ( event ) => {
+			const button = event.target.closest && event.target.closest( '.senroflux-dismiss-check' );
+			if ( ! button ) {
+				return;
+			}
+			dismissAdvisory( { nonce: button.getAttribute( 'data-nonce' ) || '', ajaxUrl: window.ajaxurl } )
+				.then( ( result ) => {
+					const panel = document.getElementById( 'senroflux-setup-panel' );
+					if ( panel && result && 'string' === typeof result.html ) {
+						panel.outerHTML = result.html;
+					}
+					// The focused button just vanished: move focus to the next
+					// focusable thing in the panel (a "Fix this" link), else the goal box.
+					const next =
+						document.querySelector( '#senroflux-setup-panel a[href], #senroflux-setup-panel button' ) ||
+						document.querySelector( '.senroflux-message-box-input:not([disabled])' );
+					if ( next ) {
+						next.focus();
+					}
+				} )
+				// Silent: worst case the notice stays until the next try.
+				.catch( () => {} );
+		};
+		document.addEventListener( 'click', onClick );
+		return () => document.removeEventListener( 'click', onClick );
+	}, [] );
 
 	const refreshList = useCallback( () => {
 		listRuns().then( ( result ) => {
@@ -104,12 +193,33 @@ export default function App( { config } ) {
 			return;
 		}
 		setRunDetail( ( previous ) => {
-			const previousSteps = previous && sameRunId( previous.run.id, runId ) ? previous.steps : [];
+			const same = previous && sameRunId( previous.run.id, runId );
+			const previousSteps = same ? previous.steps : [];
 			const appended = Array.isArray( state.new_steps ) ? state.new_steps : [];
 			return {
 				...( previous || {} ),
-				run: state.run,
+				// The ajax RunState's `run` is a THIN row (no pack, withheld
+				// roles, model, budget or report): merge it over what the full
+				// read already gave us rather than replacing it, and take the
+				// terminal report from `ui.report`.
+				run: {
+					...( same ? previous.run : {} ),
+					...state.run,
+					...( state.ui && state.ui.report ? { report: state.ui.report } : {} ),
+				},
 				steps: Array.isArray( state.steps ) ? state.steps : [ ...previousSteps, ...appended ],
+				// A fresh plan or approval park's card facts ride the tick's
+				// `ui.plan` / `ui.approval`; keep the run-detail read's own
+				// `ui` otherwise (Chat matches each to the parked step, so a
+				// stale one is never shown).
+				ui:
+					state.ui && ( state.ui.plan || state.ui.approval )
+						? {
+								...( previous && previous.ui ),
+								...( state.ui.plan ? { plan: state.ui.plan } : {} ),
+								...( state.ui.approval ? { approval: state.ui.approval } : {} ),
+						  }
+						: previous && previous.ui,
 			};
 		} );
 		refreshList();
@@ -168,14 +278,15 @@ export default function App( { config } ) {
 	);
 
 	const handleStart = useCallback(
-		( goal ) => {
+		( goal, pack, model, followUpOf ) => {
 			setBusy( true );
 			setActionError( '' );
-			startRun( goal, ajaxConfig )
+			startRun( goal, ajaxConfig, pack, model, followUpOf )
 				.then( ( state ) => {
 					if ( ! aliveRef.current ) {
 						return;
 					}
+					setFollowUp( null );
 					setSelectedRunId( state.run.id );
 					activeRunRef.current = state.run.id;
 					setTickCount( 0 );
@@ -263,6 +374,7 @@ export default function App( { config } ) {
 	const handleSelectRun = ( runId ) => {
 		setTickCount( 0 );
 		setActionError( '' );
+		setFollowUp( null );
 		setSelectedRunId( runId );
 	};
 
@@ -299,12 +411,21 @@ export default function App( { config } ) {
 						run={ runDetail.run }
 						steps={ runDetail.steps }
 						suggestions={ runDetail.suggestions }
+						planUi={ runDetail.ui && runDetail.ui.plan }
+						approvalUi={ runDetail.ui && runDetail.ui.approval }
 						canManageBrief={ Boolean( config.canManageSiteBrief ) }
+						modelChoices={ config.modelChoices || {} }
 						onResolvePark={ handleResolvePark }
 						onResolveSuggestion={ handleResolveSuggestion }
 						onCancel={ handleCancel }
 						busy={ busy }
 						tickCount={ tickCount }
+						// S20: only a viewer who can run the source run's pack (the
+						// server's preflight already folds the run capability in) may
+						// follow it up; start() re-checks it, and that the viewer may
+						// see the run, fail closed.
+						canFollowUp={ Boolean( runDetail.run.pack ) && setup.packs.some( ( p ) => p.name === runDetail.run.pack ) }
+						onFollowUp={ ( run ) => setFollowUp( { runId: run.id, pack: run.pack } ) }
 					/>
 				) : runs.length > 0 ? (
 					// Fifth 17a live-review finding (S10, open): "Nothing has
@@ -323,7 +444,17 @@ export default function App( { config } ) {
 						onPickExample={ () => {} }
 					/>
 				) }
-				<MessageBox state={ boxState } onSend={ handleStart } initialText={ config.initialGoal || '' } />
+				<MessageBox
+					state={ boxState }
+					onSend={ handleStart }
+					initialText={ config.initialGoal || '' }
+					packs={ setup.packs }
+					unavailablePacks={ setup.unavailablePacks }
+					modelChoices={ config.modelChoices || {} }
+					startBlocked={ setup.startBlocked }
+					followUp={ followUp }
+					onCancelFollowUp={ () => setFollowUp( null ) }
+				/>
 			</main>
 		</div>
 	);

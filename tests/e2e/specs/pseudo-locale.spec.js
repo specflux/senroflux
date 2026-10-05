@@ -61,6 +61,10 @@ const PSEUDO_STATE_PATH = path.join( __dirname, '..', 'support', 'storage-state.
  *  - `.senroflux-run-row-pack`: the pack slug (a technical identifier).
  *  - `code`: ability verb ids rendered inline (ApprovalBody).
  *  - `textarea`, `input`: user-editable data, never chrome.
+ *  - `.notice:not([data-senroflux-notice])`: another plugin's admin notice,
+ *    which core moves into `.wrap` (WooCommerce's past-due Action Scheduler
+ *    warning failed this spec on a long-lived env). SenroFlux's own notices
+ *    carry the attribute and are still checked.
  */
 const EXCLUDE_SELECTORS = [
 	'[data-senroflux-content]',
@@ -80,6 +84,7 @@ const EXCLUDE_SELECTORS = [
 	'code',
 	'textarea',
 	'input',
+	'.notice:not([data-senroflux-notice])',
 ];
 
 /**
