@@ -351,6 +351,7 @@ final class Plugin {
 			( new \Specflux\SenroFlux\Admin\RunsScreen() )->register();
 			// 0.3 S20: the site-brief settings submenu.
 			( new \Specflux\SenroFlux\Admin\SettingsScreen() )->register();
+			( new \Specflux\SenroFlux\Admin\PrivacyPolicy() )->register();
 		}
 
 		// 0.3 S3: Agent Safety's absence is advisory only — runs still start
