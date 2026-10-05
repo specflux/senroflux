@@ -1,5 +1,5 @@
 === SenroFlux ===
-Contributors: stephen1204paul, specflux
+Contributors: specflux, stephen1204paul
 Tags: ai, agents, automation, safety, approvals
 Requires at least: 7.0
 Tested up to: 7.1
