@@ -8,6 +8,42 @@ import EmptyState from './EmptyState';
 import MessageBox from './MessageBox';
 
 /**
+ * A run-detail read is issued alongside the first tick of a new run and can be
+ * answered mid-tick yet arrive after the tick's own response. A read older
+ * than what is already shown (fewer steps) must not replace it: keep the
+ * newer status, steps and park card, and take only the full-row fields the
+ * thin tick row lacks.
+ *
+ * @param {?Object} previous The run detail currently shown.
+ * @param {Object}  detail   The run-detail read that just arrived.
+ * @return {Object} The run detail to show.
+ */
+function withoutRegressing( previous, detail ) {
+	if (
+		! previous ||
+		! previous.run ||
+		! detail ||
+		! detail.run ||
+		! sameRunId( previous.run.id, detail.run.id ) ||
+		! ( Number( previous.run.step_count ) > Number( detail.run.step_count ) )
+	) {
+		return detail;
+	}
+
+	const bySeq = new Map();
+	[ ...( detail.steps || [] ), ...( previous.steps || [] ) ].forEach( ( item, index ) => {
+		bySeq.set( undefined === item.seq ? `i${ index }` : item.seq, item );
+	} );
+
+	return {
+		...detail,
+		run: { ...detail.run, ...previous.run },
+		steps: [ ...bySeq.values() ].sort( ( a, b ) => ( a.seq ?? 0 ) - ( b.seq ?? 0 ) ),
+		ui: previous.ui || detail.ui,
+	};
+}
+
+/**
  * The Runs screen root (S10). Owns the two REST reads 17a needed, plus (17c)
  * every write action: starting a run, driving its ticks, resolving its
  * parks, and cancelling it.
@@ -155,7 +191,7 @@ export default function App( { config } ) {
 		}
 		getRun( selectedRunId ).then( ( detail ) => {
 			if ( aliveRef.current && sameRunId( selectedRunId, activeRunRef.current ) ) {
-				setRunDetail( detail );
+				setRunDetail( ( previous ) => withoutRegressing( previous, detail ) );
 			}
 		} );
 	}, [ selectedRunId ] );
