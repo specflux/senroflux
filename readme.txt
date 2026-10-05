@@ -150,7 +150,8 @@ credentials, site content, or personal data are sent — only the search
 terms and the id of a selected result. This runs only during an active,
 human-driven run. See Openverse's terms and privacy policy:
 https://openverse.org/terms-of-service and
-https://creativecommons.org/privacy/.
+https://openverse.org/privacy (Openverse is a WordPress.org project;
+its privacy policy is https://wordpress.org/about/privacy/).
 
 **Image downloads.** When a run imports a chosen stock photo or a generated
 image, the plugin downloads the image file from the URL Openverse or the AI

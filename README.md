@@ -117,7 +117,7 @@ SenroFlux makes two kinds of outbound request, only while a human is actively dr
   and its per-image detail endpoint), when a pages/site run searches for or fetches a stock
   image. Only the model-generated search text and a selected result's id are sent - no
   credentials, site content, or personal data. See
-  https://openverse.org/terms-of-service and https://creativecommons.org/privacy/.
+  https://openverse.org/terms-of-service and https://openverse.org/privacy.
 
 ## PHP API
 
