@@ -19,6 +19,7 @@ package-lock.json
 webpack.config.js
 assets/src
 .wp-env.json
+.wp-env.override.json
 playwright.config.js
 playwright-report
 test-results

@@ -91,6 +91,8 @@ DENY_RE="$DENY_RE|/playwright\.config\.js$"
 DENY_RE="$DENY_RE|/webpack\.config\.js$"
 DENY_RE="$DENY_RE|/\.wp-env\.json$"
 DENY_RE="$DENY_RE|/CONTEXT\.md$|/README\.md$"
+# Any hidden path segment (Plugin Check's hidden_files error).
+DENY_RE="$DENY_RE|(^|/)\.[^/]+"
 
 ENTRIES=()
 while IFS= read -r line; do
