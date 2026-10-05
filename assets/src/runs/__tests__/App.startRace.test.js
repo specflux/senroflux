@@ -18,7 +18,17 @@ describe( 'a run-detail read that lands after the first tick', () => {
 		jest.clearAllMocks();
 	} );
 
-	it( 'keeps the plan park the tick delivered', async () => {
+	it.each( [
+		[ 'an earlier step count', { step_count: 2 }, [ { seq: 2, kind: 'model', message: { text: 'Here is my plan.' } } ] ],
+		[
+			'the same step count, before the status flip',
+			{ step_count: 3 },
+			[
+				{ seq: 2, kind: 'model', message: { text: 'Here is my plan.' } },
+				{ seq: 3, kind: 'plan', message: { goal: 'Build the launch page', steps: [], assumptions: [] } },
+			],
+		],
+	] )( 'keeps the plan park when the late read has %s', async ( label, readRun, readSteps ) => {
 		const goal = 'Build the launch page';
 		const thin = { id: 9, goal, status: 'running', step_count: 1, viewer_may_tick: true, pack: 'pages' };
 
@@ -33,14 +43,20 @@ describe( 'a run-detail read that lands after the first tick', () => {
 			} )
 		);
 
-		tickRun.mockResolvedValue( {
+		const parked = {
 			run: { ...thin, status: 'awaiting_plan', step_count: 3 },
 			new_steps: [
 				{ seq: 2, kind: 'model', message: { text: 'Here is my plan.' } },
 				{ seq: 3, kind: 'plan', message: { goal, steps: [], assumptions: [] } },
 			],
 			ui: { plan: { step_id: 3, remaining_plans: 1, preapprove_available: false, review_url: '' } },
-		} );
+		};
+		let releaseTick;
+		tickRun.mockReturnValue(
+			new Promise( ( resolve ) => {
+				releaseTick = resolve;
+			} )
+		);
 
 		render( <App config={ { nonce: 'abc', consumer: 'admin', gateMode: 'built_in', packs: [ { name: 'pages', label: 'pages' } ], examples: [] } } /> );
 
@@ -48,16 +64,20 @@ describe( 'a run-detail read that lands after the first tick', () => {
 		fireEvent.change( box, { target: { value: goal } } );
 		fireEvent.click( screen.getByRole( 'button', { name: 'Start run' } ) );
 
+		// Both requests are out: the tick is still running server-side when the read goes.
+		await waitFor( () => {
+			expect( getRun ).toHaveBeenCalled();
+		} );
+		await act( async () => {
+			releaseTick( parked );
+		} );
 		await waitFor( () => {
 			expect( document.getElementById( 'senroflux-park-heading' ) ).not.toBeNull();
 		} );
 
 		// The read was answered mid-tick: the model turn is recorded, the park is not.
 		await act( async () => {
-			releaseRead( {
-				run: { ...thin, step_count: 2, tokens_used: 15 },
-				steps: [ { seq: 2, kind: 'model', message: { text: 'Here is my plan.' } } ],
-			} );
+			releaseRead( { run: { ...thin, ...readRun, tokens_used: 15 }, steps: readSteps } );
 		} );
 
 		expect( document.getElementById( 'senroflux-park-heading' ) ).not.toBeNull();

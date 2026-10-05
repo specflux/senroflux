@@ -9,24 +9,17 @@ import MessageBox from './MessageBox';
 
 /**
  * A run-detail read is issued alongside the first tick of a new run and can be
- * answered mid-tick yet arrive after the tick's own response. A read older
- * than what is already shown (fewer steps) must not replace it: keep the
- * newer status, steps and park card, and take only the full-row fields the
- * thin tick row lacks.
+ * answered mid-tick yet arrive after the tick's own response. When a tick
+ * result landed while the read was in flight, the read may be older than what
+ * is shown, so it must not replace it: keep the shown status, steps and park
+ * card, and take only the full-row fields the thin tick row lacks.
  *
  * @param {?Object} previous The run detail currently shown.
  * @param {Object}  detail   The run-detail read that just arrived.
  * @return {Object} The run detail to show.
  */
-function withoutRegressing( previous, detail ) {
-	if (
-		! previous ||
-		! previous.run ||
-		! detail ||
-		! detail.run ||
-		! sameRunId( previous.run.id, detail.run.id ) ||
-		! ( Number( previous.run.step_count ) > Number( detail.run.step_count ) )
-	) {
+function underNewerTick( previous, detail ) {
+	if ( ! previous || ! previous.run || ! detail || ! detail.run || ! sameRunId( previous.run.id, detail.run.id ) ) {
 		return detail;
 	}
 
@@ -80,6 +73,8 @@ export default function App( { config } ) {
 	// viewer switched to a different run) must never call setState or queue
 	// another tick.
 	const aliveRef = useRef( true );
+	// Counts tick results applied, so a run-detail read can tell one landed while it was in flight.
+	const ticksAppliedRef = useRef( 0 );
 	const activeRunRef = useRef( selectedRunId );
 	useEffect( () => {
 		activeRunRef.current = selectedRunId;
@@ -189,9 +184,11 @@ export default function App( { config } ) {
 			setRunDetail( null );
 			return;
 		}
+		const ticksBefore = ticksAppliedRef.current;
 		getRun( selectedRunId ).then( ( detail ) => {
 			if ( aliveRef.current && sameRunId( selectedRunId, activeRunRef.current ) ) {
-				setRunDetail( ( previous ) => withoutRegressing( previous, detail ) );
+				const tickLanded = ticksAppliedRef.current !== ticksBefore;
+				setRunDetail( ( previous ) => ( tickLanded ? underNewerTick( previous, detail ) : detail ) );
 			}
 		} );
 	}, [ selectedRunId ] );
@@ -228,6 +225,7 @@ export default function App( { config } ) {
 		if ( ! aliveRef.current || ! sameRunId( runId, activeRunRef.current ) ) {
 			return;
 		}
+		ticksAppliedRef.current += 1;
 		setRunDetail( ( previous ) => {
 			const same = previous && sameRunId( previous.run.id, runId );
 			const previousSteps = same ? previous.steps : [];
