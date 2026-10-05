@@ -106,7 +106,10 @@ class SettingsScreen {
 		// a marker saying the switch was on the page. A refused brief saves
 		// nothing, switch included.
 		if ( isset( $_POST['senroflux_theme_patterns_present'] ) ) {
-			update_option( ThemePatterns::OPTION, ThemePatterns::sanitizeOption( $_POST[ ThemePatterns::OPTION ] ?? false ) );
+			$use_theme_patterns = isset( $_POST[ ThemePatterns::OPTION ] ) && is_string( $_POST[ ThemePatterns::OPTION ] )
+				? sanitize_text_field( wp_unslash( $_POST[ ThemePatterns::OPTION ] ) )
+				: false;
+			update_option( ThemePatterns::OPTION, ThemePatterns::sanitizeOption( $use_theme_patterns ) );
 		}
 
 		delete_transient( self::PENDING_TRANSIENT_PREFIX . $user );
