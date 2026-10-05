@@ -1,5 +1,5 @@
 === SenroFlux ===
-Contributors: stephen1204paul
+Contributors: stephen1204paul, specflux
 Tags: ai, agents, automation, safety, approvals
 Requires at least: 7.0
 Tested up to: 7.1
@@ -51,75 +51,6 @@ its first side-effecting write — and resuming exactly where it left off.
   persist nothing.
 * **Not for multisite.** SenroFlux refuses to activate on a WordPress
   multisite install.
-
-= External Services =
-
-SenroFlux itself makes two kinds of outbound request, both only while a
-human is actively driving a run from their own browser session — SenroFlux
-never runs in the background.
-
-**Model calls (AI Client).** Made through the WordPress AI Client (bundled
-with WordPress 7.0+), using whichever provider your site has connected
-under Settings → Connectors — commonly OpenAI, but any provider the AI
-Client supports. On every model turn (at most one per tick), SenroFlux
-sends that provider:
-
-* the run's full conversation history so far (the goal, every model
-  message, and every tool result already produced in the run);
-* a system instruction assembled from the harness's own operating rules,
-  the active pack's skills (e.g. a pack's block-pattern vocabulary and
-  copy constraints), and anything the consumer or `senroflux_system_instruction`
-  filter contributes;
-* the declared tool (Ability) schemas the run is allowed to call, and the
-  results those tools return, which are fed back to the model on the next
-  turn (capped at 32 KB per result by default, filterable via
-  `senroflux_tool_result_max_bytes`).
-
-No file, database or site content is sent beyond what a run's own tool
-calls read and return as results. Sending and handling this data is
-governed by the connected provider's own terms; see, for example, OpenAI's:
-https://openai.com/policies/row-terms-of-use/ and
-https://openai.com/policies/row-privacy-policy/ — consult your specific
-provider's terms if you have connected a different one.
-
-**Stock photo search (Openverse).** When a run searches for a stock image
-(pages/site packs), SenroFlux sends the model-generated search text as a
-query string to Openverse's public search API
-(`https://api.openverse.org/v1/images/`) and to Openverse's individual
-image-detail endpoint when fetching a chosen result. No account
-credentials, site content, or personal data are sent — only the search
-terms and the id of a selected result. This runs only during an active,
-human-driven run. See Openverse's terms and privacy policy:
-https://openverse.org/terms-of-service and
-https://creativecommons.org/privacy/.
-
-= Extension API (developers) =
-
-`SENROFLUX_API_VERSION` (currently 0.3.0, defined in senroflux.php) versions the declared
-extension surface, independently of this plugin's own Stable tag. Semver promise: a removal
-or signature change needs a major bump; an addition needs a minor bump — this applies starting
-at 0.3.0, even below 1.0.
-
-The `@api` list: the `Pack` abstract class's `@api`-tagged methods (name, roles,
-abilityNamespaces, inputProperties, verbFor, objectIdKey/Prefix/ForWrite/ForRead,
-roleCapabilities, withheldRoleNotice, verbMap, roleVerbs, ungrantableVerbs, governedNamespaces,
-agentSafetyVerbMap, defaultBudget, skills, agentSafetyPack, validateCall, setupChecks,
-runCapability, requiresAgentSafety, agentSafetyBindingError, guidesHash); the
-`Api\LayoutVocabulary` facade (names, sectionSchema, validate, imageUrls, rulesLines); the
-Skill/SkillSource/SetupCheck value types a pack constructs; and the `senroflux_packs`,
-`senroflux_run_skills` and `senroflux_default_budget` filters. Every other filter, including
-`senroflux_can_tick` and `senroflux_http_consumers`, is not part of this surface and may change
-without a version bump.
-
-REST (`senroflux/v1`, routes listed above under "External Services"/PHP integration) is the
-public `@api` consumer surface; admin-ajax is this plugin's own private transport for its
-bundled Runs screen and is not guaranteed to match REST's shape.
-
-Deprecation: a break goes through `_deprecated_hook()`/`_deprecated_function()` for at least
-one minor release before removal at the next major. None exist yet.
-
-See README.md's "Extension API" section for the full reference, including how to regenerate
-the reflection snapshot tests/Api/public-surface.json that enforces this.
 
 == Installation ==
 
@@ -178,9 +109,117 @@ with the `senroflux_theme_patterns` filter.
 
 No. SenroFlux refuses to activate on a multisite install.
 
-== Screenshots ==
+== External services ==
 
-None yet.
+SenroFlux itself makes two kinds of outbound request, both only while a
+human is actively driving a run from their own browser session — SenroFlux
+never runs in the background.
+
+**Model calls (AI Client).** Made through the WordPress AI Client (bundled
+with WordPress 7.0+), using whichever provider your site has connected
+under Settings → Connectors — commonly OpenAI, but any provider the AI
+Client supports. On every model turn (at most one per tick), SenroFlux
+sends that provider:
+
+* the run's full conversation history so far (the goal, every model
+  message, and every tool result already produced in the run);
+* a system instruction assembled from the harness's own operating rules,
+  the active pack's skills (e.g. a pack's block-pattern vocabulary and
+  copy constraints), and anything the consumer or `senroflux_system_instruction`
+  filter contributes;
+* the declared tool (Ability) schemas the run is allowed to call, and the
+  results those tools return, which are fed back to the model on the next
+  turn (capped at 32 KB per result by default, filterable via
+  `senroflux_tool_result_max_bytes`).
+
+No file, database or site content is sent beyond what a run's own tool
+calls read and return as results. Sending and handling this data is
+governed by the connected provider's own terms. The site owner chooses the
+AI provider, so that provider's terms and privacy policy apply; see, for
+example, OpenAI's:
+https://openai.com/policies/row-terms-of-use/ and
+https://openai.com/policies/row-privacy-policy/ — consult your specific
+provider's terms if you have connected a different one.
+
+**Stock photo search (Openverse).** When a run searches for a stock image
+(pages/site packs), SenroFlux sends the model-generated search text as a
+query string to Openverse's public search API
+(`https://api.openverse.org/v1/images/`) and to Openverse's individual
+image-detail endpoint when fetching a chosen result. No account
+credentials, site content, or personal data are sent — only the search
+terms and the id of a selected result. This runs only during an active,
+human-driven run. See Openverse's terms and privacy policy:
+https://openverse.org/terms-of-service and
+https://creativecommons.org/privacy/.
+
+**Image downloads.** When a run imports a chosen stock photo or a generated
+image, the plugin downloads the image file from the URL Openverse or the AI
+provider returned (Openverse results are hosted by third-party sites such
+as Flickr or Wikimedia Commons; an AI provider may instead return the image
+data inline, in which case nothing is downloaded). Only the image URL is
+requested, with no site data, and the file is then saved to your Media
+Library.
+
+== Privacy ==
+
+SenroFlux stores each run in two custom tables: the ID of the user who
+started it, the goal they typed, the conversation with the AI model, the
+tool calls and their results, and timestamps. Runs stay until you remove
+them or delete the plugin with the opt-in below.
+
+Runs are sent off-site to the AI provider you connected, and search terms
+are sent to Openverse; see "External services" above for exactly what.
+
+SenroFlux adds suggested text for your privacy policy under Settings →
+Privacy → Policy Guide. It does not register a personal-data exporter or
+eraser.
+
+Deleting the plugin keeps your runs by default. To remove all SenroFlux
+data (both tables, its options, transients and per-user flags) when the
+plugin is deleted, opt in first: `wp option update senroflux_uninstall_delete_data 1`,
+then delete the plugin.
+
+== Developers ==
+
+= Extension API =
+
+`SENROFLUX_API_VERSION` (currently 0.3.0, defined in senroflux.php) versions the declared
+extension surface, independently of this plugin's own Stable tag. Semver promise: a removal
+or signature change needs a major bump; an addition needs a minor bump — this applies starting
+at 0.3.0, even below 1.0.
+
+The `@api` list: the `Pack` abstract class's `@api`-tagged methods (name, roles,
+abilityNamespaces, inputProperties, verbFor, objectIdKey/Prefix/ForWrite/ForRead,
+roleCapabilities, withheldRoleNotice, verbMap, roleVerbs, ungrantableVerbs, governedNamespaces,
+agentSafetyVerbMap, defaultBudget, skills, agentSafetyPack, validateCall, setupChecks,
+runCapability, requiresAgentSafety, agentSafetyBindingError, guidesHash); the
+`Api\LayoutVocabulary` facade (names, sectionSchema, validate, imageUrls, rulesLines); the
+Skill/SkillSource/SetupCheck value types a pack constructs; and the `senroflux_packs`,
+`senroflux_run_skills` and `senroflux_default_budget` filters. Every other filter, including
+`senroflux_can_tick` and `senroflux_http_consumers`, is not part of this surface and may change
+without a version bump.
+
+REST (`senroflux/v1`) is the public `@api` consumer surface; admin-ajax is this plugin's own private transport for its
+bundled Runs screen and is not guaranteed to match REST's shape.
+
+Deprecation: a break goes through `_deprecated_hook()`/`_deprecated_function()` for at least
+one minor release before removal at the next major. None exist yet.
+
+See the "Extension API" section of README.md in the public repository,
+https://github.com/specflux/senroflux, for the full reference, including how to
+regenerate the reflection snapshot (tests/Api/public-surface.json there) that
+enforces this.
+
+= Source code and build =
+
+The JavaScript in `build/` is compiled from the sources in `assets/src/` in
+the public repository, https://github.com/specflux/senroflux. To rebuild it:
+
+1. `git clone https://github.com/specflux/senroflux.git && cd senroflux`
+2. `npm ci`
+3. `npm run build`
+
+`npm run build` runs `wp-scripts build` and writes `build/`.
 
 == Changelog ==
 
@@ -260,4 +299,4 @@ New:
 == Upgrade Notice ==
 
 = 0.3.0 =
-Breaking: update-post no longer publishes (use new publish-post); create-post now refuses slug/title collisions; Agent Safety is optional (built-in gate takes over when absent); any run still parked/running under 0.2 fails cleanly on its next tick instead of continuing; the run list is now scoped per viewer. Read the Changelog before upgrading a site with runs in progress.
+Breaking: update-post no longer publishes (use publish-post); create-post refuses slug/title collisions; Agent Safety is optional; runs still parked under 0.2 fail on their next tick; run list is per viewer; see the changelog.
