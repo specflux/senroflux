@@ -759,6 +759,30 @@ final class RunsScreenTest extends TestCase {
 		unset( $_GET );
 	}
 
+	public function test_the_redirect_carries_only_allowlisted_scalar_keys(): void {
+		global $pagenow;
+		$pagenow = 'tools.php';
+		$_GET    = array(
+			'page'    => 'senroflux-runs',
+			'goal'    => 'Publish the spring page',
+			'run_id'  => '7',
+			'unknown' => 'x',
+			'run'     => array( '1' ),
+		);
+
+		$screen = $this->redirectingScreen();
+		$screen->redirectOldToolsUrl();
+
+		$this->assertNotNull( $screen->redirectedUrl );
+		$this->assertStringContainsString( 'run_id=7', $screen->redirectedUrl );
+		$this->assertStringContainsString( 'goal=', $screen->redirectedUrl );
+		$this->assertStringNotContainsString( 'unknown', $screen->redirectedUrl );
+		$this->assertStringNotContainsString( 'run%5B', $screen->redirectedUrl );
+		$this->assertStringNotContainsString( 'run=', str_replace( 'run_id=', '', $screen->redirectedUrl ) );
+
+		unset( $_GET );
+	}
+
 	public function test_a_different_tools_page_is_left_alone(): void {
 		global $pagenow;
 		$pagenow = 'tools.php';

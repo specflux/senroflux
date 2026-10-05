@@ -201,9 +201,16 @@ class RunsScreen {
 			return;
 		}
 
-		$query = $_GET; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
-		unset( $query['page'] );
-		$query = array_map( 'sanitize_text_field', wp_unslash( $query ) );
+		// The only keys the screen reads (`run_id`/`run` open a run, `goal`
+		// pre-fills the message box); anything else is dropped.
+		$query = array();
+		foreach ( array( 'run_id', 'run', 'goal' ) as $key ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+			if ( isset( $_GET[ $key ] ) && is_string( $_GET[ $key ] ) ) {
+				// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only redirect.
+				$query[ $key ] = sanitize_text_field( wp_unslash( $_GET[ $key ] ) );
+			}
+		}
 		$query = array( 'page' => self::SLUG ) + $query;
 
 		$this->redirectAndExit( add_query_arg( $query, admin_url( 'admin.php' ) ) );
