@@ -78,11 +78,22 @@ function ensureWooCommerceInstalled() {
 	}
 }
 
+/**
+ * A freshly activated WooCommerce redirects the first admin page load to its
+ * setup wizard (wc-admin), which the first spec then lands on instead of the
+ * Runs screen.
+ */
+function skipWooCommerceOnboarding() {
+	wpCli( [ 'transient', 'delete', '_wc_activation_redirect' ] );
+	wpCli( [ 'option', 'update', 'woocommerce_onboarding_profile', '{"skipped":true}', '--format=json' ] );
+}
+
 async function setupFor( gateMode, storageStatePath ) {
 	ensureWooCommerceInstalled();
 	for ( const slug of ALWAYS_ACTIVE_PLUGINS ) {
 		activatePlugin( slug );
 	}
+	skipWooCommerceOnboarding();
 
 	if ( 'agent_safety' === gateMode ) {
 		activateAgentSafety();
