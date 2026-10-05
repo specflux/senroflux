@@ -65,6 +65,17 @@ its first side-effecting write — and resuming exactly where it left off.
 
 == Frequently Asked Questions ==
 
+= Can the AI add scripts or code to my site? =
+
+No. SenroFlux never writes PHP, JavaScript or CSS files and never runs code
+the model produces. A run only writes content: pages, posts, navigation,
+products and store reports. Every piece of markup it writes is checked
+against a fixed list of allowed blocks, tags and attributes before saving,
+and anything outside that list (a `<script>`, an inline event handler, an
+unknown block) refuses the whole write. SenroFlux does this itself rather
+than relying on WordPress's HTML filtering, because administrators are
+allowed unfiltered HTML.
+
 = Does it work without Agent Safety? =
 
 Yes. Agent Safety is optional, not required. If it isn't active, SenroFlux
