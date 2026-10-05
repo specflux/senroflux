@@ -9,6 +9,9 @@ declare ( strict_types = 1 );
 
 namespace Specflux\SenroFlux;
 
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
 /**
  * SenroFlux does not support multisite. Activation is refused whether it is
  * per site or network-wide, and a copy that is somehow active on a multisite

@@ -3,7 +3,22 @@
  * The site navigation registrar (0.3 S7): `senroflux/read-navigation` (Tier
  * 0) and `senroflux/update-navigation` (ALWAYS Tier 2).
  *
- * TARGET REPO PATH: src/Packs/Site/Navigation.php
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Site;
+
+use Specflux\SenroFlux\Run\RunStore;
+use Specflux\SenroFlux\Run\Tracker;
+use WP_Error;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Registers the two site-navigation abilities and their resolution logic.
  *
  * ONE ITEM-LIST SHAPE, either world. A block theme's header Navigation
  * block's `ref` (never assumed — a navigation block with no `ref` falls
@@ -36,23 +51,6 @@
  * compared at `update-navigation` time, fail closed on a mismatch or an
  * unread navigation. Scoped to one tick via {@see useRunContext()}, mirroring
  * `Packs\Content\Abilities::useRunContext()`.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Site;
-
-use Specflux\SenroFlux\Run\RunStore;
-use Specflux\SenroFlux\Run\Tracker;
-use WP_Error;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Registers the two site-navigation abilities and their resolution logic.
  */
 final class Navigation {
 

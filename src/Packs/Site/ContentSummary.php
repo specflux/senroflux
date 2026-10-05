@@ -5,7 +5,18 @@
  * `pages/publish`/`pages/update-live` (those stay
  * {@see \Specflux\SenroFlux\Packs\Pages\PublishSummary}'s, unchanged).
  *
- * TARGET REPO PATH: src/Packs/Site/ContentSummary.php
+ * @package SenroFlux
+ */
+
+declare ( strict_types = 1 );
+
+namespace Specflux\SenroFlux\Packs\Site;
+
+// Bail on direct access.
+defined( 'ABSPATH' ) || exit;
+
+/**
+ * Builds the AS-15 content-pack approval summaries.
  *
  * Hooks the same `agent_safety_approval_summary` filter (AS-11/AS-15) for
  * four cases:
@@ -43,19 +54,6 @@
  * The call's own arguments are read only for the PROPOSED half, and a
  * proposed page id is itself resolved back to a title server-side rather
  * than trusting anything past the id.
- *
- * @package SenroFlux
- */
-
-declare ( strict_types = 1 );
-
-namespace Specflux\SenroFlux\Packs\Site;
-
-// Bail on direct access.
-defined( 'ABSPATH' ) || exit;
-
-/**
- * Builds the AS-15 content-pack approval summaries.
  */
 final class ContentSummary {
 
