@@ -1348,6 +1348,7 @@ final class Abilities {
 
 		$enabled = $method['enabled'] ?? true;
 		if ( ! $enabled ) {
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- WooCommerce has no API to disable a zone method; its own REST shipping-zone-methods controller does this same update.
 			$wpdb->update( "{$wpdb->prefix}woocommerce_shipping_zone_methods", array( 'is_enabled' => 0 ), array( 'instance_id' => $instance_id ) );
 		}
 
