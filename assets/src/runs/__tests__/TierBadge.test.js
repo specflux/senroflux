@@ -1,7 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import TierBadge from '../components/TierBadge';
 
-describe( 'the tier badge appears in Agent Safety mode only', () => {
+describe( 'the tier badge appears in Agent Tollgate mode only', () => {
 	it( 'renders the badge in agent_safety mode', () => {
 		render( <TierBadge gateMode="agent_safety" tier={ 1 } /> );
 		expect( screen.getByTestId( 'tier-badge' ) ).toBeInTheDocument();

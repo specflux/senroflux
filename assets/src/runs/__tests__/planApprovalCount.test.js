@@ -97,12 +97,12 @@ describe( 'built-in mode counts only the verbs that are themselves Tier >= 1', (
 		expect( planApprovalCount( { steps }, 'built_in' ) ).toBe( 2 );
 	} );
 
-	it( 'Agent Safety mode still returns null for the same plan', () => {
+	it( 'Agent Tollgate mode still returns null for the same plan', () => {
 		expect( planApprovalCount( { steps: liveJ4Steps() }, 'agent_safety' ) ).toBeNull();
 	} );
 } );
 
-describe( 'Agent Safety mode shows no approval-count paragraph at all', () => {
+describe( 'Agent Tollgate mode shows no approval-count paragraph at all', () => {
 	it( 'planApprovalCount returns null in agent_safety mode', () => {
 		expect( planApprovalCount( { steps: livePlanSteps() }, 'agent_safety' ) ).toBeNull();
 	} );

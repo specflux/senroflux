@@ -22,7 +22,7 @@ its first side-effecting write — and resuming exactly where it left off.
 * **Tools are WordPress Abilities**, restricted per run to an allow-list
   supplied directly by the consumer, or derived from a registered **pack**
   (a named tool surface — pages, posts, site, or commerce, all bundled).
-* **Two gate modes, resolved once per run.** If the **Agent Safety** plugin
+* **Two gate modes, resolved once per run.** If the **Agent Tollgate** plugin
   is active, every call is governed by its gate (packs, tiers, approvals)
   and audit trail. Without it, SenroFlux falls back to a **built-in minimal
   gate**: every call that changes the site still stops for a person to
@@ -56,7 +56,7 @@ its first side-effecting write — and resuming exactly where it left off.
 
 1. Install and activate SenroFlux. It works standalone with a built-in
    approval gate.
-2. Optionally install and activate **Agent Safety** for its full audit
+2. Optionally install and activate **Agent Tollgate** for its full audit
    trail, tiered approvals, and cross-plugin governance — SenroFlux detects
    it automatically and switches gate modes on the next run started after
    activation.
@@ -76,12 +76,12 @@ unknown block) refuses the whole write. SenroFlux does this itself rather
 than relying on WordPress's HTML filtering, because administrators are
 allowed unfiltered HTML.
 
-= Does it work without Agent Safety? =
+= Does it work without Agent Tollgate? =
 
-Yes. Agent Safety is optional, not required. If it isn't active, SenroFlux
+Yes. Agent Tollgate is optional, not required. If it isn't active, SenroFlux
 uses its own built-in minimal gate: every call that changes the site still
 stops for a person to approve it on SenroFlux's Runs screen before it runs;
-read-only calls do not. Installing Agent Safety later adds its full audit
+read-only calls do not. Installing Agent Tollgate later adds its full audit
 trail, tiered approval thresholds, and governance shared across other
 plugins — new runs pick it up automatically.
 
@@ -239,7 +239,7 @@ the public repository, https://github.com/specflux/senroflux. To rebuild it:
 
 New:
 
-* Two gate modes: Agent Safety when active, otherwise a built-in minimal
+* Two gate modes: Agent Tollgate when active, otherwise a built-in minimal
   gate that still pauses every governed write for human approval on the
   Runs screen. A run's mode is pinned at start.
 * Three new packs alongside pages: posts, site (navigation, front page,
@@ -274,9 +274,9 @@ New:
 * `senroflux/create-post` now refuses `slug_collision` (409) when a
   non-trashed page or post of the same type already holds the requested
   slug, or matches the title case-insensitively.
-* Agent Safety is no longer a hard requirement. 0.2 always failed closed
+* Agent Tollgate is no longer a hard requirement. 0.2 always failed closed
   without it; 0.3 falls back to a built-in minimal gate instead (see the
-  FAQ above). If you relied on `senroflux_ungoverned` meaning "Agent Safety
+  FAQ above). If you relied on `senroflux_ungoverned` meaning "Agent Tollgate
   is missing," check the run's `gate_mode` instead.
 * A run still parked or running under 0.2 at the moment you upgrade to 0.3
   fails on its next tick with reason "started under 0.2" instead of
@@ -311,4 +311,4 @@ New:
 == Upgrade Notice ==
 
 = 0.3.0 =
-Breaking: update-post no longer publishes (use publish-post); create-post refuses slug/title collisions; Agent Safety is optional; runs still parked under 0.2 fail on their next tick; run list is per viewer; see the changelog.
+Breaking: update-post no longer publishes (use publish-post); create-post refuses slug/title collisions; Agent Tollgate is optional; runs still parked under 0.2 fail on their next tick; run list is per viewer; see the changelog.

@@ -195,10 +195,10 @@ describe( 'ReportView gate mode, withheld roles and grants', () => {
 		expect( screen.getByText( 'Approvals for this run are recorded only on this page.' ) ).toBeInTheDocument();
 	} );
 
-	it( 'names Agent Safety mode and carries no built-in line', () => {
+	it( 'names Agent Tollgate mode and carries no built-in line', () => {
 		render( <ReportView report={ { ...baseReport, gate_mode: 'agent_safety' } } steps={ [] } /> );
 
-		expect( screen.getByText( /Gate mode:/ ) ).toHaveTextContent( 'Agent Safety' );
+		expect( screen.getByText( /Gate mode:/ ) ).toHaveTextContent( 'Agent Tollgate' );
 		expect( screen.queryByText( /recorded only on this page/ ) ).not.toBeInTheDocument();
 	} );
 
@@ -212,7 +212,7 @@ describe( 'ReportView gate mode, withheld roles and grants', () => {
 		expect( screen.queryByText( /Withheld roles:/ ) ).not.toBeInTheDocument();
 	} );
 
-	it( 'lists grants with their expiry in Agent Safety mode', () => {
+	it( 'lists grants with their expiry in Agent Tollgate mode', () => {
 		const report = {
 			...baseReport,
 			gate_mode: 'agent_safety',

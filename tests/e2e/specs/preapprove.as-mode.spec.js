@@ -15,7 +15,7 @@ const { gotoRuns, waitLoaded, startRun, waitForPark, acceptPlan, waitSettled } =
  * `senroflux_e2e_preapproval` option (and registers the Tier-2
  * `senroflux-e2e/publish-thing` fixture ability, the only tier a grant covers).
  */
-test.describe( 'S14 pre-approval from the plan card (Agent Safety mode)', () => {
+test.describe( 'S14 pre-approval from the plan card (Agent Tollgate mode)', () => {
 	test.afterEach( () => {
 		deleteOption( 'senroflux_e2e_preapproval' );
 	} );

@@ -69,7 +69,7 @@ describe( 'the approval card shows the pack summary', () => {
 	} );
 
 	it( 'shows why the human is asked again when the earlier request expired, and nothing otherwise', () => {
-		renderCard( { notice: 'The earlier approval request expired, so Agent Safety asked again. Approve to continue.' } );
+		renderCard( { notice: 'The earlier approval request expired, so Agent Tollgate asked again. Approve to continue.' } );
 		expect( screen.getByRole( 'status' ).textContent ).toContain( 'earlier approval request expired' );
 	} );
 

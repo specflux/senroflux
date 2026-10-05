@@ -194,9 +194,9 @@ describe( 'the report arrives with the terminal tick', () => {
 	} );
 } );
 
-describe( 'the Agent Safety advisory Dismiss button (J1)', () => {
+describe( 'the Agent Tollgate advisory Dismiss button (J1)', () => {
 	const advisory =
-		'<div id="senroflux-setup-panel"><div class="notice" data-check-id="senroflux/agent-safety"><p>Install Agent Safety.</p>' +
+		'<div id="senroflux-setup-panel"><div class="notice" data-check-id="senroflux/agent-safety"><p>Install Agent Tollgate.</p>' +
 		'<p><button type="button" class="button senroflux-dismiss-check" data-nonce="dn1">Dismiss</button></p></div></div>';
 
 	beforeEach( () => {

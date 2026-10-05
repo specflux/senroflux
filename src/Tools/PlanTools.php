@@ -194,7 +194,7 @@ final class PlanTools {
 	 * @return FunctionDeclaration|array<string,mixed>
 	 */
 	public static function proposePlanDeclaration( ?array $known_verbs = null ): FunctionDeclaration|array {
-		$verbs_description = __( 'The Agent Safety verbs this step uses.', 'senroflux' );
+		$verbs_description = __( 'The Agent Tollgate verbs this step uses.', 'senroflux' );
 		if ( null !== $known_verbs ) {
 			$verbs_description .= ' ' . sprintf(
 				/* translators: %s is a comma-separated list of verb names. */

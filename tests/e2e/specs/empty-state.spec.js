@@ -18,7 +18,7 @@ test.describe( 'S10 empty state (built-in mode)', () => {
 	} );
 
 	// J1: dismiss the Agent Safety advisory, reload, it stays gone.
-	test( 'the Agent Safety advisory can be dismissed, and stays dismissed after a reload', async ( { page } ) => {
+	test( 'the Agent Tollgate advisory can be dismissed, and stays dismissed after a reload', async ( { page } ) => {
 		const meta = 'senroflux_agent_safety_check_dismissed';
 		// `wp user meta delete` fails when the key is absent; that is fine here.
 		const clear = () => {
