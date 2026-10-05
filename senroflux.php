@@ -1,8 +1,11 @@
 <?php
 /**
  * Plugin Name:       SenroFlux
+ * Plugin URI:        https://github.com/specflux/senroflux
  * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, governed by Agent Safety when active or a built-in approval gate otherwise.
  * Version:           0.3.0
+ * Author:            Stephen Paul Samynathan
+ * Author URI:        https://profiles.wordpress.org/stephen1204paul/
  * Requires at least: 7.0
  * Requires PHP:      8.1
  * License:           GPL-2.0-or-later
