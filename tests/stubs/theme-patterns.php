@@ -39,7 +39,8 @@ if ( ! class_exists( 'WP_Theme', false ) ) {
 			return $GLOBALS['senroflux_test_declared_patterns'] ?? array();
 		}
 
-		public function parent(): false {
+		/** @return false */
+		public function parent(): bool {
 			return false;
 		}
 	}
