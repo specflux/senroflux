@@ -75,16 +75,8 @@ test.describe( 'S10/S12 full run tour (built-in mode)', () => {
 		// --- Suggestion card (admin: Save/Dismiss) ----------------------
 		await waitSettled( page );
 
-		// KNOWN DEFECT (see known-defects.spec.js): the suggestion created
-		// by this same tick is NOT visible yet here — `Runner::tick()`'s
-		// ajax response shape is `{run, new_steps, ui}` with no
-		// `suggestions` key, and `App.js`'s `applyRunState()` only ever
-		// merges that shape, so `runDetail.suggestions` stays whatever the
-		// last full `getRun()` fetch had (empty, from before this run
-		// started). Reaching the suggestion at all currently requires a
-		// fresh `getRun()` — reselecting the run, exactly as a real reload
-		// would. This is the realistic path; the live-tick gap is its own
-		// tracked, separately-asserted defect, not silently routed around.
+		// The live-tick case is live-suggestion.spec.js; here the suggestion
+		// must also survive a fresh read of the run, as after a reload.
 		const runId = wpCli( [ 'db', 'query', 'SELECT id FROM wp_senroflux_runs ORDER BY id DESC LIMIT 1', '--skip-column-names' ] ).trim();
 		await page.goto( `/wp-admin/admin.php?page=senroflux-runs&run_id=${ runId }` );
 		await waitLoaded( page );
