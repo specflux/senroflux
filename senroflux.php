@@ -5,10 +5,11 @@
  * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, governed by Agent Safety when active or a built-in approval gate otherwise.
  * Version:           0.3.0
  * Author:            Stephen Paul Samynathan
- * Author URI:        https://profiles.wordpress.org/stephen1204paul/
+ * Author URI:        https://www.specflux.com/author/stephen/
  * Requires at least: 7.0
  * Requires PHP:      8.1
  * License:           GPL-2.0-or-later
+ * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       senroflux
  *
  * Harness for agent RUNS: one goal pursued by one user through many model
