@@ -107,10 +107,10 @@ final class Ajax {
 
 		// The budget arrives as a JSON body; a malformed payload degrades to
 		// the consumer's ceiling. `allow` is never read from the request.
-		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; ConsumerPolicy::resolve() validates each decoded field.
+		$budget_raw = isset( $_POST['budget'] ) ? wp_unslash( $_POST['budget'] ) : '{}'; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; sanitized field by field by sanitizeBudget() right after decoding.
 		$policy     = ConsumerPolicy::resolve(
 			$consumer,
-			json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ),
+			self::sanitizeBudget( json_decode( is_string( $budget_raw ) ? $budget_raw : '{}', true ) ),
 			$pack_budget_overrides
 		);
 		if ( is_wp_error( $policy ) ) {
@@ -181,8 +181,8 @@ final class Ajax {
 
 		$resume = null;
 		if ( isset( $_POST['resume'] ) ) {
-			$raw    = wp_unslash( $_POST['resume'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body, decoded and shape-checked below.
-			$resume = is_string( $raw ) ? json_decode( $raw, true ) : $raw;
+			$raw    = wp_unslash( $_POST['resume'] ); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a JSON body; every decoded string is sanitized by sanitizeResume() before the shape check.
+			$resume = self::sanitizeResume( is_string( $raw ) ? json_decode( $raw, true ) : $raw );
 			if ( ! is_array( $resume ) ) {
 				wp_send_json_error(
 					array(
@@ -248,6 +248,52 @@ final class Ajax {
 		}
 
 		$this->respond( senroflux()->get( absint( $_POST['run_id'] ?? 0 ) ) );
+	}
+
+	/**
+	 * Sanitize a decoded budget body: only non-negative integer caps (or
+	 * digit strings) under sanitized keys survive. Anything else is dropped,
+	 * which Budget::clamp() reads as "use the ceiling".
+	 *
+	 * @param mixed $decoded The json_decode()d budget.
+	 * @return array<string,int>
+	 */
+	public static function sanitizeBudget( mixed $decoded ): array {
+		if ( ! is_array( $decoded ) ) {
+			return array();
+		}
+
+		$budget = array();
+		foreach ( $decoded as $key => $value ) {
+			if ( ( is_int( $value ) && $value >= 0 ) || ( is_string( $value ) && ctype_digit( $value ) ) ) {
+				$budget[ sanitize_key( (string) $key ) ] = absint( $value );
+			}
+		}
+
+		return $budget;
+	}
+
+	/**
+	 * Sanitize a decoded park resolution: every string (answer text and
+	 * choice, plan action and note, approval action) goes through
+	 * sanitize_textarea_field(); booleans and integers keep their type so
+	 * Resume::check() can still enforce exact shapes such as `skip: true`.
+	 * Keys are left as sent: Resume::check() matches them against exact
+	 * allow-lists and refuses anything else.
+	 *
+	 * @param mixed $decoded The json_decode()d resume payload.
+	 * @return mixed Same shape, with sanitized strings.
+	 */
+	public static function sanitizeResume( mixed $decoded ): mixed {
+		if ( is_array( $decoded ) ) {
+			return array_map( array( self::class, 'sanitizeResume' ), $decoded );
+		}
+
+		if ( is_string( $decoded ) ) {
+			return sanitize_textarea_field( $decoded );
+		}
+
+		return is_bool( $decoded ) || is_int( $decoded ) ? $decoded : null;
 	}
 
 	/**
