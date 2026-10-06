@@ -4,7 +4,7 @@ Tags: ai, agents, automation, safety, approvals
 Requires at least: 7.0
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.3.0
+Stable tag: 0.3.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -160,7 +160,7 @@ image-detail endpoint when fetching a chosen result. No account
 credentials, site content, or personal data are sent — only the search
 terms and the id of a selected result. This runs only during an active,
 human-driven run. See Openverse's terms and privacy policy:
-https://openverse.org/terms-of-service and
+https://docs.openverse.org/terms_of_service.html and
 https://openverse.org/privacy (Openverse is a WordPress.org project;
 its privacy policy is https://wordpress.org/about/privacy/).
 
@@ -234,6 +234,16 @@ the public repository, https://github.com/specflux/senroflux. To rebuild it:
 `npm run build` runs `wp-scripts build` and writes `build/`.
 
 == Changelog ==
+
+= 0.3.1 =
+
+Fixed:
+
+* Sanitize the decoded JSON bodies of the admin-ajax start (budget) and tick
+  (park resolution) requests: answer text, choices and plan notes go through
+  sanitize_textarea_field(), budget caps are kept only as non-negative
+  integers.
+* Point the Openverse terms-of-service link at its current location.
 
 = 0.3.0 =
 
@@ -309,6 +319,9 @@ New:
 * Initial scaffold: hard-dependency gate against Agent Safety.
 
 == Upgrade Notice ==
+
+= 0.3.1 =
+Sanitizes the JSON payloads of the admin-ajax endpoints; fixes the Openverse terms link.
 
 = 0.3.0 =
 Breaking: update-post no longer publishes (use publish-post); create-post refuses slug/title collisions; Agent Tollgate is optional; runs still parked under 0.2 fail on their next tick; run list is per viewer; see the changelog.

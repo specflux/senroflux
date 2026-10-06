@@ -144,6 +144,17 @@ Terms as used in specs, code, and admin UI. Glossary only; no implementation det
 - **Content language** — the language of what the run produces for the site's visitors (page
   content): the site's locale unless the goal or an answer says otherwise. Told to the model;
   not enforced. Distinct from conversation language.
+- **Site brief** — the site's standing instructions for every run (tone, audience, what to
+  avoid), written and edited by a human in one place and given to the model as untrusted text.
+  One per site, not per user. Configuration, not memory: it can never change a tier, grant,
+  budget or the plan fence.
+- **Brief suggestion** — a one-line addition to the site brief that the model proposes in its
+  report. It reaches the brief only when a human who may edit the brief saves it, edited or
+  as-is; anyone else sees it as copyable text. Never written by the model directly.
+- **Follow-up run** — a new run a human starts from a finished run, seeded with only the
+  harness-built half of that run's report (the objects written, their status and links). No
+  model prose carries, and the seed reaches one run back only. The carried list only points at
+  objects; the run re-reads them before writing.
 - **Tier** — a verb's classification, declared by the pack that exposes it: 0 read, 1
   side-effecting reversible, 2 irreversible (publish, delete, send, pay, change settings). An
   unmapped verb is Tier 2. One declaration serves both gates: Agent Safety consumes the full
