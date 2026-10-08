@@ -248,7 +248,26 @@ final class MediaTest extends TestCase {
 			)
 		);
 		$this->grant( 'edit_post' );
+		$this->assertFalse(
+			(bool) $ability->check_permissions(
+				array(
+					'post_id'       => 6,
+					'attachment_id' => 5,
+				)
+			),
+			'editing the post is not enough: the user must be able to read the attachment'
+		);
+		$this->grant( 'edit_post', 'read_post' );
 		$this->assertTrue(
+			(bool) $ability->check_permissions(
+				array(
+					'post_id'       => 6,
+					'attachment_id' => 5,
+				)
+			)
+		);
+		$GLOBALS['senroflux_test_user_caps']['read_post:5'] = false;
+		$this->assertFalse(
 			(bool) $ability->check_permissions(
 				array(
 					'post_id'       => 6,
@@ -742,10 +761,25 @@ final class MediaTest extends TestCase {
 		$this->seedPost( 20 );
 		$this->seedPost( 21 );
 		$GLOBALS['senroflux_test_postmeta'][20]['_thumbnail_id'] = 9;
+		$this->grant( 'read_post' );
 
 		$result = $this->ability( 'senroflux/read-media' )->execute( array( 'attachment_id' => 9 ) );
 
 		$this->assertIsArray( $result );
+		$this->assertSame( array( 20 ), $result['featured_on'] );
+	}
+
+	public function test_read_media_hides_featured_posts_the_user_may_not_read(): void {
+		$this->seedAttachment( 9 );
+		$this->seedPost( 20 );
+		$this->seedPost( 21 );
+		$GLOBALS['senroflux_test_postmeta'][20]['_thumbnail_id'] = 9;
+		$GLOBALS['senroflux_test_postmeta'][21]['_thumbnail_id'] = 9;
+		$this->grant( 'read_post' );
+		$GLOBALS['senroflux_test_user_caps']['read_post:21'] = false;
+
+		$result = $this->ability( 'senroflux/read-media' )->execute( array( 'attachment_id' => 9 ) );
+
 		$this->assertSame( array( 20 ), $result['featured_on'] );
 	}
 

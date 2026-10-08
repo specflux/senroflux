@@ -571,7 +571,9 @@ final class Media {
 				'permission_callback' => static function ( $input = array() ) {
 					$input = is_array( $input ) ? $input : array();
 
-					return function_exists( 'current_user_can' ) && current_user_can( 'edit_post', (int) ( $input['post_id'] ?? 0 ) );
+					return function_exists( 'current_user_can' )
+						&& current_user_can( 'edit_post', (int) ( $input['post_id'] ?? 0 ) )
+						&& current_user_can( 'read_post', (int) ( $input['attachment_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -1770,10 +1772,14 @@ final class Media {
 			)
 		);
 
+		// Only posts this user may read: a draft or private post's id is not theirs to learn.
 		return array_values(
-			array_map(
-				static fn ( $post ): int => (int) $post->ID,
-				self::asAttachmentList( $posts )
+			array_filter(
+				array_map(
+					static fn ( $post ): int => (int) $post->ID,
+					self::asAttachmentList( $posts )
+				),
+				static fn ( int $post_id ): bool => current_user_can( 'read_post', $post_id )
 			)
 		);
 	}

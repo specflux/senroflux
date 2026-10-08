@@ -56,6 +56,7 @@ final class WrittenObjectsTest extends TestCase {
 		$GLOBALS['senroflux_test_ability_categories'] = array();
 		$GLOBALS['senroflux_test_user_caps']          = array(
 			'edit_post'         => true,
+			'read_post'         => true,
 			'upload_files'      => true,
 			'manage_categories' => true,
 			'assign_categories' => true,

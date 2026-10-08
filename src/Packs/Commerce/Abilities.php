@@ -230,7 +230,8 @@ final class Abilities {
 					$input = is_array( $input ) ? $input : array();
 
 					return function_exists( 'current_user_can' )
-						&& current_user_can( 'edit_post', (int) ( $input['product_id'] ?? 0 ) );
+						&& current_user_can( 'edit_post', (int) ( $input['product_id'] ?? 0 ) )
+						&& current_user_can( 'read_post', (int) ( $input['attachment_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -278,8 +279,7 @@ final class Abilities {
 				'permission_callback' => static function ( $input = array() ) {
 					unset( $input );
 
-					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
-					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+					return self::mayManageCoupon( 'create_posts', 'edit_shop_coupons' );
 				},
 				'meta'                => self::meta(
 					array(
@@ -317,10 +317,10 @@ final class Abilities {
 					return self::executeCouponEnable( is_array( $input ) ? $input : array() );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					unset( $input );
+					$input = is_array( $input ) ? $input : array();
 
-					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
-					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+					return self::mayManageCoupon( 'publish_posts', 'publish_shop_coupons' )
+						&& current_user_can( 'edit_post', (int) ( $input['coupon_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -1737,6 +1737,27 @@ final class Abilities {
 		}
 
 		return current_user_can( $create ) && current_user_can( $publish );
+	}
+
+	/**
+	 * Coupon gate: the store capability plus the `shop_coupon` post type's own
+	 * capability (`create_posts` to make one, `publish_posts` to enable one),
+	 * read from the type object with the WooCommerce default as fallback.
+	 */
+	private static function mayManageCoupon( string $type_cap, string $fallback ): bool {
+		if ( ! function_exists( 'current_user_can' ) || ! current_user_can( 'manage_woocommerce' ) ) { // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
+			return false;
+		}
+
+		$cap = $fallback;
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( 'shop_coupon' );
+			if ( is_object( $object ) && isset( $object->cap->$type_cap ) && is_string( $object->cap->$type_cap ) ) {
+				$cap = $object->cap->$type_cap;
+			}
+		}
+
+		return current_user_can( $cap ); // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a WooCommerce post type capability.
 	}
 
 	private static function postType( int $id ): string {
