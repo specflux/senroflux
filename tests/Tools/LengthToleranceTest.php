@@ -100,7 +100,7 @@ final class LengthToleranceTest extends TestCase {
 			if ( 'php' !== $file->getExtension() ) {
 				continue;
 			}
-			$this->assertStringNotContainsString( "'maxLength'", (string) file_get_contents( $file->getPathname() ), $file->getPathname() );
+			$this->assertStringNotContainsString( "'maxLength'", (string) file_get_contents( $file->getPathname() ), $file->getPathname() ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local source file.
 		}
 	}
 

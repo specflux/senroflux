@@ -50,7 +50,7 @@ final class VocabularyTest extends TestCase {
 		$files = glob( dirname( __DIR__, 3 ) . '/src/Packs/*/patterns/*.html' );
 		$this->assertNotEmpty( $files );
 		foreach ( $files as $file ) {
-			$this->assertDoesNotMatchRegularExpression( '#https?://#i', (string) file_get_contents( $file ), basename( $file ) );
+			$this->assertDoesNotMatchRegularExpression( '#https?://#i', (string) file_get_contents( $file ), basename( $file ) ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a local pattern file.
 		}
 		$this->assertFileExists( dirname( __DIR__, 3 ) . '/images/placeholder.jpg' );
 	}
