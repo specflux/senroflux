@@ -85,8 +85,7 @@ final class SuggestBriefTool {
 			'properties'           => array(
 				'text' => array(
 					'type'        => 'string',
-					'maxLength'   => self::MAX_TEXT_CHARS,
-					'description' => __( 'A short addition to suggest for the site brief.', 'senroflux' ),
+					'description' => __( 'A short addition to suggest for the site brief.', 'senroflux' ) . ' ' . PlanTools::lengthNote( self::MAX_TEXT_CHARS ),
 				),
 			),
 			'required'             => array( 'text' ),

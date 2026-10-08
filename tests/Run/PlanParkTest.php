@@ -603,18 +603,17 @@ final class PlanParkTest extends TestCase {
 		);
 	}
 
-	public function test_propose_plan_declaration_schema_caps_goal_and_step_text_length(): void {
+	public function test_propose_plan_declaration_states_the_text_limits_without_a_schema_maxlength(): void {
 		$declaration = PlanTools::proposePlanDeclaration();
 		$schema      = $declaration instanceof FunctionDeclaration
 			? $declaration->getParameters()
 			: $declaration['inputSchema'];
 		$schema      = (array) $schema;
 
-		$this->assertSame( PlanTools::MAX_GOAL_CHARS, $schema['properties']['goal']['maxLength'] ?? null );
-		$this->assertSame(
-			PlanTools::MAX_STEP_TEXT_CHARS,
-			$schema['properties']['steps']['items']['properties']['text']['maxLength'] ?? null
-		);
+		$this->assertArrayNotHasKey( 'maxLength', $schema['properties']['goal'] );
+		$this->assertArrayNotHasKey( 'maxLength', $schema['properties']['steps']['items']['properties']['text'] );
+		$this->assertStringContainsString( 'under ' . PlanTools::MAX_GOAL_CHARS . ' characters', $schema['properties']['goal']['description'] );
+		$this->assertStringContainsString( 'never cut it', $schema['properties']['steps']['items']['properties']['text']['description'] );
 	}
 
 	public function test_invalid_payload_too_many_steps_is_invalid_plan(): void {

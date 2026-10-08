@@ -54,8 +54,10 @@ final class PlanTools {
 	public const MAX_STEP_OBJECTS    = 25;
 
 	/**
-	 * The character caps above are what the model is told (schema maxLength,
-	 * refusals); enforcement sits this far above them. A model cannot count
+	 * The character caps above are what the model is told (the field
+	 * descriptions and the refusals — never a schema maxLength, which a
+	 * provider enforcing it mid-generation turns into text cut off mid-word);
+	 * enforcement sits this far above them. A model cannot count
 	 * characters, and live runs resubmitted near misses (207, 203, 203 against
 	 * 200) for a full turn each.
 	 */
@@ -238,8 +240,7 @@ final class PlanTools {
 			'properties'           => array(
 				'goal'         => array(
 					'type'        => 'string',
-					'maxLength'   => self::MAX_GOAL_CHARS,
-					'description' => __( 'The goal this plan proposes to achieve.', 'senroflux' ),
+					'description' => __( 'The goal this plan proposes to achieve.', 'senroflux' ) . ' ' . self::lengthNote( self::MAX_GOAL_CHARS ),
 				),
 				'steps'        => array(
 					'type'        => 'array',
@@ -249,7 +250,6 @@ final class PlanTools {
 						'properties'           => array(
 							'text'    => array(
 								'type'        => 'string',
-								'maxLength'   => self::MAX_STEP_TEXT_CHARS,
 								// 0.3 quality fix 4 (page brief): a step that
 								// writes a page must set out the brief the
 								// write tools expect it to follow — see their
@@ -264,7 +264,7 @@ final class PlanTools {
 								// real work). Naming every media verb the
 								// step needs, up front, is the one edit that
 								// avoids the whole retry loop.
-								'description' => $step_text_description,
+								'description' => $step_text_description . ' ' . self::lengthNote( self::MAX_STEP_TEXT_CHARS ),
 							),
 							'verbs'   => array(
 								'type'        => 'array',
@@ -652,8 +652,7 @@ final class PlanTools {
 					),
 					'title' => array(
 						'type'        => 'string',
-						'maxLength'   => self::MAX_STEP_TEXT_CHARS,
-						'description' => __( 'Its title, if you know it.', 'senroflux' ),
+						'description' => __( 'Its title, if you know it.', 'senroflux' ) . ' ' . self::lengthNote( self::MAX_STEP_TEXT_CHARS ),
 					),
 				),
 				'required'             => array( 'id' ),
@@ -798,6 +797,19 @@ final class PlanTools {
 			);
 
 		return new WP_Error( self::ERROR_PAGE_NEEDS_IMAGE, $message );
+	}
+
+	/**
+	 * The model-facing statement of a text cap. The cap is NOT a schema
+	 * `maxLength`: providers that enforce that keyword while generating stop
+	 * the model at the cap, cutting a sentence mid-word. The server refuses
+	 * over-cap text instead ({@see overCap()}) and the model rephrases.
+	 *
+	 * @param int $cap Character cap.
+	 */
+	public static function lengthNote( int $cap ): string {
+		/* translators: %d: maximum number of characters. */
+		return sprintf( __( 'Keep it under %d characters; longer text is refused and you must rephrase, never cut it.', 'senroflux' ), $cap );
 	}
 
 	/**

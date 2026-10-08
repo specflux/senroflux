@@ -106,8 +106,7 @@ final class HarnessTools {
 			'properties'           => array(
 				'text'        => array(
 					'type'        => 'string',
-					'maxLength'   => self::MAX_TEXT_CHARS,
-					'description' => __( 'The clarifying question to the user.', 'senroflux' ),
+					'description' => __( 'The clarifying question to the user.', 'senroflux' ) . ' ' . PlanTools::lengthNote( self::MAX_TEXT_CHARS ),
 				),
 				'choices'     => array(
 					'type'        => 'array',
