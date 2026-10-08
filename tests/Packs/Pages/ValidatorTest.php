@@ -317,8 +317,8 @@ HTML;
 	public function test_a_cover_hero_with_a_focal_point_is_accepted(): void {
 		// core/cover's own save() output for a chosen focal point.
 		$content = str_replace(
-			array( '"url":"https://example.test/photo.jpg",', 'data-object-fit="cover"' ),
-			array( '"focalPoint":{"x":0.5,"y":0.3},"url":"https://example.test/photo.jpg",', 'style="object-position:50% 30%" data-object-fit="cover" data-object-position="50% 30%"' ),
+			array( '"url":"' . SENROFLUX_URL . 'images/placeholder.jpg",', 'data-object-fit="cover"' ),
+			array( '"focalPoint":{"x":0.5,"y":0.3},"url":"' . SENROFLUX_URL . 'images/placeholder.jpg",', 'style="object-position:50% 30%" data-object-fit="cover" data-object-position="50% 30%"' ),
 			$this->page( 'cover-hero', 'text-section' )
 		);
 		$this->assertStringContainsString( 'data-object-position', $content );

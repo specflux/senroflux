@@ -41,6 +41,30 @@ final class VocabularyTest extends TestCase {
 		$GLOBALS['senroflux_test_template_dir']   = dirname( __DIR__, 2 ) . '/ThemePatterns';
 	}
 
+	/**
+	 * wp.org review (0.3.2): a shipped file may not reference a remote URL.
+	 * The image patterns carry a token that resolves to the bundled local
+	 * placeholder at load time.
+	 */
+	public function test_no_shipped_pattern_file_contains_a_remote_url(): void {
+		$files = glob( dirname( __DIR__, 3 ) . '/src/Packs/*/patterns/*.html' );
+		$this->assertNotEmpty( $files );
+		foreach ( $files as $file ) {
+			$this->assertDoesNotMatchRegularExpression( '#https?://#i', (string) file_get_contents( $file ), basename( $file ) );
+		}
+		$this->assertFileExists( dirname( __DIR__, 3 ) . '/images/placeholder.jpg' );
+	}
+
+	public function test_image_patterns_resolve_the_placeholder_to_the_local_plugin_file(): void {
+		foreach ( ( new Vocabulary() )->all() as $pattern ) {
+			if ( ! in_array( $pattern['name'], array( 'senroflux/cover-hero', 'senroflux/media-text' ), true ) ) {
+				continue;
+			}
+			$this->assertStringNotContainsString( '{{', $pattern['markup'] );
+			$this->assertStringContainsString( SENROFLUX_URL . 'images/placeholder.jpg', $pattern['markup'] );
+		}
+	}
+
 	/** 0.3 quality fix: nine, since `cover-hero`/`media-text` joined the curated set. */
 	public function test_all_returns_seven_patterns(): void {
 		$this->assertCount( 9, ( new Vocabulary() )->all() );
