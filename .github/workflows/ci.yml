@@ -51,7 +51,7 @@ jobs:
       # the local checkout at the time this workflow was written.
       - uses: actions/checkout@v4
         with:
-          repository: stephen1204paul/agent-tollgate
+          repository: stephen1204paul/senrogate
           ref: main
           path: agent-safety
 
@@ -175,7 +175,7 @@ jobs:
 
       - uses: actions/checkout@v4
         with:
-          repository: stephen1204paul/agent-tollgate
+          repository: stephen1204paul/senrogate
           ref: main
           path: agent-safety
 

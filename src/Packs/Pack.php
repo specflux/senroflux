@@ -873,7 +873,7 @@ abstract class Pack {
 
 	/** The `<pack>/agent-safety-required` setup check (built-in mode, {@see requiresAgentSafety()}). */
 	private function agentSafetyRequiredCheck(): SetupCheck {
-		$message = __( 'This pack requires the Agent Tollgate plugin to be active.', 'senroflux' );
+		$message = __( 'This pack requires the SenroGate plugin to be active.', 'senroflux' );
 
 		return new SetupCheck(
 			$this->name() . '/agent-safety-required',

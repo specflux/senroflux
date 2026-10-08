@@ -27,14 +27,14 @@ const { assertNoSeriousA11y } = require( '../support/a11y' );
  * ran without parking (Tier 0, or pre-approved under a grant) now has its
  * tier written where the screen can read it, so the ledger row shows one.
  */
-test.describe( 'S23: ledger rows carry a tier badge in Agent Tollgate mode', () => {
+test.describe( 'S23: ledger rows carry a tier badge in SenroGate mode', () => {
 	test.beforeEach( () => {
 		resetRuns();
 		setScript( fullTour() );
 	} );
 
 	test(
-		'an expanded ledger row shows its tier in Agent Tollgate mode',
+		'an expanded ledger row shows its tier in SenroGate mode',
 		async ( { page } ) => {
 			await gotoRuns( page );
 			await waitLoaded( page );

@@ -52,7 +52,7 @@ function EditLink( { object } ) {
 /** The "Built-in approvals" / "Agent Safety" half of the gate-mode line. */
 function gateModeLabel( gateMode ) {
 	return 'agent_safety' === gateMode
-		? __( 'Agent Tollgate', 'senroflux' )
+		? __( 'SenroGate', 'senroflux' )
 		: __( 'Built-in approvals', 'senroflux' );
 }
 

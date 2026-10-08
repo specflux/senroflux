@@ -145,7 +145,7 @@ final class PackRegistry {
 					esc_html(
 						sprintf(
 							/* translators: 1: pack name, 2: ungoverned namespace */
-							__( 'The pack "%1$s" was refused: abilityNamespaces() lists "%2$s" before its last entry, but Agent Tollgate does not govern it and the pack does not declare it in governedNamespaces().', 'senroflux' ),
+							__( 'The pack "%1$s" was refused: abilityNamespaces() lists "%2$s" before its last entry, but SenroGate does not govern it and the pack does not declare it in governedNamespaces().', 'senroflux' ),
 							$pack->name(),
 							$namespace
 						)

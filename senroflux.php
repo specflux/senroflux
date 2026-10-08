@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       SenroFlux
  * Plugin URI:        https://github.com/specflux/senroflux
- * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, governed by Agent Tollgate when active or a built-in approval gate otherwise.
+ * Description:       Resumable, browser-driven multi-step agent runs inside the logged-in WordPress session — Abilities as tools, governed by SenroGate when active or a built-in approval gate otherwise.
  * Version:           0.3.2
  * Author:            Stephen Paul Samynathan
  * Author URI:        https://www.specflux.com/author/stephen/
