@@ -259,3 +259,47 @@ describe( 'a site plan card lists the pages already on the site', () => {
 		expect( screen.queryByRole( 'heading', { name: 'Pages on the site now' } ) ).toBeNull();
 	} );
 } );
+
+describe( 'a plan step shows one plain-language tier badge and names its actions', () => {
+	const plan = {
+		steps: [
+			{
+				text: 'Build the page',
+				verbs: [ 'pages/create-post', 'pages/update-post', 'pages/media-search', 'pages/update-post' ],
+				tier: 1,
+			},
+			{ text: 'Check what is there', verbs: [ 'senroflux/read-content' ], tier: 0 },
+		],
+	};
+
+	it( 'renders exactly one badge per step, not one per verb', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const badges = screen.getAllByTestId( 'tier-badge' );
+		expect( badges ).toHaveLength( 2 );
+		expect( badges[ 0 ] ).toHaveTextContent( 'Makes changes' );
+		expect( badges[ 0 ] ).toHaveAttribute( 'title', 'Tier 1' );
+		expect( badges[ 1 ] ).toHaveTextContent( 'Read only' );
+	} );
+
+	it( 'lists the step actions in words, once each', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ plan } /> );
+
+		const lists = screen.getAllByTestId( 'plan-step-actions' );
+		expect( lists[ 0 ] ).toHaveTextContent( 'Uses: Create post, Update post, Media search' );
+		expect( lists[ 1 ] ).toHaveTextContent( 'Uses: Read content' );
+	} );
+
+	it( 'shows no badge in built-in mode but still names the actions', () => {
+		render( <ParkCard kind="plan" gateMode="built_in" payload={ plan } /> );
+
+		expect( screen.queryByTestId( 'tier-badge' ) ).toBeNull();
+		expect( screen.getAllByTestId( 'plan-step-actions' ) ).toHaveLength( 2 );
+	} );
+
+	it( 'shows no action line for a step without verbs', () => {
+		render( <ParkCard kind="plan" gateMode="agent_safety" payload={ { steps: [ { text: 'Just words', tier: 1 } ] } } /> );
+
+		expect( screen.queryByTestId( 'plan-step-actions' ) ).toBeNull();
+	} );
+} );

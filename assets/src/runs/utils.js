@@ -358,6 +358,27 @@ export function stepLabel( step, fallbackLabel ) {
 }
 
 /**
+ * A site-owner-readable name for a plan step's verb id: the ability slug with
+ * dashes/underscores turned into spaces, Sentence case ("pages/create-post"
+ * -> "Create post"). Like `stepLabel()`, derived from the id; the namespace
+ * is dropped, and an id with no usable slug comes back as-is.
+ *
+ * @param {string} verb Raw verb id (`ns/slug`, `wpab__ns__slug` or a bare slug).
+ * @return {string} Readable name.
+ */
+export function humanizeVerb( verb ) {
+	if ( 'string' !== typeof verb || '' === verb ) {
+		return '';
+	}
+	const slug = verb.split( /\/|__/ ).pop();
+	const words = ( slug || '' ).replace( /[-_]+/g, ' ' ).trim();
+	if ( ! words ) {
+		return verb;
+	}
+	return words.charAt( 0 ).toUpperCase() + words.slice( 1 );
+}
+
+/**
  * The distinct labels of a ledger group's calls, in first-seen order, so a
  * collapsed group's summary never hides a write between reads.
  *

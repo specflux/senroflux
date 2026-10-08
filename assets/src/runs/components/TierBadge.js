@@ -44,16 +44,21 @@ export default function TierBadge( { gateMode, tier: rawTier } ) {
 	}
 
 	const className = `senroflux-tier senroflux-tier-${ tier }`;
+	// Plain language for a site owner; the tier number stays one hover away.
 	const label =
-		2 === tier
-			? __( 'Tier 2 · irreversible', 'senroflux' )
+		0 === tier
+			? __( 'Read only', 'senroflux' )
 			: 1 === tier
-			? __( 'Tier 1', 'senroflux' )
+			? __( 'Makes changes', 'senroflux' )
+			: 2 === tier
+			? __( 'Needs approval · can\'t be undone', 'senroflux' )
 			: /* translators: %d: tier number. */
 			  sprintf( __( 'Tier %d', 'senroflux' ), tier );
+	/* translators: %d: tier number. */
+	const title = sprintf( __( 'Tier %d', 'senroflux' ), tier );
 
 	return (
-		<span className={ className } data-testid="tier-badge">
+		<span className={ className } data-testid="tier-badge" title={ title }>
 			{ label }
 		</span>
 	);

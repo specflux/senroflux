@@ -28,12 +28,20 @@ describe( 'the tier badge appears in Agent Tollgate mode only', () => {
 	 */
 	it( 'renders the badge for a STRING tier, as a parked approval sends it', () => {
 		render( <TierBadge gateMode="agent_safety" tier="1" /> );
-		expect( screen.getByTestId( 'tier-badge' ) ).toHaveTextContent( 'Tier 1' );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveTextContent( 'Makes changes' );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveAttribute( 'title', 'Tier 1' );
 	} );
 
-	it( 'renders the irreversible label for a string Tier 2', () => {
+	it( 'renders the needs-approval label for a string Tier 2', () => {
 		render( <TierBadge gateMode="agent_safety" tier="2" /> );
-		expect( screen.getByTestId( 'tier-badge' ) ).toHaveTextContent( 'Tier 2 · irreversible' );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveTextContent( "Needs approval · can't be undone" );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveAttribute( 'title', 'Tier 2' );
+	} );
+
+	it( 'renders a read-only label for Tier 0', () => {
+		render( <TierBadge gateMode="agent_safety" tier={ 0 } /> );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveTextContent( 'Read only' );
+		expect( screen.getByTestId( 'tier-badge' ) ).toHaveAttribute( 'title', 'Tier 0' );
 	} );
 
 	it( 'still renders nothing for a string that is not an integer tier', () => {

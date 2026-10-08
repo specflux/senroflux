@@ -55,7 +55,7 @@ test.describe( 'S23: ledger rows carry a tier badge in Agent Tollgate mode', () 
 			await ledgerGroup.locator( 'summary' ).click();
 			const badge = ledgerGroup.locator( '[data-testid="tier-badge"]' ).first();
 			await expect( badge ).toBeVisible( { timeout: 5000 } );
-			await expect( badge ).toContainText( 'Tier 0' );
+			await expect( badge ).toContainText( 'Read only' );
 		}
 	);
 } );

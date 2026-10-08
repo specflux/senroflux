@@ -45,7 +45,7 @@ test.describe( 'S10/S12 full run tour (Agent Tollgate mode)', () => {
 		// badge happens to be first in DOM order.
 		const approvalTierBadge = page.locator( '.senroflux-park-card [data-testid="tier-badge"]' ).first();
 		await expect( approvalTierBadge ).toBeVisible();
-		await expect( approvalTierBadge ).toContainText( 'Tier 1' );
+		await expect( approvalTierBadge ).toContainText( 'Makes changes' );
 		await assertNoSeriousA11y( page, 'approval park' );
 		await approveCall( page );
 
