@@ -183,10 +183,14 @@ export function stepText( step ) {
 	if ( ! step.message || 'object' !== typeof step.message || ! Array.isArray( step.message.parts ) ) {
 		return '';
 	}
-	return step.message.parts
+	const text = step.message.parts
 		.filter( ( part ) => part && 'string' === typeof part.text )
 		.map( ( part ) => part.text )
 		.join( '\n' );
+	// A whitespace-only turn (a model that pads a tool call with "\n") carries
+	// no prose: report '' so it renders no empty bubble and stays transparent
+	// to ledger grouping.
+	return '' === text.trim() ? '' : text;
 }
 
 /** The verb/ability id carried by a step, whichever shape produced it. */
