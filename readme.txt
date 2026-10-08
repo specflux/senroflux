@@ -4,7 +4,7 @@ Tags: ai, agents, automation, safety, approvals
 Requires at least: 7.0
 Tested up to: 7.1
 Requires PHP: 8.1
-Stable tag: 0.3.1
+Stable tag: 0.3.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -235,6 +235,16 @@ the public repository, https://github.com/specflux/senroflux. To rebuild it:
 
 == Changelog ==
 
+= 0.3.2 =
+
+Fixed:
+
+* The bundled image patterns no longer reference a remote placeholder image; they use a small image shipped with the plugin.
+* Media search and the missing-alt-text list now need the upload_files capability and only show images the current user may read or edit. Saving a store report, setting a featured or product image, and enabling a coupon check the matching post type and attachment capabilities too.
+* A question the assistant asks is no longer cut off mid-word at 300 characters.
+* A plan step now shows one plain-language badge (Read only, Makes changes, Needs approval) with the actions it will use, instead of the same badge once per action.
+* A blank assistant turn no longer shows as an empty chat bubble, and a run still working in the background no longer greys out the Accept and Approve buttons on another run.
+
 = 0.3.1 =
 
 Fixed:
@@ -319,6 +329,9 @@ New:
 * Initial scaffold: hard-dependency gate against Agent Safety.
 
 == Upgrade Notice ==
+
+= 0.3.2 =
+Tightens permission checks on media, store report and coupon abilities; fixes truncated questions and plan card badges.
 
 = 0.3.1 =
 Sanitizes the JSON payloads of the admin-ajax endpoints; fixes the Openverse terms link.
