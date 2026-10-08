@@ -130,12 +130,55 @@ final class MediaTest extends TestCase {
 		}
 	}
 
-	public function test_media_search_permission_requires_edit_posts(): void {
+	public function test_media_search_and_list_missing_alt_permission_require_upload_files(): void {
 		$ability = $this->ability( 'senroflux/media-search' );
-
-		$this->assertFalse( (bool) $ability->check_permissions( array( 'query' => 'x' ) ) );
+		$missing = $this->ability( 'senroflux/list-missing-alt' );
 		$this->grant( 'edit_posts' );
+		$this->assertFalse( (bool) $ability->check_permissions( array( 'query' => 'x' ) ), 'edit_posts (a Contributor) does not open the library' );
+		$this->assertFalse( (bool) $missing->check_permissions( array() ) );
+		$this->grant( 'upload_files' );
+		$this->assertTrue( (bool) $missing->check_permissions( array() ) );
 		$this->assertTrue( (bool) $ability->check_permissions( array( 'query' => 'x' ) ) );
+		$this->grant();
+		$this->assertFalse( (bool) $ability->check_permissions( array( 'query' => 'x' ) ) );
+	}
+
+	public function test_media_search_returns_only_attachments_the_user_may_read(): void {
+		$this->seedAttachment( 501 );
+		$this->seedAttachment( 502 );
+		$this->grant( 'upload_files', 'read_post' );
+		$GLOBALS['senroflux_test_user_caps']['read_post:502'] = false;
+
+		$result = $this->ability( 'senroflux/media-search' )->execute( array( 'query' => 'image' ) );
+
+		$this->assertSame( array( 501 ), array_column( $result['results'], 'id' ) );
+	}
+
+	public function test_already_used_flag_ignores_pages_the_user_may_not_read(): void {
+		$this->seedAttachment( 501 );
+		$page                                 = new \stdClass();
+		$page->ID                             = 900;
+		$page->post_type                      = 'page';
+		$page->post_status                    = 'private';
+		$page->post_content                   = '<!-- wp:image {"alt":"x"} --><figure class="wp-block-image"><img src="https://example.test/wp-content/uploads/501.jpg" alt="x"/></figure><!-- /wp:image -->';
+		$GLOBALS['senroflux_test_posts'][900] = $page;
+		$this->grant( 'upload_files', 'read_post' );
+		$GLOBALS['senroflux_test_user_caps']['read_post:900'] = false;
+
+		$result = $this->ability( 'senroflux/media-search' )->execute( array( 'query' => 'image' ) );
+
+		$this->assertFalse( $result['results'][0]['already_used'] );
+	}
+
+	public function test_list_missing_alt_lists_only_attachments_the_user_may_edit(): void {
+		$this->seedAttachment( 1 );
+		$this->seedAttachment( 2 );
+		$this->grant( 'upload_files', 'edit_post' );
+		$GLOBALS['senroflux_test_user_caps']['edit_post:2'] = false;
+
+		$result = $this->ability( 'senroflux/list-missing-alt' )->execute( array() );
+
+		$this->assertSame( array( 1 ), array_column( $result['attachments'], 'id' ) );
 	}
 
 	/**
@@ -154,7 +197,7 @@ final class MediaTest extends TestCase {
 		$page->post_content                   = '<!-- wp:image {"alt":"x"} --><figure class="wp-block-image"><img src="https://example.test/wp-content/uploads/501.jpg" alt="x"/></figure><!-- /wp:image -->';
 		$GLOBALS['senroflux_test_posts'][900] = $page;
 
-		$this->grant( 'edit_posts' );
+		$this->grant( 'upload_files', 'read_post' );
 		$result = $this->ability( 'senroflux/media-search' )->execute( array( 'query' => 'image' ) );
 
 		$this->assertIsArray( $result );
@@ -414,6 +457,7 @@ final class MediaTest extends TestCase {
 		// A few WITH alt text must be excluded, not just truncated off the end.
 		$this->seedAttachment( 31, 'already has alt' );
 
+		$this->grant( 'upload_files', 'edit_post' );
 		$result = $this->ability( 'senroflux/list-missing-alt' )->execute( array() );
 
 		$this->assertIsArray( $result );
