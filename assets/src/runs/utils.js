@@ -183,10 +183,14 @@ export function stepText( step ) {
 	if ( ! step.message || 'object' !== typeof step.message || ! Array.isArray( step.message.parts ) ) {
 		return '';
 	}
-	return step.message.parts
+	const text = step.message.parts
 		.filter( ( part ) => part && 'string' === typeof part.text )
 		.map( ( part ) => part.text )
 		.join( '\n' );
+	// A whitespace-only turn (a model that pads a tool call with "\n") carries
+	// no prose: report '' so it renders no empty bubble and stays transparent
+	// to ledger grouping.
+	return '' === text.trim() ? '' : text;
 }
 
 /** The verb/ability id carried by a step, whichever shape produced it. */
@@ -351,6 +355,27 @@ export function stepLabel( step, fallbackLabel ) {
 		return verb;
 	}
 	const words = slug.replace( /[-_]+/g, ' ' ).trim();
+	if ( ! words ) {
+		return verb;
+	}
+	return words.charAt( 0 ).toUpperCase() + words.slice( 1 );
+}
+
+/**
+ * A site-owner-readable name for a plan step's verb id: the ability slug with
+ * dashes/underscores turned into spaces, Sentence case ("pages/create-post"
+ * -> "Create post"). Like `stepLabel()`, derived from the id; the namespace
+ * is dropped, and an id with no usable slug comes back as-is.
+ *
+ * @param {string} verb Raw verb id (`ns/slug`, `wpab__ns__slug` or a bare slug).
+ * @return {string} Readable name.
+ */
+export function humanizeVerb( verb ) {
+	if ( 'string' !== typeof verb || '' === verb ) {
+		return '';
+	}
+	const slug = verb.split( /\/|__/ ).pop();
+	const words = ( slug || '' ).replace( /[-_]+/g, ' ' ).trim();
 	if ( ! words ) {
 		return verb;
 	}

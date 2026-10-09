@@ -126,3 +126,34 @@ describe( 'a failed run says why (empty-model-turn shakedown)', () => {
 		expect( screen.queryByRole( 'alert' ) ).not.toBeInTheDocument();
 	} );
 } );
+
+describe( 'no empty bubble between ledger groups', () => {
+	const toolResult = ( seq ) => ( {
+		seq,
+		kind: 'tool_result',
+		status: 'ok',
+		tool_name: 'senroflux__ask-user',
+		message: { verb: 'senroflux/ask-user', response: { answer: 'x' } },
+	} );
+	const model = ( seq, text ) => ( { seq, kind: 'model', status: 'ok', message: { parts: [ { text } ] } } );
+
+	it.each( [ [ 'whitespace', ' \n ' ], [ 'empty', '' ] ] )( 'renders no bubble for a %s-only model step', ( _label, text ) => {
+		const { container } = render(
+			<Chat run={ { ...baseRun, status: 'awaiting_plan' } } steps={ [ toolResult( 1 ), model( 2, text ), toolResult( 3 ) ] } />
+		);
+
+		// Only the goal bubble: the blank model step is transparent, so the two
+		// one-action ledger groups also merge into a single group.
+		expect( container.querySelectorAll( '.senroflux-chat-bubble-bot' ) ).toHaveLength( 0 );
+		expect( container.querySelectorAll( '.senroflux-ledger-group' ) ).toHaveLength( 1 );
+	} );
+
+	it( 'still renders a bubble for real model prose', () => {
+		const { container } = render(
+			<Chat run={ { ...baseRun, status: 'awaiting_plan' } } steps={ [ toolResult( 1 ), model( 2, 'Thinking it over.' ), toolResult( 3 ) ] } />
+		);
+
+		expect( container.querySelectorAll( '.senroflux-chat-bubble-bot' ) ).toHaveLength( 1 );
+		expect( container.querySelectorAll( '.senroflux-ledger-group' ) ).toHaveLength( 2 );
+	} );
+} );

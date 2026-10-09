@@ -474,14 +474,15 @@ final class AskUserParkTest extends TestCase {
 		$this->assertStringContainsString( '"text" is 376 characters; the limit is 300.', $responded['response']['message'] ?? '' );
 	}
 
-	public function test_ask_user_declaration_schema_caps_text_length(): void {
+	public function test_ask_user_declaration_states_the_text_limit_without_a_schema_maxlength(): void {
 		$declaration = HarnessTools::askUserDeclaration();
 		$schema      = $declaration instanceof FunctionDeclaration
 			? $declaration->getParameters()
 			: $declaration['inputSchema'];
 		$schema      = (array) $schema;
 
-		$this->assertSame( HarnessTools::MAX_TEXT_CHARS, $schema['properties']['text']['maxLength'] ?? null );
+		$this->assertArrayNotHasKey( 'maxLength', $schema['properties']['text'] );
+		$this->assertStringContainsString( 'under ' . HarnessTools::MAX_TEXT_CHARS . ' characters', $schema['properties']['text']['description'] );
 	}
 
 	public function test_invalid_payload_counts_as_a_tool_call_for_the_budget(): void {

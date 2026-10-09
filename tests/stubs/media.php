@@ -394,3 +394,14 @@ if ( ! function_exists( 'get_terms' ) ) {
 		return isset( $args['number'] ) ? array_slice( $terms, 0, (int) $args['number'] ) : $terms;
 	}
 }
+
+if ( ! function_exists( 'get_post_type_object' ) ) {
+	/**
+	 * Test knob: $GLOBALS['senroflux_test_post_types'][$type] = a `cap` object
+	 * (create_posts, publish_posts). Unset means "unknown type" (null), which
+	 * callers answer with the core defaults.
+	 */
+	function get_post_type_object( string $post_type ): ?object {
+		return $GLOBALS['senroflux_test_post_types'][ $post_type ] ?? null;
+	}
+}

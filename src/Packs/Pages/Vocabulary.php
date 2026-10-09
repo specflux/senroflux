@@ -774,10 +774,15 @@ class Vocabulary implements ContentVocabulary, ThemePatternSource {
 	 * A skeleton's markup from patterns/<slug>.html, byte for byte (the files
 	 * carry no trailing newline).
 	 *
+	 * An image pattern's sample photo is the token `{{senroflux_placeholder_image}}`
+	 * in the file (no remote URL ships), swapped here for the bundled local
+	 * placeholder.
+	 *
 	 * @param string $slug A literal pattern slug.
 	 * @return string
 	 */
 	private function markup( string $slug ): string {
-		return (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
+		$markup = (string) file_get_contents( __DIR__ . '/patterns/' . $slug . '.html' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- a bundled local file, not a remote URL.
+		return str_replace( '{{senroflux_placeholder_image}}', SENROFLUX_URL . 'images/placeholder.jpg', $markup );
 	}
 }

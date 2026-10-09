@@ -1,4 +1,4 @@
-import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel, stepResult, ledgerLabels } from '../utils';
+import { RUN_TABS, runsForTab, tabCounts, groupSteps, planProgress, stepLabel, stepResult, ledgerLabels, humanizeVerb } from '../utils';
 
 // Every RunStatus case (src/Run/RunStatus.php), kept in sync by hand: a
 // future status added there and not here would silently fall through the
@@ -239,5 +239,17 @@ describe( 'ledgerLabels', () => {
 			step: { tool_name: `wpab__senroflux__${ slug }` },
 		} ) );
 		expect( ledgerLabels( calls, 'Tool call' ) ).toEqual( [ 'Read content', 'Create post' ] );
+	} );
+} );
+
+describe( 'humanizeVerb', () => {
+	it.each( [
+		[ 'create-post', 'Create post' ],
+		[ 'pages/create-post', 'Create post' ],
+		[ 'wpab__senroflux__read-content', 'Read content' ],
+		[ 'senroflux/update_alt', 'Update alt' ],
+		[ '', '' ],
+	] )( '%s -> %s', ( verb, expected ) => {
+		expect( humanizeVerb( verb ) ).toBe( expected );
 	} );
 } );

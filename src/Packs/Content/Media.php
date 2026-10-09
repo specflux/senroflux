@@ -364,7 +364,7 @@ final class Media {
 				'permission_callback' => static function ( $input = array() ) {
 					unset( $input );
 
-					return function_exists( 'current_user_can' ) && current_user_can( 'edit_posts' );
+					return self::mayBrowseMediaLibrary();
 				},
 				'meta'                => self::meta(
 					array(
@@ -416,7 +416,7 @@ final class Media {
 				'permission_callback' => static function ( $input = array() ) {
 					unset( $input );
 
-					return function_exists( 'current_user_can' ) && current_user_can( 'edit_posts' );
+					return self::mayBrowseMediaLibrary();
 				},
 				'meta'                => self::meta(
 					array(
@@ -571,7 +571,9 @@ final class Media {
 				'permission_callback' => static function ( $input = array() ) {
 					$input = is_array( $input ) ? $input : array();
 
-					return function_exists( 'current_user_can' ) && current_user_can( 'edit_post', (int) ( $input['post_id'] ?? 0 ) );
+					return function_exists( 'current_user_can' )
+						&& current_user_can( 'edit_post', (int) ( $input['post_id'] ?? 0 ) )
+						&& current_user_can( 'read_post', (int) ( $input['attachment_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -843,8 +845,9 @@ final class Media {
 	 * Read-only stock-photo search — the escape hatch this repo's build plan
 	 * added between `generate-image` (spends the `images` budget) and giving
 	 * up: media library -> generate-image (budget allowing) -> THIS ->
-	 * publish with `no_image_reason`. Same permission as `media-search`
-	 * (`edit_posts`): it never writes anything.
+	 * publish with `no_image_reason`. Needs `edit_posts` only: it reads a
+	 * public stock API and never touches the library or writes anything (the
+	 * import that follows needs `upload_files`).
 	 */
 	private static function registerStockImageSearch(): void {
 		wp_register_ability(
@@ -996,7 +999,10 @@ final class Media {
 		$used    = self::usedInPageContent();
 		$results = array();
 		foreach ( $attachments as $attachment ) {
-			$id        = (int) $attachment->ID;
+			$id = (int) $attachment->ID;
+			if ( ! current_user_can( 'read_post', $id ) ) {
+				continue;
+			}
 			$url       = self::attachmentUrl( $id );
 			$results[] = array(
 				'id'           => $id,
@@ -1043,7 +1049,9 @@ final class Media {
 				)
 			) as $page
 		) {
-			if ( ! is_object( $page ) ) {
+			// A draft or private page the user cannot read must not leak
+			// through the `already_used` flag.
+			if ( ! is_object( $page ) || ! current_user_can( 'read_post', (int) $page->ID ) ) {
 				continue;
 			}
 			foreach ( ContentImages::urls( (string) $page->post_content ) as $url ) {
@@ -1076,7 +1084,8 @@ final class Media {
 		$missing = array();
 		foreach ( $attachments as $attachment ) {
 			$id = (int) $attachment->ID;
-			if ( '' !== self::altText( $id ) ) {
+			// It exists to fix alt text, so list only what this user may edit.
+			if ( ! current_user_can( 'edit_post', $id ) || '' !== self::altText( $id ) ) {
 				continue;
 			}
 			$missing[] = array(
@@ -1763,10 +1772,14 @@ final class Media {
 			)
 		);
 
+		// Only posts this user may read: a draft or private post's id is not theirs to learn.
 		return array_values(
-			array_map(
-				static fn ( $post ): int => (int) $post->ID,
-				self::asAttachmentList( $posts )
+			array_filter(
+				array_map(
+					static fn ( $post ): int => (int) $post->ID,
+					self::asAttachmentList( $posts )
+				),
+				static fn ( int $post_id ): bool => current_user_can( 'read_post', $post_id )
 			)
 		);
 	}
@@ -1948,6 +1961,17 @@ final class Media {
 	// ------------------------------------------------------------------
 	// Permissions
 	// ------------------------------------------------------------------
+
+	/**
+	 * Listing the library takes `upload_files`, the capability core's own
+	 * Media Library screen and media modal require; `edit_posts` alone (a
+	 * Contributor) does not open the library. Each item is then checked
+	 * individually by the caller, since an attachment can inherit a private
+	 * parent's visibility.
+	 */
+	private static function mayBrowseMediaLibrary(): bool {
+		return function_exists( 'current_user_can' ) && current_user_can( 'upload_files' );
+	}
 
 	private static function mayEditAttachment( int $attachment_id ): bool {
 		if ( 'attachment' !== self::postType( $attachment_id ) ) {

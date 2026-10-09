@@ -304,4 +304,46 @@ final class AbilitiesTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'not_found', $result->get_error_code() );
 	}
+
+	// ------------------------------------------------------------------
+	// Per-object / per-type permission callbacks (0.3.2 audit)
+	// ------------------------------------------------------------------
+
+	private function grantOnly( string ...$caps ): void {
+		$GLOBALS['senroflux_test_user_caps'] = array_fill_keys( $caps, true );
+	}
+
+	public function test_set_product_image_needs_edit_on_the_product_and_read_on_the_attachment(): void {
+		$ability = wp_get_ability( 'senroflux/set-product-image' );
+		$input   = array(
+			'product_id'    => 7,
+			'attachment_id' => 5,
+		);
+
+		$this->grantOnly( 'edit_post' );
+		$this->assertFalse( (bool) $ability->check_permissions( $input ), 'an attachment the user cannot read may not be attached' );
+		$this->grantOnly( 'edit_post', 'read_post' );
+		$this->assertTrue( (bool) $ability->check_permissions( $input ) );
+		$GLOBALS['senroflux_test_user_caps']['edit_post:7'] = false;
+		$this->assertFalse( (bool) $ability->check_permissions( $input ), 'no edit on this product' );
+	}
+
+	public function test_coupon_abilities_need_the_coupon_types_own_caps(): void {
+		$create = wp_get_ability( 'senroflux/coupon-create' );
+		$enable = wp_get_ability( 'senroflux/coupon-enable' );
+
+		$this->grantOnly( 'manage_woocommerce' );
+		$this->assertFalse( (bool) $create->check_permissions( array( 'code' => 'X' ) ) );
+		$this->assertFalse( (bool) $enable->check_permissions( array( 'coupon_id' => 3 ) ) );
+
+		$this->grantOnly( 'manage_woocommerce', 'edit_shop_coupons' );
+		$this->assertTrue( (bool) $create->check_permissions( array( 'code' => 'X' ) ) );
+
+		$this->grantOnly( 'manage_woocommerce', 'publish_shop_coupons' );
+		$this->assertFalse( (bool) $enable->check_permissions( array( 'coupon_id' => 3 ) ), 'publish without edit on this coupon' );
+		$this->grantOnly( 'manage_woocommerce', 'publish_shop_coupons', 'edit_post' );
+		$this->assertTrue( (bool) $enable->check_permissions( array( 'coupon_id' => 3 ) ) );
+		$this->grantOnly( 'publish_shop_coupons', 'edit_post' );
+		$this->assertFalse( (bool) $enable->check_permissions( array( 'coupon_id' => 3 ) ), 'no manage_woocommerce' );
+	}
 }

@@ -5,7 +5,7 @@ const { setupFor } = require( '../support/global-setup' );
 
 const storageStatePath = path.join( __dirname, '..', 'support', 'storage-state.agent_safety.json' );
 
-test( 'Agent Tollgate mode setup: plugin active, pack bound, admin logged in', async ( {}, testInfo ) => {
+test( 'SenroGate mode setup: plugin active, pack bound, admin logged in', async ( {}, testInfo ) => {
 	// See built-in.setup.js: several sequential wp-cli round trips.
 	testInfo.setTimeout( 120000 );
 	await setupFor( 'agent_safety', storageStatePath );

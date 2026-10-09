@@ -230,7 +230,8 @@ final class Abilities {
 					$input = is_array( $input ) ? $input : array();
 
 					return function_exists( 'current_user_can' )
-						&& current_user_can( 'edit_post', (int) ( $input['product_id'] ?? 0 ) );
+						&& current_user_can( 'edit_post', (int) ( $input['product_id'] ?? 0 ) )
+						&& current_user_can( 'read_post', (int) ( $input['attachment_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -278,8 +279,7 @@ final class Abilities {
 				'permission_callback' => static function ( $input = array() ) {
 					unset( $input );
 
-					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
-					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+					return self::mayManageCoupon( 'create_posts', 'edit_shop_coupons' );
 				},
 				'meta'                => self::meta(
 					array(
@@ -317,10 +317,10 @@ final class Abilities {
 					return self::executeCouponEnable( is_array( $input ) ? $input : array() );
 				},
 				'permission_callback' => static function ( $input = array() ) {
-					unset( $input );
+					$input = is_array( $input ) ? $input : array();
 
-					// phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
-					return function_exists( 'current_user_can' ) && current_user_can( 'manage_woocommerce' );
+					return self::mayManageCoupon( 'publish_posts', 'publish_shop_coupons' )
+						&& current_user_can( 'edit_post', (int) ( $input['coupon_id'] ?? 0 ) );
 				},
 				'meta'                => self::meta(
 					array(
@@ -774,8 +774,10 @@ final class Abilities {
 	 * (never strips) any tag outside the allowed set.
 	 *
 	 * PERMISSION DECISION: `manage_woocommerce` (the pack's run capability)
-	 * plus `publish_pages` — creating any page, private or not, is a content
-	 * action outside WooCommerce's own capability set.
+	 * plus the `page` post type's own `create_posts` and `publish_posts`
+	 * capabilities (read from the type object, not hardcoded) — creating any
+	 * page, private or not, is a content action outside WooCommerce's own
+	 * capability set, and a site may remap the page capabilities.
 	 */
 	private static function registerSaveStoreReport(): void {
 		wp_register_ability(
@@ -807,9 +809,7 @@ final class Abilities {
 				'permission_callback' => static function ( $input = array() ) {
 					unset( $input );
 
-					return function_exists( 'current_user_can' )
-						&& current_user_can( 'manage_woocommerce' ) // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
-						&& current_user_can( 'publish_pages' );
+					return self::mayCreateReportPage();
 				},
 				'meta'                => self::meta(
 					array(
@@ -1714,6 +1714,51 @@ final class Abilities {
 	// ------------------------------------------------------------------
 	// Shared helpers
 	// ------------------------------------------------------------------
+
+	/**
+	 * The save-store-report gate: the store capability plus the page post
+	 * type's create and publish capabilities (a private page is still a
+	 * publish-tier write). Falls back to the core defaults when the type
+	 * object is unavailable, never to "allowed".
+	 */
+	private static function mayCreateReportPage(): bool {
+		if ( ! function_exists( 'current_user_can' ) || ! current_user_can( 'manage_woocommerce' ) ) { // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
+			return false;
+		}
+
+		$create  = 'edit_pages';
+		$publish = 'publish_pages';
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( 'page' );
+			if ( is_object( $object ) && isset( $object->cap->create_posts, $object->cap->publish_posts ) ) {
+				$create  = (string) $object->cap->create_posts;
+				$publish = (string) $object->cap->publish_posts;
+			}
+		}
+
+		return current_user_can( $create ) && current_user_can( $publish );
+	}
+
+	/**
+	 * Coupon gate: the store capability plus the `shop_coupon` post type's own
+	 * capability (`create_posts` to make one, `publish_posts` to enable one),
+	 * read from the type object with the WooCommerce default as fallback.
+	 */
+	private static function mayManageCoupon( string $type_cap, string $fallback ): bool {
+		if ( ! function_exists( 'current_user_can' ) || ! current_user_can( 'manage_woocommerce' ) ) { // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a real WooCommerce capability; unknown only to phpcs's core capability list.
+			return false;
+		}
+
+		$cap = $fallback;
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( 'shop_coupon' );
+			if ( is_object( $object ) && isset( $object->cap->$type_cap ) && is_string( $object->cap->$type_cap ) ) {
+				$cap = $object->cap->$type_cap;
+			}
+		}
+
+		return current_user_can( $cap ); // phpcs:ignore WordPress.WP.Capabilities.Unknown -- a WooCommerce post type capability.
+	}
 
 	private static function postType( int $id ): string {
 		if ( 0 === $id || ! function_exists( 'get_post' ) ) {

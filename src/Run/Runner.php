@@ -529,7 +529,7 @@ final class Runner {
 					// and the existing park stands.
 					$notice = null;
 					if ( $outcome->approvalId !== $approval_id ) {
-						$notice      = __( 'The earlier approval request expired, so Agent Tollgate asked again. Approve to continue.', 'senroflux' );
+						$notice      = __( 'The earlier approval request expired, so SenroGate asked again. Approve to continue.', 'senroflux' );
 						$new_steps[] = $this->appendApprovalStep( $run->id, $outcome, $call, array_values( is_array( $parked['remaining'] ?? null ) ? $parked['remaining'] : array() ), $notice );
 					}
 

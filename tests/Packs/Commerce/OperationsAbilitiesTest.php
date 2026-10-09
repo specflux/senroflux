@@ -753,4 +753,36 @@ final class OperationsAbilitiesTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'disallowed_tag', $result->get_error_code() );
 	}
+
+	public function test_save_store_report_permission_uses_the_page_types_own_capabilities(): void {
+		$ability = wp_get_ability( 'senroflux/save-store-report' );
+		$grant   = static function ( string ...$caps ): void {
+			$GLOBALS['senroflux_test_user_caps'] = array_fill_keys( $caps, true );
+		};
+
+		$grant( 'manage_woocommerce', 'publish_pages' );
+		$this->assertFalse( (bool) $ability->check_permissions( array() ), 'publish_pages alone is not enough: the page create cap is missing' );
+		$grant( 'manage_woocommerce', 'edit_pages' );
+		$this->assertFalse( (bool) $ability->check_permissions( array() ), 'no publish cap' );
+		$grant( 'edit_pages', 'publish_pages' );
+		$this->assertFalse( (bool) $ability->check_permissions( array() ), 'no manage_woocommerce' );
+		$grant( 'manage_woocommerce', 'edit_pages', 'publish_pages' );
+		$this->assertTrue( (bool) $ability->check_permissions( array() ) );
+
+		// A site that remaps the page capabilities is honoured, not bypassed.
+		$GLOBALS['senroflux_test_post_types']['page'] = (object) array(
+			'cap' => (object) array(
+				'create_posts'  => 'create_landing',
+				'publish_posts' => 'publish_landing',
+			),
+		);
+		try {
+			$this->assertFalse( (bool) $ability->check_permissions( array() ) );
+			$grant( 'manage_woocommerce', 'create_landing', 'publish_landing' );
+			$this->assertTrue( (bool) $ability->check_permissions( array() ) );
+		} finally {
+			unset( $GLOBALS['senroflux_test_post_types'] );
+			$GLOBALS['senroflux_test_user_caps'] = array();
+		}
+	}
 }

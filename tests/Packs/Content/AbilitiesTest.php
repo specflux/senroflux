@@ -132,6 +132,19 @@ final class AbilitiesTest extends TestCase {
 		}
 	}
 
+	public function test_read_content_gate_uses_the_post_types_own_edit_capability(): void {
+		$GLOBALS['senroflux_test_post_types']['page'] = (object) array( 'cap' => (object) array( 'edit_posts' => 'edit_landing' ) );
+		try {
+			$ability = $this->ability( 'senroflux/read-content' );
+			$this->grant( 'edit_pages' );
+			$this->assertFalse( (bool) $ability->check_permissions( array( 'post_type' => 'page' ) ) );
+			$this->grant( 'edit_landing' );
+			$this->assertTrue( (bool) $ability->check_permissions( array( 'post_type' => 'page' ) ) );
+		} finally {
+			unset( $GLOBALS['senroflux_test_post_types'] );
+		}
+	}
+
 	private function ability( string $name ): object {
 		$ability = wp_get_ability( $name );
 		$this->assertIsObject( $ability, $name . ' must be registered' );

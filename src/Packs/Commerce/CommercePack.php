@@ -479,7 +479,7 @@ final class CommercePack extends Pack {
 
 	/** The `commerce/agent-safety` setup check (S19). */
 	private function agentSafetyCheck(): SetupCheck {
-		$message = __( 'The commerce pack needs the Agent Tollgate plugin active — without it, WooCommerce writes have no governance to run under.', 'senroflux' );
+		$message = __( 'The commerce pack needs the SenroGate plugin active — without it, WooCommerce writes have no governance to run under.', 'senroflux' );
 
 		return new SetupCheck(
 			'commerce/agent-safety',

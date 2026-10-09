@@ -14,13 +14,13 @@ const {
 	waitSettled,
 } = require( '../support/actions' );
 
-test.describe( 'S10/S12 full run tour (Agent Tollgate mode)', () => {
+test.describe( 'S10/S12 full run tour (SenroGate mode)', () => {
 	test.beforeEach( () => {
 		resetRuns();
 		setScript( fullTour() );
 	} );
 
-	test( 'the SAME tour shows the tier badge, because Agent Tollgate is the active gate', async ( { page } ) => {
+	test( 'the SAME tour shows the tier badge, because SenroGate is the active gate', async ( { page } ) => {
 		await gotoRuns( page );
 		await waitLoaded( page );
 		await startRun( page, 'Build the launch page' );
@@ -45,7 +45,7 @@ test.describe( 'S10/S12 full run tour (Agent Tollgate mode)', () => {
 		// badge happens to be first in DOM order.
 		const approvalTierBadge = page.locator( '.senroflux-park-card [data-testid="tier-badge"]' ).first();
 		await expect( approvalTierBadge ).toBeVisible();
-		await expect( approvalTierBadge ).toContainText( 'Tier 1' );
+		await expect( approvalTierBadge ).toContainText( 'Makes changes' );
 		await assertNoSeriousA11y( page, 'approval park' );
 		await approveCall( page );
 

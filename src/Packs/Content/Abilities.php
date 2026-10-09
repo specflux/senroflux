@@ -1308,9 +1308,16 @@ final class Abilities {
 	}
 
 	/**
-	 * The post-type EDIT capability (page → edit_pages, else edit_posts).
+	 * The post-type EDIT capability, from the type object (core default: page → edit_pages, else edit_posts).
 	 */
 	private static function postTypeCap( string $post_type ): string {
+		if ( function_exists( 'get_post_type_object' ) ) {
+			$object = get_post_type_object( $post_type );
+			if ( is_object( $object ) && isset( $object->cap->edit_posts ) && is_string( $object->cap->edit_posts ) ) {
+				return $object->cap->edit_posts;
+			}
+		}
+
 		return 'page' === $post_type ? 'edit_pages' : 'edit_posts';
 	}
 
