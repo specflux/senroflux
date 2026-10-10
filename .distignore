@@ -3,6 +3,7 @@
 .github
 .gitignore
 .distignore
+.wordpress-org
 .DS_Store
 .phpunit.result.cache
 composer.json
